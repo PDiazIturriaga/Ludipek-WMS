@@ -359,7 +359,7 @@ class InventarioModulo:
                 ubicados_vistos = set()
                 lpns_en_racks = set()
 
-                for nom_t in ("inventario_ubicaciones", "bodega_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
+                for nom_t in ("bodega_inventario_ubicacion","inventario_ubicaciones", "bodega_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
                     filas_u = leer_paginado(nom_t, 4000)
                     for r in filas_u:
                         ubi_r = str(r.get("ubicacion") or r.get("codigo_ubicacion") or r.get("posicion") or "").strip().upper()
@@ -376,7 +376,7 @@ class InventarioModulo:
                             continue
 
                         raw_unid = (
-                            r.get("unidades")
+                            r.get("cantidad_unidades")
                             if r.get("unidades") is not None
                             else (
                                 r.get("unidades_totales")
@@ -539,7 +539,7 @@ class InventarioModulo:
         def cargar_asignaciones_piso():
             nonlocal asignaciones_pasillo_db
             cargadas = []
-            for nom_t in ("wms_asignaciones_pasillo", "asignaciones_pasillo", "auditoria_pasillos"):
+            for nom_t in ("cantidad_unidades","wms_asignaciones_pasillo", "asignaciones_pasillo", "auditoria_pasillos"):
                 try:
                     res = supabase.table(nom_t).select("*").order("id", desc=True).limit(100).execute()
                     if res.data is not None:
@@ -626,12 +626,15 @@ class InventarioModulo:
 
                 teo_val = row_c.get("cantidad_esperada")
                 if teo_val is None:
+                    teo_val = row_c.get("unidades_sistema")
+                if teo_val is None:
                     teo_val = row_c.get("stock_teorico")
                 if teo_val is None:
                     teo_val = row_c.get("stock_sistema")
                 if teo_val is None:
                     teo_val = mapa_stock_por_sku.get(sku_c, 0)
                 teo_int = int(teo_val or 0)
+                est_raw = str(row_c.get("estado") or row_c.get("estado_auditoria") or "").strip().upper()
 
                 cont_raw = (
                     row_c.get("cantidad_contada")
@@ -735,10 +738,11 @@ class InventarioModulo:
                     or "-"
                 ).strip().upper()
                 res_fisico = str(
-                    row_v.get("resultado")
-                    or row_v.get("estado_ubicacion")
-                    or row_v.get("hallazgo")
-                    or ("VACÍA CONFIRMADA" if row_v.get("es_vacia", True) else "OCUPADA CON STOCK")
+                row_v.get("resultado_auditoria")
+                or row_v.get("resultado")
+                or row_v.get("estado_ubicacion")
+                or row_v.get("hallazgo")
+                or ("VACÍA CONFIRMADA" if row_v.get("es_vacia", True) else "OCUPADA CON STOCK")
                 ).strip().upper()
                 lpn_hallado = str(
                     row_v.get("lpn_encontrado")
@@ -967,7 +971,7 @@ class InventarioModulo:
 
             # 2. Sumar hallazgos reales detectados en auditoria_ubicaciones_vacias
             for rv in conteos_ubic_vacias_db:
-                res_f = str(rv.get("resultado") or rv.get("estado_ubicacion") or "").upper()
+                res_f = str(rv.get("resultado") or rv.get("estado_ubicacion") or rv.get("resultado_auditoria") or"").upper()
                 lpn_h = str(rv.get("lpn_encontrado") or rv.get("lpn") or rv.get("sku_encontrado") or "").strip().upper()
                 if "OCUPAD" in res_f or "HALLAZGO" in res_f or (lpn_h and lpn_h not in ("NONE", "NULL", "-", "SIN HALLAZGO (VACÍA)")):
                     reales.append({
@@ -1124,7 +1128,7 @@ class InventarioModulo:
                 pass
 
             # 2. Buscar posición actual en bodega_ubicaciones / inventario_ubicaciones
-            for nom_tu in ("bodega_ubicaciones", "inventario_ubicaciones"):
+            for nom_tu in ("cantidad_unidades","bodega_inventario_ubicacion","bodega_ubicaciones", "inventario_ubicaciones"):
                 try:
                     res_ub = supabase.table(nom_tu).select("*").ilike("lpn", val).execute()
                     for r in (res_ub.data or []):
@@ -1189,7 +1193,7 @@ class InventarioModulo:
             logs = []
 
             # 1. Pallets actualmente ubicados en esa posición (bodega_ubicaciones / inventario_ubicaciones)
-            for nom_tu in ("bodega_ubicaciones", "inventario_ubicaciones"):
+            for nom_tu in ("bodega_inventario_ubicacion","bodega_ubicaciones", "inventario_ubicaciones"):
                 for col_u in ("ubicacion", "codigo_ubicacion"):
                     try:
                         res_u = supabase.table(nom_tu).select("*").ilike(col_u, val).execute()

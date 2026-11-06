@@ -356,7 +356,7 @@ class PutawayModulo:
             ubicados_map = {}
             lpns_ubicados_set = set()
 
-            for nom_tabla in ("bodega_ubicaciones", "inventario_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
+            for nom_tabla in ("bodega_inventario_ubicacion", "bodega_ubicaciones", "inventario_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
                 try:
                     filas_u = cargar_tabla_paginada(nom_tabla, 4000)
                     for row_u in filas_u:
@@ -364,6 +364,7 @@ class PutawayModulo:
                             row_u.get("ubicacion")
                             or row_u.get("codigo_ubicacion")
                             or row_u.get("posicion")
+                            or row_u.get("cantidad_unidades")
                             or ""
                         ).strip().upper()
                         lpn_u = str(
@@ -381,12 +382,13 @@ class PutawayModulo:
                         info_rec = mapa_rec_por_lpn.get(lpn_u, {})
                         sku_f = sku_u or str(info_rec.get("sku") or "-").strip().upper()
                         unid_f = int(
-                            row_u.get("unidades")
+                            row_u.get("cantidad_unidades")
+                            or row_u.get("unidades")
                             or row_u.get("unidades_totales")
                             or row_u.get("cantidad")
                             or info_rec.get("unidades_totales")
                             or 0
-                        )
+)
                         if unid_f <= 0 and not lpn_u:
                             continue
 

@@ -277,11 +277,12 @@ class PickingModulo:
             heading_row_height=34,
             data_row_min_height=30,
             data_row_max_height=36,
-            column_spacing=16,
+            column_spacing=14,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
                 ft.DataColumn(ft.Text("LIBERAR", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("ORDEN DE VENTA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
                 ft.DataColumn(ft.Text("CORTE HORARIO", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
                 ft.DataColumn(ft.Text("CANAL / ZONA (CLIC CAMBIAR)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
                 ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
@@ -297,10 +298,11 @@ class PickingModulo:
             heading_row_height=34,
             data_row_min_height=32,
             data_row_max_height=38,
-            column_spacing=14,
+            column_spacing=12,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
                 ft.DataColumn(ft.Text("OV ESTÁNDAR", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
                 ft.DataColumn(ft.Text("CORTE", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
                 ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("ESTADO ACTUAL", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
@@ -314,10 +316,11 @@ class PickingModulo:
             heading_row_height=34,
             data_row_min_height=32,
             data_row_max_height=38,
-            column_spacing=14,
+            column_spacing=12,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
                 ft.DataColumn(ft.Text("OV FARMACIA (-FA)", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
+                ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
                 ft.DataColumn(ft.Text("CORTE", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
                 ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("ESTADO SANITARIO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
@@ -490,6 +493,9 @@ class PickingModulo:
             )
             corte_str = clasificar_corte_horario(ts_val) if ts_val else clasificar_corte_horario(None)
 
+            raw_fecha_ov = str(r.get("fecha_emision_ns") or r.get("fecha_ov") or r.get("created_at") or "").strip()
+            fecha_ov_str = raw_fecha_ov[:10] if len(raw_fecha_ov) >= 10 else datetime.now().strftime("%Y-%m-%d")
+
             try:
                 unid_val = int(float(r.get("unidades") or r.get("unidades_totales") or r.get("total_unidades") or r.get("cantidad") or 1))
             except Exception:
@@ -499,6 +505,7 @@ class PickingModulo:
                 "raw": r,
                 "id": r.get("id"),
                 "ov": ov_val,
+                "fecha_ov": fecha_ov_str,
                 "cliente": cli_val,
                 "estado": est_val,
                 "es_farmacia": es_fa,
@@ -550,32 +557,81 @@ class PickingModulo:
                     mapa_clientes_ns[k_ov] = cli_ns
                     mapa_clientes_ns[k_ov.replace("-FA", "")] = cli_ns
 
-            # 3. Leer cabeceras desde public.netsuite_ordenes_venta
+            # 3. Leer cabeceras desde public.netsuite_ordenes_venta y wms_packing_lists_fa
             mapa_id_a_ov = {}
-            for nom_t in ("netsuite_ordenes_venta", "wms_packing_lists_fa"):
-                try:
-                    res = supabase.table(nom_t).select("*").order("id", desc=True).limit(500).execute()
-                    filas_raw = res.data or []
-                    if filas_raw and not esquemas_tablas_sb.get(nom_t):
-                        esquemas_tablas_sb[nom_t] = list(filas_raw[0].keys())
+            try:
+                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(500).execute()
+                filas_ov = res_ov.data or []
+                if filas_ov and not esquemas_tablas_sb.get("netsuite_ordenes_venta"):
+                    esquemas_tablas_sb["netsuite_ordenes_venta"] = list(filas_ov[0].keys())
 
-                    for r in filas_raw:
-                        r_copia = dict(r)
-                        r_copia["_tabla_origen"] = nom_t
-                        info = extraer_campos_registro_ola(r_copia, mapa_clientes_ns)
-                        if not info:
-                            continue
-                        ov_k = info["ov"]
-                        if r.get("id") is not None and nom_t == "netsuite_ordenes_venta":
-                            mapa_id_a_ov[r.get("id")] = ov_k
-                        if ov_k not in agrupado_por_ov:
-                            agrupado_por_ov[ov_k] = info
-                        else:
-                            agrupado_por_ov[ov_k]["id"] = r.get("id") or agrupado_por_ov[ov_k].get("id")
-                            agrupado_por_ov[ov_k]["raw"] = info["raw"]
-                            agrupado_por_ov[ov_k]["estado"] = info["estado"]
-                except Exception:
-                    continue
+                for r in filas_ov:
+                    r_copia = dict(r)
+                    r_copia["_tabla_origen"] = "netsuite_ordenes_venta"
+                    info = extraer_campos_registro_ola(r_copia, mapa_clientes_ns)
+                    if not info:
+                        continue
+                    ov_k = info["ov"]
+                    if r.get("id") is not None:
+                        mapa_id_a_ov[r.get("id")] = ov_k
+                    agrupado_por_ov[ov_k] = info
+            except Exception:
+                pass
+
+            # Cruzar con los Packing Lists cerrados desde main.dart (wms_packing_lists_fa)
+            try:
+                res_pl = supabase.table("wms_packing_lists_fa").select("*").order("id", desc=True).limit(300).execute()
+                for pl in (res_pl.data or []):
+                    ov_pl = str(pl.get("numero_ov") or "").strip().upper()
+                    if not ov_pl:
+                        continue
+                    if not ov_pl.endswith("-FA"):
+                        ov_pl = f"{ov_pl}-FA"
+
+                    det_json = pl.get("detalle_json")
+                    if isinstance(det_json, str):
+                        try:
+                            det_json = json.loads(det_json)
+                        except Exception:
+                            det_json = []
+
+                    lineas_pl = []
+                    if isinstance(det_json, list):
+                        for item_j in det_json:
+                            if isinstance(item_j, dict):
+                                lineas_pl.append({
+                                    "sku": str(item_j.get("sku") or "").strip().upper(),
+                                    "ean": str(item_j.get("ean") or "").strip(),
+                                    "descripcion": str(item_j.get("descripcion") or "").strip(),
+                                    "cantidad": int(float(item_j.get("solicitado") or 0)),
+                                    "cantidad_pedida": int(float(item_j.get("solicitado") or 0)),
+                                    "cantidad_pickeada": int(float(item_j.get("pickeado") or 0)),
+                                    "lotes": str(item_j.get("lotes") or "").strip(),
+                                    "es_farmacia": True,
+                                })
+
+                    if ov_pl not in agrupado_por_ov:
+                        agrupado_por_ov[ov_pl] = {
+                            "raw": pl,
+                            "id": pl.get("orden_id"),
+                            "ov": ov_pl,
+                            "cliente": str(pl.get("cliente_nombre") or "CLIENTE FARMACIA").strip(),
+                            "estado": "EMPACADO",
+                            "es_farmacia": True,
+                            "corte": clasificar_corte_horario(pl.get("fecha_emision")),
+                            "unidades": sum(x["cantidad_pedida"] for x in lineas_pl) or 1,
+                            "unidades_pickeadas": sum(x["cantidad_pickeada"] for x in lineas_pl),
+                            "lineas_detalle": lineas_pl,
+                            "tabla_origen": "wms_packing_lists_fa",
+                        }
+                    else:
+                        agrupado_por_ov[ov_pl]["estado"] = "EMPACADO"
+                        if pl.get("orden_id") and not agrupado_por_ov[ov_pl].get("id"):
+                            agrupado_por_ov[ov_pl]["id"] = pl.get("orden_id")
+                        if lineas_pl:
+                            agrupado_por_ov[ov_pl]["lineas_detalle"] = lineas_pl
+            except Exception:
+                pass
 
             # 4. Leer líneas desde public.netsuite_detalle_ov usando orden_id
             try:
@@ -823,7 +879,8 @@ class PickingModulo:
                             r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", id_ov_db).order("linea_ns", desc=False).execute()
                             for d in (r_det.data or []):
                                 sku_c = str(d.get("sku") or "").strip().upper()
-                                info_m = mapa_sku_info.get(sku_c, {})
+                                sku_limpio = sku_c.split("-")[0].strip()
+                                info_m = mapa_sku_info.get(sku_c) or mapa_sku_info.get(sku_limpio) or {}
                                 ean_c = str(info_m.get("ean") or d.get("ean") or sku_c).strip()
                                 desc_c = str(info_m.get("descripcion") or d.get("descripcion") or "").strip()
                                 sol_c = int(float(d.get("cantidad_pedida") or d.get("cantidad_comprometida") or 0))
@@ -1206,6 +1263,7 @@ class PickingModulo:
                     ft.DataRow(
                         cells=[
                             ft.DataCell(ft.Text(r_norm["ov"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(str(r_norm.get("fecha_ov") or "-"), size=11, color="#34D399")),
                             ft.DataCell(ft.Text(f"{r_norm['corte']} hrs", size=11, weight=ft.FontWeight.BOLD, color="#A78BFA")),
                             ft.DataCell(ft.Text(r_norm["cliente"][:26], size=11, color=TEXT_WHITE)),
                             ft.DataCell(badge_n),
@@ -1235,6 +1293,7 @@ class PickingModulo:
                     ft.DataRow(
                         cells=[
                             ft.DataCell(ft.Text(r_fa["ov"], weight=ft.FontWeight.BOLD, size=11, color="#FBBF24")),
+                            ft.DataCell(ft.Text(str(r_fa.get("fecha_ov") or "-"), size=11, color="#34D399")),
                             ft.DataCell(ft.Text(f"{r_fa['corte']} hrs", size=11, weight=ft.FontWeight.BOLD, color="#A78BFA")),
                             ft.DataCell(ft.Text(r_fa["cliente"][:26], size=11, color=TEXT_WHITE)),
                             ft.DataCell(badge_f),
@@ -1322,6 +1381,7 @@ class PickingModulo:
                         cells=[
                             ft.DataCell(chk),
                             ft.DataCell(ft.Text(ov_cod, weight=ft.FontWeight.BOLD, size=11, color="#FBBF24" if es_fa else ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(str(item.get("fecha_ov") or "-"), weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
                             ft.DataCell(ft.Text(f"⏱️ {item.get('corte', '09:00')} hrs", weight=ft.FontWeight.BOLD, size=11, color="#A78BFA")),
                             ft.DataCell(badge_canal),
                             ft.DataCell(ft.Text(item["cliente"][:30], size=11, color=TEXT_WHITE)),
@@ -1396,28 +1456,42 @@ class PickingModulo:
 
             return skus_fa
 
+        def normalizar_fecha_comparacion(val_f: str) -> str:
+            s = str(val_f or "").strip()
+            if not s or s.upper() in ("NONE", "NULL"):
+                return ""
+            parte_fecha = s.replace("T", " ").split()[0].strip()
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y"):
+                try:
+                    return datetime.strptime(parte_fecha, fmt).strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
+            return parte_fecha[:10]
+
         def extraer_ordenes_netsuite(e=None):
             nonlocal olas_extraidas_ns
-            f_desde = (txt_fecha_desde.value or "").strip()
-            f_hasta = (txt_fecha_hasta.value or "").strip()
+            f_desde = normalizar_fecha_comparacion(txt_fecha_desde.value)
+            f_hasta = normalizar_fecha_comparacion(txt_fecha_hasta.value)
 
             if not NETSUITE_CONECTADO:
-                notificar("Módulo conexion_erp no conectado. Mostrando OVs activas en Supabase.", "#D97706")
+                notificar("Módulo conexion_erp no conectado en este servidor. Verifica conexion_erp.py y variables en Render.", "#D97706")
                 cargar_monitor_packing_dual()
                 return
 
-            txt_estado_erp.value = f"Consultando OVs en NetSuite ({f_desde} a {f_hasta}) y separando líneas Normal vs Farmacia (-FA)..."
+            txt_estado_erp.value = f"Consultando OVs en NetSuite ({f_desde} a {f_hasta})..."
             txt_estado_erp.color = ACCENT_CYAN
             page.update()
 
             try:
                 skus_fa_catalogo = obtener_skus_farmacia_supabase()
+                df_ov = None
 
+                # Intento 1: Consulta con rango en SuiteQL (trandate o createddate)
                 q_ov = f"""
                     SELECT
                         t.id AS ov_internal_id,
                         t.tranid AS numero_ov,
-                        t.memo AS memo_ov,
+                        TO_CHAR(t.trandate, 'YYYY-MM-DD') AS fecha_ov,
                         TO_CHAR(t.createddate, 'YYYY-MM-DD HH24:MI:SS') AS fecha_hora,
                         BUILTIN.DF(t.entity) AS cliente,
                         BUILTIN.DF(tl.location) AS bodega_ns,
@@ -1429,18 +1503,27 @@ class PickingModulo:
                     INNER JOIN item i ON tl.item = i.id
                     WHERE t.type = 'SalesOrd'
                     AND tl.mainline = 'F'
-                    AND t.trandate >= TO_DATE('{f_desde}', 'YYYY-MM-DD')
-                    AND t.trandate <= TO_DATE('{f_hasta}', 'YYYY-MM-DD')
+                    AND (
+                        (t.trandate >= TO_DATE('{f_desde}', 'YYYY-MM-DD') AND t.trandate <= TO_DATE('{f_hasta}', 'YYYY-MM-DD'))
+                        OR (t.createddate >= TO_DATE('{f_desde}', 'YYYY-MM-DD') AND t.createddate < TO_DATE('{f_hasta}', 'YYYY-MM-DD') + 1)
+                    )
                     ORDER BY t.id DESC
                 """
                 try:
                     df_ov = consultar_netsuite(q_ov)
                 except Exception:
-                    q_fallback = f"""
+                    df_ov = None
+
+                # Intento 2 (Respaldo automático si consultar_netsuite devolvió None o vacío)
+                usando_fallback = False
+                if df_ov is None or df_ov.empty:
+                    usando_fallback = True
+                    q_fallback = """
                         SELECT
                             t.id AS ov_internal_id,
                             t.tranid AS numero_ov,
-                            t.trandate AS fecha_hora,
+                            t.trandate AS fecha_ov,
+                            t.createddate AS fecha_hora,
                             BUILTIN.DF(t.entity) AS cliente,
                             i.itemid AS sku,
                             BUILTIN.DF(i.id) AS descripcion,
@@ -1455,14 +1538,15 @@ class PickingModulo:
                     df_ov = consultar_netsuite(q_fallback)
 
                 if df_ov is None or df_ov.empty:
-                    notificar("No se encontraron Órdenes de Venta en NetSuite para el rango indicado.", "#D97706")
-                    txt_estado_erp.value = "Sin resultados en NetSuite para el rango seleccionado."
+                    notificar("NetSuite no devolvió datos. Verifica que las credenciales OAuth de NetSuite estén en Render.", "#B91C1C")
+                    txt_estado_erp.value = "Sin respuesta de NetSuite (revisar variables OAuth en Render o conexión ERP)."
+                    txt_estado_erp.color = "#F87171"
                     page.update()
                     return
 
-                # Separamos automáticamente cada OV en su parte NORMAL y su parte FARMACIA (-FA) si contiene SKUs/bodega de Farmacia
                 agrupado_olas = {}
                 corte_forzado_ui = None if dd_corte_asignar.value == "AUTO" else dd_corte_asignar.value
+                fechas_detectadas_ns = set()
 
                 for _, fila in df_ov.iterrows():
                     cant_item = int(float(fila.get("cantidad") or 0))
@@ -1472,17 +1556,26 @@ class PickingModulo:
                     if not ov_raw:
                         continue
                     sku_str = str(fila.get("sku") or "").strip().upper()
-                    # Ignorar líneas de despacho/flete o impuestos sin SKU físico si vinieran vacías
                     if not sku_str or sku_str in ("NONE", "NULL"):
                         continue
 
+                    fh_raw = str(fila.get("fecha_hora") or fila.get("fecha_ov") or "")
+                    f_ov_norm = normalizar_fecha_comparacion(fila.get("fecha_ov") or fh_raw)
+                    f_crea_norm = normalizar_fecha_comparacion(fh_raw)
+                    if f_ov_norm:
+                        fechas_detectadas_ns.add(f_ov_norm)
+
+                    # Si vino del fallback general, filtramos por el rango Fecha Desde / Fecha Hasta en Python
+                    if usando_fallback and f_desde and f_hasta:
+                        en_rango_ov = (f_desde <= f_ov_norm <= f_hasta) if f_ov_norm else False
+                        en_rango_cr = (f_desde <= f_crea_norm <= f_hasta) if f_crea_norm else False
+                        if not (en_rango_ov or en_rango_cr):
+                            continue
+
                     desc_str = str(fila.get("descripcion") or "").strip()
                     cli_str = str(fila.get("cliente") or "CLIENTE").strip()
-                    fh_str = str(fila.get("fecha_hora") or "")
                     bodega_ns = str(fila.get("bodega_ns") or "")
-                    memo_ov = str(fila.get("memo_ov") or "")
 
-                    # SOLO es Farmacia (-FA) si el SKU está en maestra_sku como BOEHRINGER / PICK-FARM
                     es_linea_fa = (
                         sku_str in skus_fa_catalogo
                         or detectar_es_farmacia_texto(ov_raw, bodega_ns)
@@ -1496,9 +1589,10 @@ class PickingModulo:
                         agrupado_olas[ov_clave] = {
                             "ov": ov_clave,
                             "ov_original": ov_raw,
+                            "fecha_ov": f_ov_norm or f_crea_norm or f_desde,
                             "cliente": cli_str,
-                            "fecha_hora": fh_str,
-                            "corte": clasificar_corte_horario(fh_str, corte_forzado_ui),
+                            "fecha_hora": fh_raw,
+                            "corte": clasificar_corte_horario(fh_raw, corte_forzado_ui),
                             "es_farmacia": es_linea_fa,
                             "unidades": 0,
                             "lineas_cnt": 0,
@@ -1517,6 +1611,14 @@ class PickingModulo:
                             "es_farmacia": es_linea_fa,
                         }
                     )
+
+                if not agrupado_olas:
+                    ult_fechas = ", ".join(sorted(fechas_detectadas_ns, reverse=True)[:3]) if fechas_detectadas_ns else "N/A"
+                    notificar(f"No hay OVs entre {f_desde} y {f_hasta}. Últimas fechas en NetSuite: {ult_fechas}", "#D97706")
+                    txt_estado_erp.value = f"Sin OVs en {f_desde}..{f_hasta}. Últimas fechas detectadas en NetSuite: {ult_fechas}"
+                    txt_estado_erp.color = "#FBBF24"
+                    page.update()
+                    return
 
                 olas_extraidas_ns = list(agrupado_olas.values())
                 cant_fa = sum(1 for x in olas_extraidas_ns if x.get("es_farmacia"))
@@ -1711,6 +1813,7 @@ class PickingModulo:
                         "raw": payload_ov_exacto,
                         "id": id_ov_db,
                         "ov": ov_final,
+                        "fecha_ov": item.get("fecha_ov", datetime.now().strftime("%Y-%m-%d")),
                         "cliente": cli_nom,
                         "estado": "PENDIENTE_PICKING",
                         "es_farmacia": es_fa,
