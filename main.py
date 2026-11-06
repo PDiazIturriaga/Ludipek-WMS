@@ -158,7 +158,10 @@ def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
 
 
 def preparar_assets_visuales():
+    from PIL import Image
     os.makedirs("assets", exist_ok=True)
+    os.makedirs(os.path.join("assets", "icons"), exist_ok=True)
+
     ruta_logo_assets = os.path.join("assets", "logo.png")
     if not os.path.exists(ruta_logo_assets) and os.path.exists("logo.png"):
         try:
@@ -166,6 +169,32 @@ def preparar_assets_visuales():
         except Exception:
             pass
 
+    # Generar automáticamente Favicon y Pantalla de Carga Web desde logo.png
+    if os.path.exists(ruta_logo_assets):
+        try:
+            with Image.open(ruta_logo_assets).convert("RGBA") as im_logo:
+                # 1. Icono de la pestaña del navegador (Favicon)
+                im_logo.resize((64, 64), Image.Resampling.LANCZOS).save(
+                    os.path.join("assets", "favicon.png"), format="PNG"
+                )
+                # 2. Icono de carga al abrir la página (Splash screen)
+                im_logo.resize((180, 180), Image.Resampling.LANCZOS).save(
+                    os.path.join("assets", "icons", "loading-animation.png"), format="PNG"
+                )
+                # 3. Iconos para accesos directos en PC y móviles (PWA)
+                im_logo.resize((192, 192), Image.Resampling.LANCZOS).save(
+                    os.path.join("assets", "icons", "Icon-192.png"), format="PNG"
+                )
+                im_logo.resize((512, 512), Image.Resampling.LANCZOS).save(
+                    os.path.join("assets", "icons", "Icon-512.png"), format="PNG"
+                )
+                im_logo.resize((180, 180), Image.Resampling.LANCZOS).save(
+                    os.path.join("assets", "apple-touch-icon.png"), format="PNG"
+                )
+        except Exception as ex_ico:
+            print(f"[WARN] No se pudieron generar los iconos web: {ex_ico}")
+
+    # Sprites del gato guardián
     try:
         for idx_f in range(6):
             ruta_f = os.path.join("assets", f"cat_walk_{idx_f}.png")
