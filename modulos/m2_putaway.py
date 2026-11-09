@@ -364,7 +364,6 @@ class PutawayModulo:
                             row_u.get("ubicacion")
                             or row_u.get("codigo_ubicacion")
                             or row_u.get("posicion")
-                            or row_u.get("cantidad_unidades")
                             or ""
                         ).strip().upper()
                         lpn_u = str(

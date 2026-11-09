@@ -89,7 +89,8 @@ class ImpresionModulo:
                 if not recepciones:
                     notificar(f"No hay pallets (LPNs) registrados en la PO {cod_po}.", "#D97706")
                     return
-                    
+                
+                ruta = generar_pdf_masivo_lpns_po(cod_po, recepciones)
                 descargar_o_abrir_archivo(self.page, ruta)
                 lpns_cnt = len({r.get("lpn") for r in recepciones if r.get("lpn")})
                 notificar(f"Se generó 1 archivo PDF con las {lpns_cnt} etiquetas LPN de {formatear_nombre_po(cod_po)}: {ruta}", "#047857")
@@ -103,6 +104,7 @@ class ImpresionModulo:
             if not pas or not col:
                 notificar("Indique Pasillo y Columna.", "#D97706")
                 return
+            ruta = generar_pdf_totem_rack(pas, col, niv)
             descargar_o_abrir_archivo(self.page, ruta)
             notificar(f"Tótem QR A4 generado para {pas}-{col}.", "#047857")
 
@@ -115,6 +117,7 @@ class ImpresionModulo:
                 supabase.table("bodega_ubicaciones").upsert({"codigo_ubicacion": cod_u, "zona": cod_u.split("-")[0]}).execute()
             except Exception:
                 pass
+            ruta = generar_pdf_etiqueta_ubicacion_individual(cod_u, cod_u.split("-")[0])
             descargar_o_abrir_archivo(self.page, ruta)
             notificar(f"Etiqueta de posición {cod_u} generada.", "#047857")
 

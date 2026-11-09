@@ -259,6 +259,7 @@ def main(page: ft.Page):
                 page.usuario_actual = fila_u.get("nombre_completo") or user_val
                 page.rol_actual = str(fila_u.get("rol") or "OPERADOR").upper()
                 page.bodega_actual = str(fila_u.get("bodega") or "Bodega Concepcion").strip()
+                page.modulos_pc_usuario = str(fila_u.get("modulos_pc") or "")
                 iniciar_torre_de_control()
 
             else:
@@ -393,12 +394,43 @@ def main(page: ft.Page):
                 )
             )
         def activar_modulo_principal(idx_sel: int, sub_idx: int = 0):
-         codigos_mod = ["PC_DASHBOARD", "PC_RECEPCION", "PC_ALMACENAMIENTO", "PC_OLAS", "PC_INVENTARIO", "PC_ADMIN_MAESTRA", "PC_IMPRESION"]
-         rol_usr = str(getattr(page, "rol_actual", "")).upper()
-         permisos_str = str(getattr(page, "modulos_pc_usuario", "")).upper()
-         if "ADMIN" not in rol_usr and permisos_str and codigos_mod[idx_sel] not in permisos_str:
-             notificar_global(page, "Acceso restringido: tu perfil no tiene permisos para este módulo.", "#B91C1C")
-             return
+            nonlocal indice_modulo_activo
+            codigos_mod = ["PC_DASHBOARD", "PC_RECEPCION", "PC_ALMACENAMIENTO", "PC_OLAS", "PC_INVENTARIO", "PC_ADMIN_MAESTRA", "PC_IMPRESION"]
+            rol_usr = str(getattr(page, "rol_actual", "")).upper()
+            permisos_str = str(getattr(page, "modulos_pc_usuario", "")).upper()
+            if "ADMIN" not in rol_usr and permisos_str and codigos_mod[idx_sel] not in permisos_str:
+                notificar_global(page, "Acceso restringido: tu perfil no tiene permisos para este módulo.", "#B91C1C")
+                return
+
+            indice_modulo_activo = idx_sel
+            registrar_visita_reciente(idx_sel, sub_idx)
+            _, _, vista_obj, fn_carga, fn_sub, _ = vistas_mapa[idx_sel]
+
+            panel_submenus.content = generar_menu_lateral(idx_sel)
+            panel_submenus.visible = True
+            contenedor_vista_activa.content = vista_obj
+
+            btn_home.visible = True
+            page.bgcolor = "#F1F5F9" if idx_sel in (0, 6) else "#1B2122"
+
+            cuerpo_principal.content = ft.Row(
+                [panel_submenus, contenedor_vista_activa],
+                spacing=0,
+                expand=True,
+            )
+
+            if fn_carga:
+                try:
+                    fn_carga()
+                except Exception as ex_c:
+                    print(f"[WARN] Error cargando módulo {idx_sel}: {ex_c}")
+            if fn_sub:
+                try:
+                    fn_sub(sub_idx)
+                except Exception as ex_s:
+                    print(f"[WARN] Error cambiando subvista {sub_idx}: {ex_s}")
+
+            page.update()
          
         def volver_al_home(e=None):
             nonlocal indice_modulo_activo

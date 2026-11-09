@@ -377,17 +377,21 @@ class InventarioModulo:
 
                         raw_unid = (
                             r.get("cantidad_unidades")
-                            if r.get("unidades") is not None
+                            if r.get("cantidad_unidades") is not None
                             else (
-                                r.get("unidades_totales")
-                                if r.get("unidades_totales") is not None
+                                r.get("unidades")
+                                if r.get("unidades") is not None
                                 else (
-                                    r.get("cantidad")
-                                    if r.get("cantidad") is not None
+                                    r.get("unidades_totales")
+                                    if r.get("unidades_totales") is not None
                                     else (
-                                        r.get("stock")
-                                        if r.get("stock") is not None
-                                        else info_lpn.get("unidades_totales")
+                                        r.get("cantidad")
+                                        if r.get("cantidad") is not None
+                                        else (
+                                            r.get("stock")
+                                            if r.get("stock") is not None
+                                            else info_lpn.get("unidades_totales")
+                                        )
                                     )
                                 )
                             )

@@ -143,9 +143,9 @@ class RecepcionModulo:
         )
 
         dd_accion_po = dropdown_dark(
-            label="Operaciones de Recepción (PO)",
-            width=280,
-            value="SINCRONIZAR",
+            label="Operaciones de Recepción (PO) - Clic para ejecutar",
+            width=310,
+            value=None,
             options=[
                 opt_w("SINCRONIZAR", "1. Sincronizar Recepción de Andén (RF)"),
                 opt_w("DESCARGAR_PO", "2. Descargar PO desde NetSuite (ERP)"),
@@ -1008,6 +1008,148 @@ class RecepcionModulo:
             except Exception as ex:
                 notificar(f"Error al imprimir lote de LPNs: {ex}", "#B91C1C")
 
+        def abrir_modal_enviar_correo_acta(cabecera_po: dict, lineas_conciliacion: list, ruta_pdf_generado: str = None):
+            oc_num = obtener_nombre_po_cabecera(cabecera_po)
+            prov_nom = str(cabecera_po.get("proveedor") or "PROVEEDOR").strip()
+            cont_ref = str(cabecera_po.get("contenedor_referencia") or "").strip()
+            fecha_hoy = datetime.now().strftime("%d-%m-%Y %H:%M")
+
+            tot_esp = sum(int(x.get("unidades_esperadas") or 0) for x in lineas_conciliacion)
+            tot_rec = sum(int(x.get("unidades_recibidas") or 0) for x in lineas_conciliacion)
+            dif_tot = tot_rec - tot_esp
+
+            lineas_texto = []
+            for l in lineas_conciliacion:
+                sku_l = l.get("sku", "-")
+                esp_l = int(l.get("unidades_esperadas") or 0)
+                rec_l = int(l.get("unidades_recibidas") or 0)
+                dif_l = rec_l - esp_l
+                est_l = "OK" if dif_l == 0 else (f"SOBRANTE +{dif_l}" if dif_l > 0 else f"FALTANTE {dif_l}")
+                lineas_texto.append(f"• {sku_l}: Esperado {esp_l} UN | Recibido {rec_l} UN ({est_l})")
+
+            cuerpo_default = (
+                f"Estimado equipo,\n\n"
+                f"Se adjunta resumen del Acta Oficial de Recepción procesada en LUDIPEK WMS:\n\n"
+                f"• Orden de Compra (PO): {oc_num}\n"
+                f"• Proveedor: {prov_nom}\n"
+                + (f"• Contenedor / Guía: {cont_ref}\n" if cont_ref else "")
+                + f"• Fecha / Hora: {fecha_hoy}\n"
+                f"• Total Esperado: {tot_esp} UN | Total Recibido: {tot_rec} UN (Diferencia: {dif_tot} UN)\n\n"
+                f"Detalle por SKU:\n" + "\n".join(lineas_texto[:25]) + "\n\n"
+                f"Saludos cordiales,\nTorre de Control LUDIPEK WMS"
+            )
+
+            txt_mail_para = texto_dark("Para (Correos separados por coma)", width=620, value=os.environ.get("WMS_EMAIL_DESTINO", "compras@ludipek.cl, logistica@ludipek.cl"))
+            txt_mail_cc = texto_dark("CC (Opcional)", width=620, value="")
+            txt_mail_asunto = texto_dark(
+                "Asunto del Correo",
+                width=620,
+                value=f"Acta Oficial de Recepción PO {oc_num} - {prov_nom} | LUDIPEK WMS",
+            )
+            txt_mail_cuerpo = ft.TextField(
+                label="Mensaje / Resumen de Conciliación",
+                value=cuerpo_default,
+                multiline=True,
+                min_lines=7,
+                max_lines=10,
+                width=620,
+                text_style=ft.TextStyle(size=11, color=TEXT_WHITE),
+                bgcolor=BG_INPUT,
+                border_color=BORDER_COLOR,
+            )
+            lbl_estado_mail = ft.Text(
+                f"Archivo PDF generado: {os.path.basename(ruta_pdf_generado)}" if ruta_pdf_generado else "Resumen listo para enviar por correo.",
+                size=11,
+                color="#34D399",
+            )
+
+            def abrir_cliente_correo_mailto(ev=None):
+                dest = (txt_mail_para.value or "").strip()
+                cc = (txt_mail_cc.value or "").strip()
+                subj = urllib.parse.quote(txt_mail_asunto.value or "")
+                body = urllib.parse.quote(txt_mail_cuerpo.value or "")
+                page.launch_url(f"mailto:{dest}?cc={cc}&subject={subj}&body={body}")
+                dlg_correo.open = False
+                page.update()
+                notificar("Se abrió su cliente de correo con el resumen del Acta.", ACCENT_TEAL)
+
+            def enviar_via_smtp_con_pdf(ev=None):
+                dest_raw = (txt_mail_para.value or "").strip()
+                if not dest_raw:
+                    notificar("Ingrese al menos un destinatario en 'Para'.", "#D97706")
+                    return
+
+                smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+                smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+                smtp_user = os.environ.get("SMTP_USER", "")
+                smtp_pass = os.environ.get("SMTP_PASS", "")
+
+                if not smtp_user or not smtp_pass:
+                    abrir_cliente_correo_mailto()
+                    return
+
+                try:
+                    import smtplib
+                    from email.message import EmailMessage
+
+                    msg = EmailMessage()
+                    msg["Subject"] = txt_mail_asunto.value or f"Acta Recepción PO {oc_num}"
+                    msg["From"] = smtp_user
+                    lista_para = [x.strip() for x in dest_raw.replace(";", ",").split(",") if x.strip()]
+                    msg["To"] = ", ".join(lista_para)
+                    if (txt_mail_cc.value or "").strip():
+                        lista_cc = [x.strip() for x in txt_mail_cc.value.replace(";", ",").split(",") if x.strip()]
+                        msg["Cc"] = ", ".join(lista_cc)
+                    msg.set_content(txt_mail_cuerpo.value or "")
+
+                    if ruta_pdf_generado and os.path.exists(ruta_pdf_generado):
+                        with open(ruta_pdf_generado, "rb") as f_pdf:
+                            msg.add_attachment(
+                                f_pdf.read(),
+                                maintype="application",
+                                subtype="pdf",
+                                filename=os.path.basename(ruta_pdf_generado),
+                            )
+
+                    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+                        server.starttls()
+                        server.login(smtp_user, smtp_pass)
+                        server.send_message(msg)
+
+                    dlg_correo.open = False
+                    page.update()
+                    notificar(f"Correo enviado con el Acta PDF adjunta a {', '.join(lista_para)}.", "#047857")
+                except Exception as ex_smtp:
+                    lbl_estado_mail.value = f"Aviso SMTP ({ex_smtp}). Abriendo cliente de correo..."
+                    lbl_estado_mail.color = "#F87171"
+                    page.update()
+                    abrir_cliente_correo_mailto()
+
+            dlg_correo = ft.AlertDialog(
+                modal=True,
+                bgcolor="#1E293B",
+                title=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.MARK_EMAIL_READ_ROUNDED, color=ACCENT_CYAN, size=24),
+                        ft.Text(f"Enviar Acta Oficial por Correo (PO {oc_num})", size=16, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ],
+                    spacing=8,
+                ),
+                content=ft.Container(
+                    width=640,
+                    content=ft.Column([txt_mail_para, txt_mail_cc, txt_mail_asunto, txt_mail_cuerpo, lbl_estado_mail], spacing=8, tight=True),
+                ),
+                actions=[
+                    ft.TextButton("CERRAR", on_click=lambda e: (setattr(dlg_correo, "open", False), page.update())),
+                    boton_primario("ABRIR EN OUTLOOK / CORREO", ft.Icons.OPEN_IN_NEW_ROUNDED, abrir_cliente_correo_mailto, ACCENT_BLUE, height_val=34),
+                    boton_primario("ENVIAR CORREO (PDF ADJUNTO)", ft.Icons.SEND_ROUNDED, enviar_via_smtp_con_pdf, "#047857", height_val=34),
+                ],
+                actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            )
+            page.overlay.append(dlg_correo)
+            dlg_correo.open = True
+            page.update()
+
         def click_exportar_pdf_recepcion(e=None):
             if not filas_conciliacion_export and not recepciones_asn_actual:
                 notificar("No hay datos de recepción activos para exportar a PDF.", "#D97706")
@@ -1016,62 +1158,9 @@ class RecepcionModulo:
                 ruta = generar_acta_recepcion_pdf(cabecera_asn_actual, filas_conciliacion_export, recepciones_asn_actual)
                 descargar_o_abrir_archivo(self.page, ruta)
                 notificar(f"Acta de Recepción de PO generada: {ruta}", "#047857")
-            except ImportError:
-                asunto = urllib.parse.quote(f"Acta de Recepción - PO {cabecera_asn_actual.get('codigo_asn', '')}")
-                page.launch_url(f"mailto:compras@ludipek.cl;logistica@ludipek.cl?subject={asunto}")
-                # Abre automáticamente la ventana para enviar el Acta Oficial por correo
-                abrir_modal_enviar_correo_acta(cabecera_actual, lineas_tabla_actual, ruta_pdf)
-                
-                def cerrar_dlg(ev):
-                    dialogo_correo.open = False
-                    page.update()
-
-                def enviar_correo(ev):
-                    dialogo_correo.open = False
-                    page.update()
-                    notificar("Abriendo Outlook con el Acta PDF adjunta...", ACCENT_TEAL)
-                    try:
-                        import win32com.client
-                        outlook = win32com.client.Dispatch("outlook.application")
-                        mail = outlook.CreateItem(0)
-                        mail.To = "compras@ludipek.cl; logistica@ludipek.cl"
-                        cod_po_str = cabecera_asn_actual.get("codigo_asn", "")
-                        mail.Subject = f"Acta de Recepción - PO {cod_po_str}"
-                        cont_ref = cabecera_asn_actual.get("contenedor_referencia")
-                        txt_cont = f"N° de Contenedor / Guía: {cont_ref}\n\n" if cont_ref else ""
-                        mail.Body = (
-                            f"Estimado equipo,\n\n"
-                            f"Se adjunta el Acta Oficial de Recepción para la PO {cod_po_str} "
-                            f"procesada y validada exitosamente en el WMS.\n\n"
-                            f"{txt_cont}"
-                            f"Saludos cordiales,\nControl Tower WMS"
-                        )
-                        mail.Attachments.Add(os.path.abspath(ruta))
-                        mail.Display(True)
-                    except ImportError:
-                        notificar("Para conectar con Outlook ejecute: pip install pywin32", "#B91C1C")
-                    except Exception as ex_mail:
-                        notificar(f"Error abriendo Outlook: {ex_mail}", "#B91C1C")
-
-                dialogo_correo = ft.AlertDialog(
-                    title=ft.Text("¿Enviar Acta por Correo?", color=TEXT_WHITE),
-                    content=ft.Text("¿Deseas abrir un borrador de correo en Outlook con el PDF adjunto para Compras y Logística?", color=TEXT_MUTED),
-                    bgcolor=BG_CARD,
-                    actions=[
-                        ft.TextButton("Cancelar", on_click=cerrar_dlg),
-                        ft.TextButton("Sí, Redactar Correo", on_click=enviar_correo),
-                    ],
-                )
-                try:
-                    page.open(dialogo_correo)
-                except Exception:
-                    page.dialog = dialogo_correo
-                    dialogo_correo.open = True
-                    page.update()
+                abrir_modal_enviar_correo_acta(cabecera_asn_actual, filas_conciliacion_export, ruta)
             except Exception as ex:
-                notificar(f"Error generando PDF: {ex}", "#B91C1C")
-
-                
+                notificar(f"Error generando PDF: {ex}", "#B91C1C")                
 
 
         def click_exportar_excel_recepcion(e=None):
@@ -1499,17 +1588,24 @@ class RecepcionModulo:
         def cerrar_conciliacion_asn(e=None):
             try:
                 ahora_cierre = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+                cab_copia = dict(cabecera_asn_actual)
+                lineas_copia = list(filas_conciliacion_export)
+                ruta_pdf_cierre = None
                 if filas_conciliacion_export or recepciones_asn_actual:
                     exportar_csv_recepcion_netsuite()
+                    try:
+                        ruta_pdf_cierre = generar_acta_recepcion_pdf(cabecera_asn_actual, filas_conciliacion_export, recepciones_asn_actual)
+                        descargar_o_abrir_archivo(self.page, ruta_pdf_cierre)
+                    except Exception:
+                        pass
                 if asn_actual_id:
                     supabase.table("asn_cabecera").update({"estado": "COMPLETADO"}).eq("id", asn_actual_id).execute()
                 cargar_lista_asns()
                 cargar_historico_recepciones()
                 notificar(f"PO cerrada oficialmente ({ahora_cierre}).", "#047857")
+                abrir_modal_enviar_correo_acta(cab_copia, lineas_copia, ruta_pdf_cierre)
             except Exception as ex:
                 notificar(f"Error al cerrar PO: {ex}", "#B91C1C")
-                # Abre automáticamente la ventana para enviar el Acta Oficial por correo
-                abrir_modal_enviar_correo_acta(cabecera_actual, lineas_tabla_actual, ruta_pdf)
 
         def guardar_ajuste_linea_asn(e=None):
             sku_objetivo = (txt_nuevo_sku_po.value or dd_edit_sku_asn.value or "").strip().upper()
@@ -1851,9 +1947,9 @@ class RecepcionModulo:
                 notificar("Recepción sincronizada.", ACCENT_TEAL)
             elif accion == "DESCARGAR_PO":
                 descargar_po_netsuite_inbound()
-            elif accion == "PACKING_IA":
+            elif accion in ("PACKING", "PACKING_IA"):
                 await seleccionar_y_procesar_packing_ia()
-            elif accion == "COA_IA":
+            elif accion in ("COA", "COA_IA"):
                 await anexar_certificado_coa_ia()
             elif accion == "IMPRIMIR_TODOS_LPN":
                 imprimir_todos_los_lpns_po_activa()
@@ -1925,19 +2021,7 @@ class RecepcionModulo:
                                 spacing=8,
                                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                             ),
-                            ft.Row(
-                                [
-                                    txt_po_netsuite,
-                                    txt_contenedor,
-                                    btn_guardar_contenedor,
-                                    dd_accion_po,
-                                    boton_primario("EJECUTAR", ft.Icons.PLAY_ARROW_ROUNDED, ejecutar_accion_menu_po, ACCENT_TEAL),
-                                    ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, tooltip="Sincronizar recepción en vivo", on_click=auditar_asn_seleccionado),
-                                ],
-                                spacing=8,
-                                wrap=True,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
+                            
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         wrap=True,
