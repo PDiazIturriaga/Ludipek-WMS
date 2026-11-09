@@ -1456,9 +1456,15 @@ class RecepcionModulo:
                 rows=filas_preview,
             )
 
-            def confirmar_uso_po(ev):
-                dlg_confirmar_po.open = False
+            def cerrar_modal_po():
+                try:
+                    page.pop_dialog()
+                except Exception:
+                    dlg_confirmar_po.open = False
                 page.update()
+
+            def confirmar_uso_po(ev):
+                cerrar_modal_po()
                 try:
                     cod_asn = f"ASN-PO-{num_oc_real}"
                     bodega_usr = getattr(page, "bodega_actual", "Bodega Santiago")
@@ -1477,7 +1483,7 @@ class RecepcionModulo:
                             "numero_oc": num_oc_real,
                             "proveedor": proveedor_str,
                             "fecha_esperada": fecha_oc_str,
-                            "estado": "PENDIENTE",
+                            "estado": "EN_RECEPCION",
                         }
                         try:
                             res_ins = supabase.table("asn_cabecera").insert({**payload_cab, "bodega": bodega_usr}).execute()
@@ -1505,14 +1511,79 @@ class RecepcionModulo:
                     if nuevas_lineas_bd:
                         supabase.table("asn_detalle").insert(nuevas_lineas_bd).execute()
 
-                    # 3. Recargar selector y activar esta PO
-                    # 3. Recargar selector y activar esta PO
+                    # 3. Recargar selector y activar esta PO en pantalla
                     cargar_lista_asns()
                     dd_asn.value = str(asn_id_nuevo)
                     auditar_asn_seleccionado()
-                    notificar(f"PO {num_oc_real} ({proveedor_str}) activada para recepción.", "#047857")
+                    notificar(f"PO {num_oc_real} ({proveedor_str}) cargada y activa para recepción.", "#047857")
                 except Exception as ex_save:
                     notificar(f"Error al activar PO {num_oc_real}: {ex_save}", "#B91C1C")
+
+            dlg_confirmar_po = ft.AlertDialog(
+                modal=True,
+                bgcolor="#1E293B",
+                title=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.FACT_CHECK_ROUNDED, color=ACCENT_CYAN, size=24),
+                        ft.Text(f"¿Desea utilizar la Orden de Compra PO {num_oc_real}?", size=16, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ],
+                    spacing=8,
+                ),
+                content=ft.Container(
+                    width=680,
+                    height=380,
+                    content=ft.Column(
+                        [
+                            ft.Container(
+                                padding=12,
+                                bgcolor="#0F172A",
+                                border_radius=8,
+                                border=ft.Border.all(1, ACCENT_CYAN),
+                                content=ft.Column(
+                                    [
+                                        ft.Text(f"PROVEEDOR: {proveedor_str}", size=14, weight=ft.FontWeight.W_900, color="#34D399"),
+                                        ft.Text(
+                                            f"N° OC: {num_oc_real}   |   Fecha OC: {fecha_oc_str}   |   Estado ERP: {estado_ns_str}",
+                                            size=11,
+                                            color=TEXT_WHITE,
+                                        ),
+                                        ft.Text(
+                                            f"Resumen de Carga: {total_skus} SKUs distintos   |   Total a Recibir: {total_unidades} Unidades",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="#FBBF24",
+                                        ),
+                                    ],
+                                    spacing=4,
+                                ),
+                            ),
+                            ft.Text("DETALLE DE SKUs CONTENIDOS EN LA PO:", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED),
+                            ft.Container(
+                                expand=True,
+                                bgcolor="#181E20",
+                                border_radius=6,
+                                border=ft.Border.all(1, BORDER_COLOR),
+                                content=ft.Column([tabla_preview_po], scroll=ft.ScrollMode.AUTO),
+                            ),
+                        ],
+                        spacing=10,
+                    ),
+                ),
+                actions=[
+                    ft.TextButton("CANCELAR", on_click=lambda e: cerrar_modal_po()),
+                    boton_primario(
+                        "SÍ, UTILIZAR ESTA PO (CARGAR AL WMS)",
+                        ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED,
+                        confirmar_uso_po,
+                        "#047857",
+                        height_val=36,
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            )
+
+            page.show_dialog(dlg_confirmar_po)
+            page.update()
 
             def cancelar_uso_po(ev):
                 dlg_confirmar_po.open = False
@@ -2000,6 +2071,7 @@ class RecepcionModulo:
         txt_fecha_hist_rec.on_change = cargar_historico_recepciones
         btn_guardar_contenedor.on_click = guardar_contenedor_db
         sw_auto_sync_rf.on_change = toggle_auto_sync_inbound
+        txt_po_netsuite.on_submit = descargar_po_netsuite_inbound
 
         # --- 6. COMPOSICIÓN DE VISTAS (ARMADO FINAL DE LA INTERFAZ) ---
         barra_titulo_monitor = ft.Container(
@@ -2009,6 +2081,30 @@ class RecepcionModulo:
             border=ft.Border.all(1, BORDER_COLOR),
             content=ft.Column(
                 [
+                    ft.Row(
+                                [
+                                    txt_po_netsuite,
+                                    boton_primario(
+                                        "LLAMAR PO",
+                                        ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
+                                        descargar_po_netsuite_inbound,
+                                        ACCENT_BLUE,
+                                        height_val=34,
+                                    ),
+                                    txt_contenedor,
+                                    btn_guardar_contenedor,
+                                    dd_accion_po,
+                                    ft.IconButton(
+                                        icon=ft.Icons.SYNC_ROUNDED,
+                                        icon_color=ACCENT_CYAN,
+                                        tooltip="Sincronizar recepción en vivo",
+                                        on_click=auditar_asn_seleccionado,
+                                    ),
+                                ],
+                                spacing=8,
+                                wrap=True,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
                     ft.Row(
                         [
                             ft.Row(
