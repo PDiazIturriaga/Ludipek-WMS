@@ -383,7 +383,6 @@ class MaestraModulo:
             nonlocal id_usuario_editando
             u_log = (txt_usr_login.value or "").strip().upper()
             u_nom = (txt_usr_nombre.value or "").strip()
-            # Guardamos la contraseña en texto directo para que funcione igual en PC y en App Celular RF
             u_pass = (txt_usr_pass.value or "").strip()
             u_rol = (dd_usr_rol.value or "OPERADOR RF").strip()
             u_bod = (dd_usr_bodega.value or "Bodega Santiago").strip()
@@ -452,7 +451,7 @@ class MaestraModulo:
                 cargar_usuarios_supabase()
 
         # =========================================================================
-        # SECCIÓN B: CATÁLOGO MAESTRO DE SKUs (CREAR Y MODIFICAR CON TODOS LOS DATOS)
+        # SECCIÓN B: CATÁLOGO MAESTRO DE SKUs (CORREGIDO PARA CONECTAR CON CELULAR)
         # =========================================================================
         lbl_modo_form_sku = ft.Text("MODO: CREAR / MODIFICAR FICHA MAESTRA DE SKU", size=11, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)
         txt_sku_codigo = texto_dark("Código SKU (Ej: ALUC15)", width=155, icon=ft.Icons.QR_CODE_ROUNDED)
@@ -463,16 +462,17 @@ class MaestraModulo:
         txt_sku_peso = texto_dark("Peso (Kg)", width=120, value="1.0", icon=ft.Icons.SCALE_OUTLINED)
         txt_sku_ubic_pick = texto_dark("Ubic. Picking (Ej: A-01-01)", width=165, icon=ft.Icons.PLACE_OUTLINED)
         dd_sku_categoria = dropdown_dark(
-            label="Categoría / Canal", width=175, value="ESTANDAR",
+            label="Categoría / Marca / Canal", width=175, value="ESTANDAR",
             options=[
                 opt_w("ESTANDAR", "ESTÁNDAR (Normal)"),
                 opt_w("FARMACIA (-FA)", "FARMACIA (-FA)"),
+                opt_w("BOEHRINGER", "BOEHRINGER (Farma)"),
                 opt_w("ALIMENTO", "ALIMENTO MASCOTAS"),
                 opt_w("ACCESORIOS", "ACCESORIOS / OTROS"),
             ],
         )
 
-        txt_buscar_sku = texto_dark("Buscar en Maestra por SKU, Descripción, EAN o Categoría...", expand=True, icon=ft.Icons.SEARCH_ROUNDED)
+        txt_buscar_sku = texto_dark("Buscar en Maestra por SKU, Descripción, EAN o Marca...", expand=True, icon=ft.Icons.SEARCH_ROUNDED)
 
         lbl_kpi_sku_total = ft.Text("0", size=20, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
         lbl_kpi_sku_farma = ft.Text("0", size=20, weight=ft.FontWeight.W_900, color=ACCENT_AMBER, font_family="Consolas")
@@ -484,11 +484,11 @@ class MaestraModulo:
             columns=[
                 ft.DataColumn(ft.Text("SKU", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("DESCRIPCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("EAN / BARRA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
+                ft.DataColumn(ft.Text("EAN / CÓDIGO BARRAS", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
                 ft.DataColumn(ft.Text("UNID. MÚLTIPLO (UxC)", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_GREEN)),
                 ft.DataColumn(ft.Text("CAJAS x PALLET", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("PESO (KG)", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("CATEGORÍA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("MARCA / CAT", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("UBIC. PICKING", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
                 ft.DataColumn(ft.Text("ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
             ],
@@ -500,10 +500,13 @@ class MaestraModulo:
             sku_c = str(r.get("sku") or r.get("codigo") or "").strip().upper()
             ext = extra_map.get(sku_c, {})
             desc_c = str(r.get("descripcion") or r.get("nombre") or ext.get("descripcion") or "").strip()
-            ean_c = str(r.get("ean") or r.get("codigo_barra") or r.get("dun14") or ext.get("ean") or "-").strip()
+            
+            # Unificación con codigo_barras de main.dart
+            ean_c = str(r.get("codigo_barras") or r.get("ean") or r.get("codigo_barra") or r.get("dun14") or ext.get("ean") or "-").strip()
+            
             mult_c = (
-                r.get("unidades_por_caja")
-                or r.get("multiplo")
+                r.get("multiplo")
+                or r.get("unidades_por_caja")
                 or r.get("unidades_multiplos")
                 or r.get("uxc")
                 or r.get("factor_empaque")
@@ -518,35 +521,40 @@ class MaestraModulo:
                 or 40
             )
             peso_c = (
-                r.get("peso")
-                or r.get("peso_kg")
+                r.get("peso_kg")
+                or r.get("peso")
                 or r.get("peso_unitario")
                 or ext.get("peso")
                 or 0.0
             )
-            cat_c = str(
-                r.get("categoria")
+            # Unificación de marca y categoría con el celular
+            marca_c = str(
+                r.get("marca")
+                or r.get("categoria")
                 or r.get("familia")
                 or r.get("canal")
                 or ext.get("categoria")
                 or ("FARMACIA (-FA)" if "-FA" in sku_c else "ESTANDAR")
             ).strip().upper()
+            
             ubic_p = str(
-                r.get("ubicacion_picking")
+                r.get("ubicacion_picking_fija")
+                or r.get("ubicacion_picking")
                 or r.get("ubicacion_sugerida")
                 or r.get("ubicacion")
                 or ext.get("ubicacion_picking")
                 or "-"
             ).strip().upper()
+            
             return {
                 "raw": r,
                 "sku": sku_c,
                 "descripcion": desc_c,
                 "ean": ean_c,
-                "multiplo": mult_c,
-                "cajas_por_pallet": cajas_pal,
-                "peso": peso_c,
-                "categoria": cat_c,
+                "multiplo": int(float(mult_c or 1)),
+                "cajas_por_pallet": int(float(cajas_pal or 40)),
+                "peso": float(peso_c or 0.0),
+                "marca_cat": marca_c,
                 "ubicacion_picking": ubic_p,
             }
 
@@ -562,7 +570,7 @@ class MaestraModulo:
             txt_sku_cajas_pallet.value = str(info_s["cajas_por_pallet"])
             txt_sku_peso.value = str(info_s["peso"])
             txt_sku_ubic_pick.value = "" if info_s["ubicacion_picking"] == "-" else info_s["ubicacion_picking"]
-            cat_val = info_s["categoria"]
+            cat_val = info_s["marca_cat"]
             if cat_val not in [o.key for o in dd_sku_categoria.options]:
                 dd_sku_categoria.options.append(opt_w(cat_val, cat_val))
             dd_sku_categoria.value = cat_val
@@ -596,7 +604,7 @@ class MaestraModulo:
                 info = extraer_datos_completos_sku(r, extra_map)
                 if not info["sku"]:
                     continue
-                if "FARMACIA" in info["categoria"] or "-FA" in info["sku"]:
+                if "FARMACIA" in info["marca_cat"] or "BOEHRINGER" in info["marca_cat"] or "-FA" in info["sku"]:
                     farma_cnt += 1
                 try:
                     if int(float(info["multiplo"] or 1)) > 1:
@@ -604,15 +612,15 @@ class MaestraModulo:
                 except Exception:
                     pass
 
-                if filtro and not any(filtro in str(v).upper() for v in (info["sku"], info["descripcion"], info["ean"], info["categoria"])):
+                if filtro and not any(filtro in str(v).upper() for v in (info["sku"], info["descripcion"], info["ean"], info["marca_cat"])):
                     continue
 
-                if len(nuevas_filas) < 200:
-                    es_fa = "FARMACIA" in info["categoria"] or "-FA" in info["sku"]
+                if len(nuevas_filas) < 300:
+                    es_fa = "FARMACIA" in info["marca_cat"] or "BOEHRINGER" in info["marca_cat"] or "-FA" in info["sku"]
                     badge_cat = (
                         crear_badge_estado("FARMACIA (-FA)", "#92400E", "#FEF3C7")
                         if es_fa
-                        else crear_badge_estado(info["categoria"][:14], "#1E3A8A", "#DBEAFE")
+                        else crear_badge_estado(info["marca_cat"][:14], "#1E3A8A", "#DBEAFE")
                     )
                     nuevas_filas.append(
                         ft.DataRow(
@@ -651,7 +659,7 @@ class MaestraModulo:
             with lock_datos:
                 acumulado = []
                 paso = 1000
-                for offset in range(0, 4000, paso):
+                for offset in range(0, 5000, paso):
                     try:
                         res = supabase.table("maestra_sku").select("*").range(offset, offset + paso - 1).execute()
                         lote = res.data or []
@@ -668,9 +676,9 @@ class MaestraModulo:
         def guardar_sku_maestra(e=None):
             sku_c = (txt_sku_codigo.value or "").strip().upper()
             desc_c = (txt_sku_desc.value or "").strip()
-            ean_c = (txt_sku_ean.value or "").strip()
+            ean_c = (txt_sku_ean.value or "").strip().upper()
             ubic_p = (txt_sku_ubic_pick.value or "").strip().upper()
-            cat_c = (dd_sku_categoria.value or "ESTANDAR").strip()
+            cat_c = (dd_sku_categoria.value or "ESTANDAR").strip().upper()
 
             if not sku_c or not desc_c:
                 notificar("El Código SKU y la Descripción son obligatorios.", "#D97706")
@@ -689,10 +697,11 @@ class MaestraModulo:
             except Exception:
                 peso_val = 0.0
 
+            # Guardar respaldo extra local
             extra_map = leer_json_local(RUTA_MAESTRA_EXTRA)
             extra_map[sku_c] = {
                 "descripcion": desc_c,
-                "ean": ean_c or "-",
+                "ean": ean_c or sku_c,
                 "multiplo": mult_val,
                 "cajas_por_pallet": cajas_val,
                 "peso": peso_val,
@@ -702,53 +711,42 @@ class MaestraModulo:
             }
             guardar_json_local(RUTA_MAESTRA_EXTRA, extra_map)
 
-            payload_db = {"sku": sku_c, "descripcion": desc_c}
-            mapeos_posibles = [
-                (("unidades_por_caja", "multiplo", "unidades_multiplos", "uxc", "factor_empaque"), mult_val),
-                (("cajas_por_pallet", "pallet_cajas", "unidades_pallet"), cajas_val),
-                (("peso", "peso_kg", "peso_unitario"), peso_val),
-                (("ean", "codigo_barra", "dun14"), ean_c),
-                (("categoria", "familia", "canal"), cat_c),
-                (("ubicacion_picking", "ubicacion_sugerida", "ubicacion"), ubic_p),
-            ]
-            for tupla_cols, val_x in mapeos_posibles:
-                for col_cand in tupla_cols:
-                    if col_cand in columnas_reales_maestra:
-                        payload_db[col_cand] = val_x
+            # Payload unificado 100% compatible con main.dart (codigo_barras, marca, multiplicadores)
+            payload_supa = {
+                "sku": sku_c,
+                "descripcion": desc_c,
+                "codigo_barras": ean_c if ean_c else sku_c,
+                "multiplo": mult_val,
+                "marca": cat_c,
+                "ubicacion_picking_fija": ubic_p if ubic_p else "-",
+                "peso_kg": peso_val,
+            }
 
             guardado_ok = False
-            for payload_intento in (
-                {
-                    "sku": sku_c, "descripcion": desc_c, "unidades_por_caja": mult_val,
-                    "cajas_por_pallet": cajas_val, "peso": peso_val, "ean": ean_c,
-                    "categoria": cat_c, "ubicacion_picking": ubic_p,
-                },
-                payload_db,
-                {"sku": sku_c, "descripcion": desc_c},
-            ):
-                if guardado_ok:
-                    break
+            try:
+                supabase.table("maestra_sku").upsert(payload_supa, on_conflict="sku").execute()
+                guardado_ok = True
+            except Exception as ex_up:
+                # Intento de respaldo con nombres alternativos de columnas si la BD es mixta
                 try:
-                    supabase.table("maestra_sku").upsert(payload_intento, on_conflict="sku").execute()
+                    payload_alt = {
+                        "sku": sku_c,
+                        "descripcion": desc_c,
+                        "ean": ean_c if ean_c else sku_c,
+                        "unidades_por_caja": mult_val,
+                        "categoria": cat_c,
+                        "ubicacion_picking": ubic_p,
+                    }
+                    supabase.table("maestra_sku").upsert(payload_alt, on_conflict="sku").execute()
                     guardado_ok = True
-                except Exception:
-                    try:
-                        exist = supabase.table("maestra_sku").select("sku").eq("sku", sku_c).execute()
-                        if exist.data:
-                            supabase.table("maestra_sku").update(payload_intento).eq("sku", sku_c).execute()
-                        else:
-                            supabase.table("maestra_sku").insert(payload_intento).execute()
-                        guardado_ok = True
-                    except Exception:
-                        continue
+                except Exception as ex_alt:
+                    notificar(f"Error guardando en Supabase: {ex_up}", "#B91C1C")
+                    return
 
             if guardado_ok:
-                notificar(f"Ficha Maestra de SKU [{sku_c}] actualizada exitosamente.", "#047857")
+                notificar(f"Ficha Maestra de SKU [{sku_c}] guardada y sincronizada.", "#047857")
                 limpiar_formulario_sku()
                 cargar_maestra_skus()
-            else:
-                notificar(f"Atributos logísticos de [{sku_c}] guardados.", "#0284C7")
-                renderizar_tabla_maestra()
 
         def exportar_maestra_excel(e=None):
             if not skus_db:

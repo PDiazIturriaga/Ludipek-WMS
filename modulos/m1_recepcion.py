@@ -149,8 +149,8 @@ class RecepcionModulo:
             options=[
                 opt_w("SINCRONIZAR", "1. Sincronizar Recepción de Andén (RF)"),
                 opt_w("DESCARGAR_PO", "2. Descargar PO desde NetSuite (ERP)"),
-                opt_w("PACKING_IA", "3. Cargar Packing List PDF (Cruzar IA)"),
-                opt_w("COA_IA", "4. Anexar Certificado CoA PDF (Lotes IA)"),
+                opt_w("PACKING", "3. Cargar Packing List PDF"),
+                opt_w("COA", "4. Anexar Certificado CoA PDF"),
                 opt_w("IMPRIMIR_TODOS_LPN", "5. Imprimir TODOS los LPNs de la PO (15x10)"),
                 opt_w("ACTA_PDF", "6. Exportar Acta Oficial de PO (PDF)"),
                 opt_w("EXCEL", "7. Exportar Conciliación a Excel (.XLSX)"),
@@ -164,7 +164,22 @@ class RecepcionModulo:
             size=11,
             color=ACCENT_CYAN,
         )
-        txt_buscar_hist_rec = texto_dark(label="Buscar en Histórico por LPN, SKU, Lote o PO...", width=340)
+        txt_buscar_hist_rec = texto_dark(
+            label="Buscar por N° PO Real, Proveedor, LPN, SKU o Lote...",
+            width=290,
+        )
+        dd_fecha_hist_rec = dropdown_dark(
+            label="📅 Día de Recepción",
+            width=255,
+            value="TODAS",
+            options=[opt_w("TODAS", "TODAS LAS FECHAS (POR DÍA)")],
+        )
+        txt_fecha_hist_rec = texto_dark(
+            label="Día exacto (DD-MM-YYYY)",
+            width=165,
+        )
+        fila_resumen_dias_hist = ft.Row(spacing=8, wrap=True)
+        dd_mod_po_base = dropdown_dark(label="Orden de Compra (PO) Activa a Modificar", width=360)
 
         lbl_dig_dias = ft.Text("00", size=26, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
         lbl_dig_horas = ft.Text("00", size=26, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
@@ -299,15 +314,16 @@ class RecepcionModulo:
             heading_row_height=34,
             data_row_min_height=32,
             data_row_max_height=38,
-            column_spacing=16,
+            column_spacing=14,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
-                ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD, size=11, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("PO ID", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("FECHA RECEPCIÓN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                ft.DataColumn(ft.Text("N° PO", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("PROVEEDOR / REF.", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("LPN", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("SKU", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("CAJAS", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("MÚLTIPLO", weight=ft.FontWeight.BOLD, size=11, color=TEXT_MUTED)),
+                ft.DataColumn(ft.Text("MÚLT.", weight=ft.FontWeight.BOLD, size=11, color=TEXT_MUTED)),
                 ft.DataColumn(ft.Text("UNID. TOTALES", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("LOTE", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("VENCIMIENTO", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
@@ -723,30 +739,229 @@ class RecepcionModulo:
                 res = supabase.table("asn_cabecera").select("*").neq("estado", "COMPLETADO").order("id", desc=True).execute()
                 opciones = [opt_w("LIBRES", "RECEPCIONES DIRECTAS SIN PO (INGRESOS LIBRES)")]
                 for r in res.data:
-                    nombre_po = formatear_nombre_po(r.get("numero_oc") or r.get("codigo_asn") or "")
+                    nombre_po = obtener_nombre_po_cabecera(r)
                     opciones.append(opt_w(str(r["id"]), f"PO {nombre_po} | {r.get('proveedor','')} | {r.get('estado','ACTIVO')}"))
                 dd_asn.options = opciones
                 dd_qa_po_base.options = list(opciones)
+                dd_mod_po_base.options = list(opciones)
                 if not dd_asn.value:
                     dd_asn.value = str(res.data[0]["id"]) if res.data else "LIBRES"
                 dd_qa_po_base.value = dd_asn.value
+                dd_mod_po_base.value = dd_asn.value
                 auditar_asn_seleccionado()
                 page.update()
             except Exception as ex:
                 notificar(f"Error al cargar POs: {ex}", "#B91C1C")
 
+        def extraer_dia_y_hora_recepcion(fila_rec: dict) -> tuple:
+            """Devuelve (fecha_iso_yyyy_mm_dd, fecha_cl_dd_mm_yyyy, hora_hh_mm) de la recepción física del LPN."""
+            for col_f in ("fecha_recepcion", "created_at", "timestamp", "fecha"):
+                raw_v = str(fila_rec.get(col_f) or "").strip()
+                if raw_v and raw_v.upper() not in ("NONE", "NULL", ""):
+                    try:
+                        dt = datetime.fromisoformat(raw_v.replace("Z", "+00:00")).astimezone()
+                        return (dt.strftime("%Y-%m-%d"), dt.strftime("%d-%m-%Y"), dt.strftime("%H:%M"))
+                    except Exception:
+                        parte_f = raw_v.replace("T", " ").split()[0].strip()
+                        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+                            try:
+                                dt_p = datetime.strptime(parte_f, fmt)
+                                return (dt_p.strftime("%Y-%m-%d"), dt_p.strftime("%d-%m-%Y"), "")
+                            except ValueError:
+                                continue
+            return ("1900-01-01", "SIN FECHA", "")
+
+        def seleccionar_dia_historico_rapido(dia_iso: str):
+            dd_fecha_hist_rec.value = dia_iso
+            txt_fecha_hist_rec.value = ""
+            cargar_historico_recepciones()
+
+        def limpiar_filtros_historico(e=None):
+            txt_buscar_hist_rec.value = ""
+            txt_fecha_hist_rec.value = ""
+            dd_fecha_hist_rec.value = "TODAS"
+            cargar_historico_recepciones()
+
         def cargar_historico_recepciones(e=None):
             filtro_h = (txt_buscar_hist_rec.value or "").strip().upper()
-            try:
-                res_h = supabase.table("registro_recepcion").select("*").order("id", desc=True).limit(250).execute()
-                tabla_historico_recepciones.rows.clear()
-                for r in res_h.data:
-                    lpn_h = str(r.get("lpn", "-"))
-                    sku_h = str(r.get("sku", "-"))
-                    po_h = str(r.get("asn_id") or "LIBRE")
-                    lote_c, qa_c = extraer_estado_qa(r.get("lote", "S/L"))
-                    if filtro_h and not any(filtro_h in campo.upper() for campo in [lpn_h, sku_h, lote_c, po_h]):
+            filtro_fecha_txt = (txt_fecha_hist_rec.value or "").strip()
+            dia_dropdown = dd_fecha_hist_rec.value or "TODAS"
+
+            # Si el usuario escribió una fecha manual (DD-MM-YYYY o YYYY-MM-DD), normalizarla a YYYY-MM-DD
+            fecha_manual_iso = ""
+            if filtro_fecha_txt:
+                for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+                    try:
+                        fecha_manual_iso = datetime.strptime(filtro_fecha_txt, fmt).strftime("%Y-%m-%d")
+                        break
+                    except ValueError:
                         continue
+
+            try:
+                # 1. Cargar mapa de POs reales desde asn_cabecera (activas y cerradas)
+                mapa_po_real = {}
+                try:
+                    res_cabs = supabase.table("asn_cabecera").select("id, numero_oc, codigo_asn, proveedor, estado, contenedor_referencia").limit(1000).execute()
+                    for c in (res_cabs.data or []):
+                        cid = str(c.get("id"))
+                        num_po_limpio = obtener_nombre_po_cabecera(c)
+                        mapa_po_real[cid] = {
+                            "po_display": f"PO {num_po_limpio}" if num_po_limpio != "LIBRE" else "SIN PO",
+                            "po_num": num_po_limpio,
+                            "proveedor": str(c.get("proveedor") or "SIN PROVEEDOR").strip(),
+                            "estado": str(c.get("estado") or "ACTIVO").strip().upper(),
+                            "contenedor": str(c.get("contenedor_referencia") or "").strip(),
+                        }
+                except Exception:
+                    pass
+
+                # 2. Cargar recepciones físicas y enriquecer cada una con su Día de Recepción y N° PO Real
+                res_h = supabase.table("registro_recepcion").select("*").order("id", desc=True).limit(600).execute()
+                registros_enriquecidos = []
+                resumen_por_dia = {}      # {dia_iso: {"fecha_cl": ..., "lpns": set(), "unid": 0, "pos": set()}}
+                resumen_dia_y_po = {}     # {(dia_iso, po_display): {"fecha_cl": ..., "po": ..., "lpns": set(), "unid": 0}}
+
+                for r in (res_h.data or []):
+                    dia_iso, dia_cl, hora_str = extraer_dia_y_hora_recepcion(r)
+                    aid_str = str(r.get("asn_id")) if r.get("asn_id") is not None else ""
+                    cont_rec = str(r.get("contenedor") or "").strip().upper()
+
+                    if aid_str and aid_str in mapa_po_real:
+                        info_po = mapa_po_real[aid_str]
+                        po_real_str = info_po["po_display"]
+                        prov_str = info_po["proveedor"]
+                    elif cont_rec and not cont_rec.startswith("PO-"):
+                        po_real_str = "SIN PO (LIBRE)"
+                        prov_str = f"CONT: {cont_rec}"
+                    else:
+                        po_real_str = f"PO {formatear_nombre_po(cont_rec)}" if cont_rec else "SIN PO"
+                        prov_str = "RECEPCIÓN DIRECTA"
+
+                    lpn_h = str(r.get("lpn") or "-").strip()
+                    sku_h = str(r.get("sku") or "-").strip()
+                    unid_h = int(r.get("unidades_totales") or 0)
+                    lote_c, qa_c = extraer_estado_qa(r.get("lote", "S/L"))
+
+                    # Acumular para el selector de Día de Recepción
+                    if dia_iso not in resumen_por_dia:
+                        resumen_por_dia[dia_iso] = {"fecha_cl": dia_cl, "lpns": set(), "unid": 0, "pos": set()}
+                    resumen_por_dia[dia_iso]["lpns"].add(lpn_h)
+                    resumen_por_dia[dia_iso]["unid"] += unid_h
+                    resumen_por_dia[dia_iso]["pos"].add(po_real_str)
+
+                    clave_dp = (dia_iso, po_real_str)
+                    if clave_dp not in resumen_dia_y_po:
+                        resumen_dia_y_po[clave_dp] = {"dia_iso": dia_iso, "fecha_cl": dia_cl, "po": po_real_str, "lpns": set(), "unid": 0}
+                    resumen_dia_y_po[clave_dp]["lpns"].add(lpn_h)
+                    resumen_dia_y_po[clave_dp]["unid"] += unid_h
+
+                    registros_enriquecidos.append({
+                        "raw": r,
+                        "dia_iso": dia_iso,
+                        "dia_cl": dia_cl,
+                        "hora": hora_str,
+                        "po_real": po_real_str,
+                        "proveedor": prov_str,
+                        "lpn": lpn_h,
+                        "sku": sku_h,
+                        "lote": lote_c,
+                        "qa": qa_c,
+                    })
+
+                # 3. Poblar Dropdown de Días de Recepción disponibles
+                opciones_dias = [opt_w("TODAS", "TODAS LAS FECHAS (SEPARADO POR DÍA)")]
+                for d_iso in sorted(resumen_por_dia.keys(), reverse=True):
+                    inf_d = resumen_por_dia[d_iso]
+                    pos_txt = ", ".join(sorted(inf_d["pos"]))[:28]
+                    opciones_dias.append(
+                        opt_w(d_iso, f"📅 {inf_d['fecha_cl']} ({len(inf_d['lpns'])} LPNs | {pos_txt})")
+                    )
+                dd_fecha_hist_rec.options = opciones_dias
+                if dia_dropdown not in [o.key for o in opciones_dias]:
+                    dia_dropdown = "TODAS"
+                    dd_fecha_hist_rec.value = "TODAS"
+
+                # 4. Construir chips rápidos de Recepción por Día y PO (muestra la misma PO separada si se recibió en 2 días)
+                fila_resumen_dias_hist.controls.clear()
+                for (d_iso, po_s), inf_dp in sorted(resumen_dia_y_po.items(), key=lambda x: (x[0][0], x[0][1]), reverse=True)[:10]:
+                    es_dia_sel = (dia_dropdown == d_iso)
+                    fila_resumen_dias_hist.controls.append(
+                        ft.Container(
+                            padding=ft.Padding.symmetric(horizontal=10, vertical=5),
+                            bgcolor="#065F46" if es_dia_sel else "#181E20",
+                            border_radius=6,
+                            border=ft.Border.all(1, "#34D399" if es_dia_sel else BORDER_COLOR),
+                            ink=True,
+                            tooltip="Clic para filtrar este día de recepción",
+                            on_click=lambda ev, d_k=d_iso: seleccionar_dia_historico_rapido(
+                                "TODAS" if dd_fecha_hist_rec.value == d_k else d_k
+                            ),
+                            content=ft.Row(
+                                [
+                                    ft.Icon(ft.Icons.CALENDAR_MONTH_ROUNDED, color="#34D399", size=14),
+                                    ft.Text(f"{inf_dp['fecha_cl']} • {po_s}", size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                                    ft.Text(f"({len(inf_dp['lpns'])} LPNs | {inf_dp['unid']} UN)", size=10, color=ACCENT_CYAN),
+                                ],
+                                spacing=5,
+                                tight=True,
+                            ),
+                        )
+                    )
+
+                # 5. Filtrar y ordenar por (dia_iso DESC, po_real ASC, id DESC) para separar visualmente por día
+                filtrados = []
+                for item in registros_enriquecidos:
+                    if dia_dropdown != "TODAS" and item["dia_iso"] != dia_dropdown:
+                        continue
+                    if fecha_manual_iso and item["dia_iso"] != fecha_manual_iso:
+                        continue
+                    elif filtro_fecha_txt and not fecha_manual_iso and filtro_fecha_txt not in item["dia_cl"]:
+                        continue
+                    if filtro_h and not any(
+                        filtro_h in campo.upper()
+                        for campo in (item["lpn"], item["sku"], item["lote"], item["po_real"], item["proveedor"], item["dia_cl"])
+                    ):
+                        continue
+                    filtrados.append(item)
+
+                filtrados.sort(key=lambda x: (x["dia_iso"], x["po_real"], int(x["raw"].get("id") or 0)), reverse=True)
+
+                # 6. Llenar tabla insertando una fila separadora cada vez que cambia el Día de Recepción (y PO)
+                tabla_historico_recepciones.rows.clear()
+                grupo_actual = None
+
+                for item in filtrados[:250]:
+                    r = item["raw"]
+                    clave_grupo = (item["dia_cl"], item["po_real"])
+
+                    if clave_grupo != grupo_actual:
+                        grupo_actual = clave_grupo
+                        lotes_grupo = [x for x in filtrados if (x["dia_cl"], x["po_real"]) == clave_grupo]
+                        lpns_g_cnt = len({x["lpn"] for x in lotes_grupo})
+                        unid_g_sum = sum(int(x["raw"].get("unidades_totales") or 0) for x in lotes_grupo)
+
+                        tabla_historico_recepciones.rows.append(
+                            ft.DataRow(
+                                color="#1E293B",
+                                cells=[
+                                    ft.DataCell(ft.Text(f"📅 DÍA: {item['dia_cl']}", weight=ft.FontWeight.W_900, size=11, color="#34D399")),
+                                    ft.DataCell(ft.Text(item["po_real"], weight=ft.FontWeight.W_900, size=11, color="#FBBF24")),
+                                    ft.DataCell(ft.Text(item["proveedor"][:24], weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                                    ft.DataCell(ft.Text(f"{lpns_g_cnt} LPNs en este día", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                    ft.DataCell(ft.Text(f"{unid_g_sum} UN recibidas", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                ],
+                            )
+                        )
+
+                    lpn_h = item["lpn"]
+                    qa_c = item["qa"]
                     badge_qa = (
                         crear_badge_estado("APROBADO", "#065F46", "#D1FAE5")
                         if qa_c == "APROBADO"
@@ -756,17 +971,20 @@ class RecepcionModulo:
                             else crear_badge_estado("RECHAZADO", "#991B1B", "#FEE2E2")
                         )
                     )
+                    fecha_hora_mostrar = f"{item['dia_cl']} {item['hora']}".strip()
+
                     tabla_historico_recepciones.rows.append(
                         ft.DataRow(
                             cells=[
-                                ft.DataCell(ft.Text(str(r.get("id", "")), size=11, color=TEXT_MUTED)),
-                                ft.DataCell(ft.Text(f"PO-{po_h}" if po_h != "LIBRE" else "SIN PO", size=11, color=TEXT_WHITE)),
+                                ft.DataCell(ft.Text(fecha_hora_mostrar, weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                                ft.DataCell(ft.Text(item["po_real"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                                ft.DataCell(ft.Text(item["proveedor"][:22], size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(lpn_h, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN, size=11)),
-                                ft.DataCell(ft.Text(sku_h, weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
+                                ft.DataCell(ft.Text(item["sku"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(str(r.get("cajas", 0)), size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(f"x{r.get('multiplo_aplicado', 1)}", size=11, color=TEXT_MUTED)),
                                 ft.DataCell(ft.Text(str(r.get("unidades_totales", 0)), weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                                ft.DataCell(ft.Text(lote_c, size=11, color=TEXT_WHITE)),
+                                ft.DataCell(ft.Text(item["lote"], size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(str(r.get("fecha_vencimiento_cl") or "S/F"), size=11, color=TEXT_WHITE)),
                                 ft.DataCell(badge_qa),
                                 ft.DataCell(boton_primario("LPN 15x10", ft.Icons.PRINT_OUTLINED, lambda ev, cod=lpn_h: reimprimir_desde_fila(cod), ACCENT_TEAL, height_val=26)),
@@ -782,10 +1000,11 @@ class RecepcionModulo:
                 notificar("No hay pallets registrados en esta PO para imprimir.", "#D97706")
                 return
             try:
-                cod_po = cabecera_asn_actual.get("codigo_asn", "PO-ACTIVA")
+                cod_po = obtener_nombre_po_cabecera(cabecera_asn_actual)
+                ruta = generar_pdf_masivo_lpns_po(cod_po, recepciones_asn_actual)
                 descargar_o_abrir_archivo(self.page, ruta)
                 lpns_cnt = len({r.get("lpn") for r in recepciones_asn_actual if r.get("lpn")})
-                notificar(f"PDF generado con las {lpns_cnt} etiquetas LPN de {formatear_nombre_po(cod_po)}: {ruta}", "#047857")
+                notificar(f"PDF generado con las {lpns_cnt} etiquetas LPN de PO {cod_po}: {ruta}", "#047857")
             except Exception as ex:
                 notificar(f"Error al imprimir lote de LPNs: {ex}", "#B91C1C")
 
@@ -794,12 +1013,15 @@ class RecepcionModulo:
                 notificar("No hay datos de recepción activos para exportar a PDF.", "#D97706")
                 return
             try:
+                ruta = generar_acta_recepcion_pdf(cabecera_asn_actual, filas_conciliacion_export, recepciones_asn_actual)
                 descargar_o_abrir_archivo(self.page, ruta)
                 notificar(f"Acta de Recepción de PO generada: {ruta}", "#047857")
             except ImportError:
                 asunto = urllib.parse.quote(f"Acta de Recepción - PO {cabecera_asn_actual.get('codigo_asn', '')}")
                 page.launch_url(f"mailto:compras@ludipek.cl;logistica@ludipek.cl?subject={asunto}")
-
+                # Abre automáticamente la ventana para enviar el Acta Oficial por correo
+                abrir_modal_enviar_correo_acta(cabecera_actual, lineas_tabla_actual, ruta_pdf)
+                
                 def cerrar_dlg(ev):
                     dialogo_correo.open = False
                     page.update()
@@ -848,6 +1070,9 @@ class RecepcionModulo:
                     page.update()
             except Exception as ex:
                 notificar(f"Error generando PDF: {ex}", "#B91C1C")
+
+                
+
 
         def click_exportar_excel_recepcion(e=None):
             if not filas_conciliacion_export and not recepciones_asn_actual:
@@ -1019,129 +1244,257 @@ class RecepcionModulo:
             return ruta_csv
 
         def descargar_po_netsuite_inbound(e=None):
-            po_raw = (txt_po_netsuite.value or "").strip().upper()
-            po_num = formatear_nombre_po(po_raw)
-            if not po_num or po_num == "LIBRE":
-                notificar("Ingrese primero el número de PO en el campo 'N° PO'.", "#D97706")
+            po_input = (txt_po_netsuite.value or "").strip().upper()
+            if not po_input:
+                notificar("Ingrese un número de PO (Ej: 1076) para consultar.", "#D97706")
                 return
+
+            # Extraer solo el número limpio por si escribieron "PO-1076" o "OC1076"
+            po_num_limpio = po_input.replace("PO-", "").replace("OC-", "").replace("PO", "").replace("OC", "").strip()
 
             if not NETSUITE_CONECTADO:
-                notificar(f"Error ERP: Módulo conexion_erp desconectado. {ERROR_DETALLE_ERP}", "#B91C1C")
+                notificar("Módulo conexion_erp no activo. Verifique credenciales de NetSuite.", "#D97706")
                 return
 
-            txt_estado_ia.value = f"Buscando PO '{po_num}' en NetSuite..."
-            page.update()
+            notificar(f"Consultando información de la PO {po_num_limpio} en NetSuite...", ACCENT_CYAN)
 
+            q_po = f"""
+                SELECT
+                    t.id AS po_internal_id,
+                    t.tranid AS numero_oc,
+                    TO_CHAR(t.trandate, 'YYYY-MM-DD') AS fecha_oc,
+                    BUILTIN.DF(t.entity) AS proveedor,
+                    BUILTIN.DF(t.status) AS estado_ns,
+                    i.itemid AS sku,
+                    BUILTIN.DF(i.id) AS descripcion,
+                    ABS(tl.quantity) AS cantidad
+                FROM transaction t
+                INNER JOIN transactionline tl ON t.id = tl.transaction
+                INNER JOIN item i ON tl.item = i.id
+                WHERE t.type = 'PurchOrd'
+                AND tl.mainline = 'F'
+                AND (UPPER(t.tranid) = '{po_num_limpio}' OR UPPER(t.tranid) = 'PO{po_num_limpio}' OR UPPER(t.tranid) LIKE '%{po_num_limpio}')
+                ORDER BY i.itemid ASC
+            """
             try:
-                query_po = f"""
-                    SELECT 
-                        t.id AS po_internal_id,
-                        t.tranid AS numero_oc,
-                        t.memo AS memo_oc,
-                        tl.linesequencenumber AS po_line_num,
-                        tl.item AS item_id,
-                        i.itemid AS sku,
-                        BUILTIN.DF(i.id) AS descripcion,
-                        ABS(tl.quantity) AS cantidad_esperada,
-                        tl.location AS location_id,
-                        BUILTIN.DF(t.entity) AS proveedor
-                    FROM transaction t
-                    INNER JOIN transactionline tl ON t.id = tl.transaction
-                    INNER JOIN item i ON tl.item = i.id
-                    WHERE t.type = 'PurchOrd' AND tl.mainline = 'F'
-                    AND (UPPER(t.tranid) LIKE '%{po_num}%' OR UPPER(t.memo) LIKE '%{po_num}%')
-                    ORDER BY tl.linesequencenumber ASC
-                """
-                df_po = consultar_netsuite(query_po)
+                df_po = consultar_netsuite(q_po)
+            except Exception as ex_ns:
+                notificar(f"Error consultando NetSuite: {ex_ns}", "#B91C1C")
+                return
 
-                if df_po is None or df_po.empty:
-                    notificar(f"No se encontró la PO '{po_num}' en NetSuite.", "#D97706")
-                    txt_estado_ia.value = f"Sin registros en NetSuite para '{po_num}'."
-                    page.update()
-                    return
+            if df_po is None or df_po.empty:
+                notificar(f"No se encontró la PO '{po_input}' en NetSuite.", "#D97706")
+                return
 
-                oc_oficial = po_raw if po_raw.startswith("PO") else f"PO {po_raw}"
-                proveedor_str = str(df_po.iloc[0]["proveedor"])
+            # Agrupar SKUs y extraer datos de cabecera de la PO
+            primera_fila = df_po.iloc[0]
+            num_oc_real = str(primera_fila.get("numero_oc") or po_num_limpio).strip().upper()
+            proveedor_str = str(primera_fila.get("proveedor") or "PROVEEDOR SIN NOMBRE").strip()
+            fecha_oc_str = str(primera_fila.get("fecha_oc") or datetime.now().strftime("%Y-%m-%d")).strip()
+            estado_ns_str = str(primera_fila.get("estado_ns") or "ABIERTA").strip()
 
-                os.makedirs("reportes_recepcion", exist_ok=True)
-                meta_lineas_ns = []
-                for _, fila_ns in df_po.iterrows():
-                    cant_linea = float(fila_ns.get("cantidad_esperada") or 0)
-                    if cant_linea <= 0:
-                        continue
-                    loc_val = fila_ns.get("location_id")
-                    loc_str = str(int(float(loc_val))) if pd.notna(loc_val) and str(loc_val).strip() != "" else ""
-                    meta_lineas_ns.append(
-                        {
-                            "po_internal_id": str(int(float(fila_ns["po_internal_id"]))),
-                            "numero_oc": oc_oficial,
-                            "po_line_num": str(int(float(fila_ns["po_line_num"]))),
-                            "item_id": str(int(float(fila_ns["item_id"]))),
-                            "sku": str(fila_ns["sku"]).strip().upper(),
-                            "cantidad_esperada": int(cant_linea),
-                            "location_id": loc_str,
-                        }
+            # Cargar múltiplos desde maestra_sku para calcular cajas esperadas
+            mapa_multiplos = {}
+            mapa_desc_maestra = {}
+            try:
+                res_m = supabase.table("maestra_sku").select("sku, multiplo, descripcion").limit(4000).execute()
+                for m in (res_m.data or []):
+                    s_k = str(m.get("sku") or "").strip().upper()
+                    if s_k:
+                        mapa_multiplos[s_k] = max(1, int(float(m.get("multiplo") or 1)))
+                        if m.get("descripcion"):
+                            mapa_desc_maestra[s_k] = str(m.get("descripcion")).strip()
+            except Exception:
+                pass
+
+            skus_agrupados = {}
+            for _, row in df_po.iterrows():
+                sku_c = str(row.get("sku") or "").strip().upper()
+                if not sku_c or sku_c in ("NONE", "NULL"):
+                    continue
+                cant_u = int(float(row.get("cantidad") or 0))
+                if cant_u <= 0:
+                    continue
+                desc_c = mapa_desc_maestra.get(sku_c) or str(row.get("descripcion") or sku_c).strip()
+                mult_c = mapa_multiplos.get(sku_c, 1)
+
+                if sku_c not in skus_agrupados:
+                    skus_agrupados[sku_c] = {
+                        "sku": sku_c,
+                        "descripcion": desc_c,
+                        "unidades_esperadas": 0,
+                        "multiplo": mult_c,
+                    }
+                skus_agrupados[sku_c]["unidades_esperadas"] += cant_u
+
+            lista_lineas_po = list(skus_agrupados.values())
+            if not lista_lineas_po:
+                notificar(f"La PO {num_oc_real} no contiene líneas de artículos válidas.", "#D97706")
+                return
+
+            total_skus = len(lista_lineas_po)
+            total_unidades = sum(x["unidades_esperadas"] for x in lista_lineas_po)
+
+            # Construir tabla visual de previsualización para el modal
+            filas_preview = []
+            for item_p in lista_lineas_po:
+                cajas_est = max(1, round(item_p["unidades_esperadas"] / item_p["multiplo"]))
+                filas_preview.append(
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(ft.Text(item_p["sku"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(item_p["descripcion"][:38], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(f"x{item_p['multiplo']}", size=11, color=TEXT_MUTED)),
+                            ft.DataCell(ft.Text(f"{cajas_est} Cj", size=11, color="#FBBF24")),
+                            ft.DataCell(ft.Text(f"{item_p['unidades_esperadas']} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                        ]
                     )
+                )
 
-                with open(os.path.join("reportes_recepcion", f"ns_meta_{oc_oficial}.json"), "w", encoding="utf-8") as f_meta:
-                    json.dump(meta_lineas_ns, f_meta, ensure_ascii=False, indent=2)
+            tabla_preview_po = ft.DataTable(
+                heading_row_color="#0F172A",
+                heading_row_height=32,
+                data_row_min_height=28,
+                data_row_max_height=34,
+                column_spacing=14,
+                columns=[
+                    ft.DataColumn(ft.Text("SKU", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
+                    ft.DataColumn(ft.Text("DESCRIPCIÓN", size=10, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)),
+                    ft.DataColumn(ft.Text("MÚLT.", size=10, weight=ft.FontWeight.BOLD, color=TEXT_MUTED)),
+                    ft.DataColumn(ft.Text("CAJAS EST.", size=10, weight=ft.FontWeight.BOLD, color="#FBBF24")),
+                    ft.DataColumn(ft.Text("UNIDADES", size=10, weight=ft.FontWeight.BOLD, color="#34D399")),
+                ],
+                rows=filas_preview,
+            )
 
-                cabecera_po = {
-                    "codigo_asn": oc_oficial,
-                    "proveedor": proveedor_str,
-                    "numero_oc": oc_oficial,
-                    "estado": "EN_RECEPCION",
-                    "archivo_origen": "NETSUITE_API",
-                    "contenedor_referencia": (txt_contenedor.value or "").strip().upper(),
-                }
-                res_cab = supabase.table("asn_cabecera").upsert(cabecera_po, on_conflict="codigo_asn").execute()
-                nuevo_id_asn = res_cab.data[0]["id"]
-                supabase.table("asn_detalle").delete().eq("asn_id", nuevo_id_asn).execute()
-
-                res_maestra = supabase.table("maestra_sku").select("sku, multiplo, descripcion").execute()
-                mapa_mult = {str(r["sku"]).strip().upper(): int(r.get("multiplo") or 1) for r in res_maestra.data}
-                mapa_desc = {str(r["sku"]).strip().upper(): str(r.get("descripcion") or "") for r in res_maestra.data}
-
-                agrupado_po = {}
-                for _, fila_po in df_po.iterrows():
-                    sku_limpio = str(fila_po["sku"]).strip().upper()
-                    cant_esp = int(float(fila_po["cantidad_esperada"] or 0))
-                    if cant_esp <= 0:
-                        continue
-                    if sku_limpio not in agrupado_po:
-                        agrupado_po[sku_limpio] = {"cant": 0, "desc": mapa_desc.get(sku_limpio) or str(fila_po["descripcion"] or "")}
-                    agrupado_po[sku_limpio]["cant"] += cant_esp
-
-                detalles_po = []
-                for sku_k, info_p in agrupado_po.items():
-                    mult_oficial = max(1, mapa_mult.get(sku_k, 1))
-                    cant_total_sku = max(1, info_p["cant"])
-                    detalles_po.append(
-                        {
-                            "asn_id": nuevo_id_asn,
-                            "sku": sku_k,
-                            "descripcion_proveedor": info_p["desc"],
-                            "multiplo_empaque": mult_oficial,
-                            "cajas_esperadas": max(1, cant_total_sku // mult_oficial) if cant_total_sku >= mult_oficial else 1,
-                            "unidades_esperadas": cant_total_sku,
-                            "lote_sugerido": "S/L",
-                        }
-                    )
-
-                if detalles_po:
-                    supabase.table("asn_detalle").insert(detalles_po).execute()
-
-                notificar(f"PO {oc_oficial} descargada desde NetSuite.", "#047857")
-                txt_estado_ia.value = f"PO {oc_oficial} vinculada con NetSuite."
-                txt_po_netsuite.value = ""
-                cargar_lista_asns()
-                dd_asn.value = str(nuevo_id_asn)
-                auditar_asn_seleccionado()
-
-            except Exception as ex:
-                notificar(f"Error ERP: {ex}", "#B91C1C")
-                txt_estado_ia.value = f"Error ERP: {ex}"
+            def confirmar_uso_po(ev):
+                dlg_confirmar_po.open = False
                 page.update()
+                try:
+                    cod_asn = f"ASN-PO-{num_oc_real}"
+                    bodega_usr = getattr(page, "bodega_actual", "Bodega Santiago")
+
+                    # 1. Verificar si ya existe en asn_cabecera o crearla
+                    res_ex = supabase.table("asn_cabecera").select("id").eq("numero_oc", num_oc_real).limit(1).execute()
+                    if res_ex.data:
+                        asn_id_nuevo = res_ex.data[0]["id"]
+                        supabase.table("asn_cabecera").update({
+                            "proveedor": proveedor_str,
+                            "estado": "EN_RECEPCION",
+                        }).eq("id", asn_id_nuevo).execute()
+                    else:
+                        payload_cab = {
+                            "codigo_asn": cod_asn,
+                            "numero_oc": num_oc_real,
+                            "proveedor": proveedor_str,
+                            "fecha_esperada": fecha_oc_str,
+                            "estado": "PENDIENTE",
+                        }
+                        try:
+                            res_ins = supabase.table("asn_cabecera").insert({**payload_cab, "bodega": bodega_usr}).execute()
+                        except Exception:
+                            res_ins = supabase.table("asn_cabecera").insert(payload_cab).execute()
+                        asn_id_nuevo = res_ins.data[0]["id"]
+
+                    # 2. Sincronizar líneas en asn_detalle
+                    res_det_ex = supabase.table("asn_detalle").select("sku").eq("asn_id", asn_id_nuevo).execute()
+                    skus_ya_en_bd = {str(r.get("sku") or "").strip().upper() for r in (res_det_ex.data or [])}
+
+                    nuevas_lineas_bd = []
+                    for item_p in lista_lineas_po:
+                        if item_p["sku"] not in skus_ya_en_bd:
+                            cajas_esp = max(1, round(item_p["unidades_esperadas"] / item_p["multiplo"]))
+                            nuevas_lineas_bd.append({
+                                "asn_id": asn_id_nuevo,
+                                "sku": item_p["sku"],
+                                "descripcion_proveedor": item_p["descripcion"],
+                                "cajas_esperadas": cajas_esp,
+                                "multiplo_empaque": item_p["multiplo"],
+                                "unidades_esperadas": item_p["unidades_esperadas"],
+                                "unidades_recibidas": 0,
+                            })
+                    if nuevas_lineas_bd:
+                        supabase.table("asn_detalle").insert(nuevas_lineas_bd).execute()
+
+                    # 3. Recargar selector y activar esta PO
+                    # 3. Recargar selector y activar esta PO
+                    cargar_lista_asns()
+                    dd_asn.value = str(asn_id_nuevo)
+                    auditar_asn_seleccionado()
+                    notificar(f"PO {num_oc_real} ({proveedor_str}) activada para recepción.", "#047857")
+                except Exception as ex_save:
+                    notificar(f"Error al activar PO {num_oc_real}: {ex_save}", "#B91C1C")
+
+            def cancelar_uso_po(ev):
+                dlg_confirmar_po.open = False
+                page.update()
+
+            dlg_confirmar_po = ft.AlertDialog(
+                modal=True,
+                bgcolor="#1E293B",
+                title=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.FACT_CHECK_ROUNDED, color=ACCENT_CYAN, size=24),
+                        ft.Text(f"¿Desea utilizar la Orden de Compra PO {num_oc_real}?", size=16, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ],
+                    spacing=8,
+                ),
+                content=ft.Container(
+                    width=680,
+                    height=380,
+                    content=ft.Column(
+                        [
+                            ft.Container(
+                                padding=12,
+                                bgcolor="#0F172A",
+                                border_radius=8,
+                                border=ft.Border.all(1, ACCENT_CYAN),
+                                content=ft.Column(
+                                    [
+                                        ft.Text(f"PROVEEDOR: {proveedor_str}", size=14, weight=ft.FontWeight.W_900, color="#34D399"),
+                                        ft.Text(
+                                            f"N° OC: {num_oc_real}   |   Fecha OC: {fecha_oc_str}   |   Estado ERP: {estado_ns_str}",
+                                            size=11,
+                                            color=TEXT_WHITE,
+                                        ),
+                                        ft.Text(
+                                            f"Resumen de Carga: {total_skus} SKUs distintos   |   Total a Recibir: {total_unidades} Unidades",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="#FBBF24",
+                                        ),
+                                    ],
+                                    spacing=4,
+                                ),
+                            ),
+                            ft.Text("DETALLE DE SKUs CONTENIDOS EN LA PO:", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED),
+                            ft.Container(
+                                expand=True,
+                                bgcolor="#181E20",
+                                border_radius=6,
+                                border=ft.Border.all(1, BORDER_COLOR),
+                                content=ft.Column([tabla_preview_po], scroll=ft.ScrollMode.AUTO),
+                            ),
+                        ],
+                        spacing=10,
+                    ),
+                ),
+                actions=[
+                    ft.TextButton("CANCELAR", on_click=cancelar_uso_po),
+                    boton_primario(
+                        "SÍ, UTILIZAR ESTA PO (CARGAR AL WMS)",
+                        ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED,
+                        confirmar_uso_po,
+                        "#047857",
+                        height_val=36,
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            )
+
+            page.overlay.append(dlg_confirmar_po)
+            dlg_confirmar_po.open = True
+            page.update() 
 
         def cerrar_conciliacion_asn(e=None):
             try:
@@ -1155,6 +1508,8 @@ class RecepcionModulo:
                 notificar(f"PO cerrada oficialmente ({ahora_cierre}).", "#047857")
             except Exception as ex:
                 notificar(f"Error al cerrar PO: {ex}", "#B91C1C")
+                # Abre automáticamente la ventana para enviar el Acta Oficial por correo
+                abrir_modal_enviar_correo_acta(cabecera_actual, lineas_tabla_actual, ruta_pdf)
 
         def guardar_ajuste_linea_asn(e=None):
             sku_objetivo = (txt_nuevo_sku_po.value or dd_edit_sku_asn.value or "").strip().upper()
@@ -1488,6 +1843,9 @@ class RecepcionModulo:
 
         async def ejecutar_accion_menu_po(e=None):
             accion = dd_accion_po.value
+            if not accion:
+                return
+
             if accion == "SINCRONIZAR":
                 auditar_asn_seleccionado()
                 notificar("Recepción sincronizada.", ACCENT_TEAL)
@@ -1507,6 +1865,13 @@ class RecepcionModulo:
                 exportar_csv_recepcion_netsuite()
             elif accion == "CERRAR_PO":
                 cerrar_conciliacion_asn()
+
+            dd_accion_po.value = None
+            page.update()
+
+        # Conectar el dropdown afuera de la función para que se ejecute al seleccionar una opción
+        dd_accion_po.on_change = ejecutar_accion_menu_po
+        dd_accion_po.on_select = ejecutar_accion_menu_po
 
         async def loop_auto_sync_inbound():
             while auto_sync_inbound_activo:
@@ -1532,11 +1897,57 @@ class RecepcionModulo:
         dd_edit_sku_asn.on_select = prellenar_edicion_linea_asn
         dd_edit_lpn_id.on_select = prellenar_edicion_lpn_fisico
         dd_qa_po_base.on_select = lambda e: (setattr(dd_asn, "value", dd_qa_po_base.value), auditar_asn_seleccionado()) if dd_qa_po_base.value and dd_qa_po_base.value != dd_asn.value else None
+        dd_mod_po_base.on_select = lambda e: (setattr(dd_asn, "value", dd_mod_po_base.value), auditar_asn_seleccionado()) if dd_mod_po_base.value and dd_mod_po_base.value != dd_asn.value else None
         dd_asn.on_select = auditar_asn_seleccionado
+        dd_fecha_hist_rec.on_select = cargar_historico_recepciones
+        txt_buscar_hist_rec.on_change = cargar_historico_recepciones
+        txt_fecha_hist_rec.on_change = cargar_historico_recepciones
         btn_guardar_contenedor.on_click = guardar_contenedor_db
         sw_auto_sync_rf.on_change = toggle_auto_sync_inbound
 
         # --- 6. COMPOSICIÓN DE VISTAS (ARMADO FINAL DE LA INTERFAZ) ---
+        barra_titulo_monitor = ft.Container(
+            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
+            bgcolor="#222A2C",
+            border_radius=8,
+            border=ft.Border.all(1, BORDER_COLOR),
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, color=ACCENT_CYAN, size=22),
+                                    ft.Text("KPI RECEPCIÓN & CONCILIACIÓN 3-WAY MATCH", size=15, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
+                                    ft.Container(width=10),
+                                    txt_estado_ia,
+                                ],
+                                spacing=8,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Row(
+                                [
+                                    txt_po_netsuite,
+                                    txt_contenedor,
+                                    btn_guardar_contenedor,
+                                    dd_accion_po,
+                                    boton_primario("EJECUTAR", ft.Icons.PLAY_ARROW_ROUNDED, ejecutar_accion_menu_po, ACCENT_TEAL),
+                                    ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, tooltip="Sincronizar recepción en vivo", on_click=auditar_asn_seleccionado),
+                                ],
+                                spacing=8,
+                                wrap=True,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
+                    ),
+                    dd_asn,
+                ],
+                spacing=8,
+            ),
+        )
+
         panel_relojes_izquierdo = tarjeta_dark(
             ft.Column(
                 [
@@ -1599,8 +2010,10 @@ class RecepcionModulo:
             expand_val=True,
         )
 
+        # PANEL 1: Solo aquí aparece barra_titulo_monitor ("KPI RECEPCIÓN & CONCILIACIÓN 3-WAY MATCH")
         subvista_inb_recepcion = ft.Column(
             [
+                barra_titulo_monitor,
                 ft.Row([panel_relojes_izquierdo, panel_grafico_derecho], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
                 tarjeta_dark(
                     ft.Column(
@@ -1634,24 +2047,45 @@ class RecepcionModulo:
             spacing=10,
         )
 
+        # PANEL 2: Consultor Histórico separado por Día de Recepción y con N° PO Real
         subvista_inb_consultas = tarjeta_dark(
             ft.Column(
                 [
                     ft.Row(
                         [
-                            ft.Text("2. CONSULTOR HISTÓRICO DE RECEPCIONES Y POs CERRADAS", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            ft.Row([txt_buscar_hist_rec, boton_primario("FILTRAR", ft.Icons.SEARCH_ROUNDED, cargar_historico_recepciones, ACCENT_TEAL)], spacing=8),
+                            ft.Column(
+                                [
+                                    ft.Text("2. CONSULTOR HISTÓRICO DE RECEPCIONES POR DÍA Y PO REAL", size=14, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
+                                    ft.Text("Si una misma PO se recepciona en 2 o más días distintos, cada día aparece desglosado por separado.", size=11, color=TEXT_MUTED),
+                                ],
+                                spacing=2,
+                            ),
+                            ft.Row(
+                                [
+                                    dd_fecha_hist_rec,
+                                    txt_fecha_hist_rec,
+                                    txt_buscar_hist_rec,
+                                    boton_primario("FILTRAR", ft.Icons.SEARCH_ROUNDED, cargar_historico_recepciones, ACCENT_TEAL),
+                                    boton_primario("LIMPIAR", ft.Icons.FILTER_ALT_OFF_OUTLINED, limpiar_filtros_historico, "#475569"),
+                                ],
+                                spacing=8,
+                                wrap=True,
+                            ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         wrap=True,
                     ),
-                    ft.Divider(color=BORDER_COLOR, height=1),
+                    ft.Divider(color=BORDER_COLOR, height=4),
+                    ft.Text("DESGLOSE RÁPIDO POR DÍA DE RECEPCIÓN Y N° DE PO (CLIC PARA FILTRAR DÍA):", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
+                    fila_resumen_dias_hist,
+                    ft.Divider(color=BORDER_COLOR, height=4),
                     cont_tabla_hist_rec,
                 ],
                 spacing=8,
             )
         )
 
+        # PANEL 3: Aseguramiento de Calidad (QA)
         subvista_inb_qa = tarjeta_dark(
             ft.Column(
                 [
@@ -1675,12 +2109,20 @@ class RecepcionModulo:
             )
         )
 
+        # PANEL 4: Modificación de PO y LPNs (con su propio selector de PO)
         subvista_inb_modificacion = ft.Column(
             [
                 tarjeta_dark(
                     ft.Column(
                         [
-                            ft.Text("4.1 MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA (PO)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                            ft.Row(
+                                [
+                                    ft.Text("4.1 MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA (PO)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                                    dd_mod_po_base,
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                wrap=True,
+                            ),
                             ft.Divider(color=BORDER_COLOR, height=1),
                             ft.Row(
                                 [
@@ -1733,49 +2175,7 @@ class RecepcionModulo:
 
         contenedor_subvista_inbound = ft.Container(content=subvista_inb_recepcion)
 
-        barra_titulo_monitor = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
-            bgcolor="#222A2C",
-            border_radius=8,
-            border=ft.Border.all(1, BORDER_COLOR),
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, color=ACCENT_CYAN, size=22),
-                                    ft.Text("KPI RECEPCIÓN & CONCILIACIÓN 3-WAY MATCH", size=15, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                                    ft.Container(width=10),
-                                    txt_estado_ia,
-                                ],
-                                spacing=8,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                            ft.Row(
-                                [
-                                    txt_po_netsuite,
-                                    txt_contenedor,
-                                    btn_guardar_contenedor,
-                                    dd_accion_po,
-                                    boton_primario("EJECUTAR", ft.Icons.PLAY_ARROW_ROUNDED, ejecutar_accion_menu_po, ACCENT_TEAL),
-                                    ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, tooltip="Sincronizar recepción en vivo", on_click=auditar_asn_seleccionado),
-                                ],
-                                spacing=8,
-                                wrap=True,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    dd_asn,
-                ],
-                spacing=8,
-            ),
-        )
-
-        col_inbound = ft.Column([barra_titulo_monitor, contenedor_subvista_inbound], spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+        col_inbound = ft.Column([contenedor_subvista_inbound], spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
 
         self.vista = ft.Container(padding=14, bgcolor=BG_MODULO, content=col_inbound, expand=True)
         self.contenedor = contenedor_subvista_inbound

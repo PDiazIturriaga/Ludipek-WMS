@@ -261,10 +261,6 @@ def main(page: ft.Page):
                 page.bodega_actual = str(fila_u.get("bodega") or "Bodega Concepcion").strip()
                 iniciar_torre_de_control()
 
-                page.usuario_actual = fila_u.get("nombre_completo") or user_val
-                page.rol_actual = str(fila_u.get("rol") or "OPERADOR").upper()
-                page.modulos_pc_usuario = str(fila_u.get("modulos_pc") or "")
-                iniciar_torre_de_control()
             else:
                 intentos_fallidos += 1
                 if intentos_fallidos >= 5:
@@ -404,25 +400,6 @@ def main(page: ft.Page):
              notificar_global(page, "Acceso restringido: tu perfil no tiene permisos para este módulo.", "#B91C1C")
              return
          
-        def activar_modulo_principal(idx_sel: int, sub_idx: int = 0):
-            nonlocal indice_modulo_activo
-            indice_modulo_activo = idx_sel
-            registrar_visita_reciente(idx_sel, sub_idx)
-            panel_submenus.content = generar_menu_lateral(idx_sel)
-            panel_submenus.visible = True
-            contenedor_vista_activa.content = vistas_mapa[idx_sel][2]
-            accion_recarga = vistas_mapa[idx_sel][3]
-            fn_sub = vistas_mapa[idx_sel][4]
-            if fn_sub:
-                fn_sub(sub_idx)
-            if accion_recarga:
-                accion_recarga()
-            page.bgcolor = "#1B2122"
-            btn_home.visible = True
-            cuerpo_principal.content = ft.Row([panel_submenus, contenedor_vista_activa], expand=True, spacing=0)
-            adaptar_resolucion_automatica()
-            page.update()
-
         def volver_al_home(e=None):
             nonlocal indice_modulo_activo
             indice_modulo_activo = -1
