@@ -9,62 +9,53 @@ try:
 except ImportError:
     pass
 
+ULTIMO_ERROR_NETSUITE = ""
+
+
+def _limpiar_env( *nombres ) -> str:
+    for n in nombres:
+        val = os.getenv(n)
+        if val is not None and str(val).strip() != "":
+            return str(val).strip().strip('"').strip("'")
+    return ""
+
 
 def obtener_credenciales_netsuite() -> tuple:
-    """Busca las credenciales tanto con prefijo NETSUITE_ (Render) como DB_ (Windows local)."""
-    account_id = (
-        os.getenv("NETSUITE_ACCOUNT_ID")
-        or os.getenv("DB_ACCOUNT_ID")
-        or ""
-    ).strip()
-    consumer_key = (
-        os.getenv("NETSUITE_CONSUMER_KEY")
-        or os.getenv("DB_CONSUMER_KEY")
-        or ""
-    ).strip()
-    consumer_secret = (
-        os.getenv("NETSUITE_CONSUMER_SECRET")
-        or os.getenv("DB_CONSUMER_SECRET")
-        or ""
-    ).strip()
-    token_id = (
-        os.getenv("NETSUITE_TOKEN_KEY")
-        or os.getenv("NETSUITE_TOKEN_ID")
-        or os.getenv("DB_TOKEN_ID")
-        or os.getenv("DB_TOKEN_KEY")
-        or ""
-    ).strip()
-    token_secret = (
-        os.getenv("NETSUITE_TOKEN_SECRET")
-        or os.getenv("DB_TOKEN_SECRET")
-        or ""
-    ).strip()
+    account_id = _limpiar_env("NETSUITE_ACCOUNT_ID", "DB_ACCOUNT_ID", "ACCOUNT_ID")
+    consumer_key = _limpiar_env("NETSUITE_CONSUMER_KEY", "DB_CONSUMER_KEY", "CONSUMER_KEY")
+    consumer_secret = _limpiar_env("NETSUITE_CONSUMER_SECRET", "DB_CONSUMER_SECRET", "CONSUMER_SECRET")
+    token_id = _limpiar_env("NETSUITE_TOKEN_ID", "NETSUITE_TOKEN_KEY", "DB_TOKEN_ID", "DB_TOKEN_KEY", "TOKEN_ID", "TOKEN_KEY")
+    token_secret = _limpiar_env("NETSUITE_TOKEN_SECRET", "DB_TOKEN_SECRET", "TOKEN_SECRET")
     return account_id, consumer_key, consumer_secret, token_id, token_secret
 
 
-def consultar_netsuite(query_sql: str, max_registros: int = 5000):
-    """
-    Se conecta a la API REST SuiteQL de NetSuite siendo 100% compatible
-    con Render (NETSUITE_*) y con Windows local (DB_*).
-    """
+def obtener_ultimo_error_netsuite() -> str:
+    return ULTIMO_ERROR_NETSUITE
+
+
+def consultar_netsuite(query_sql: str, max_registros: int = 2000):
+    global ULTIMO_ERROR_NETSUITE
+    ULTIMO_ERROR_NETSUITE = ""
+
     account_id, consumer_key, consumer_secret, token_id, token_secret = obtener_credenciales_netsuite()
 
-    if not all([account_id, consumer_key, consumer_secret, token_id, token_secret]):
-        faltantes = []
-        if not account_id:
-            faltantes.append("NETSUITE_ACCOUNT_ID")
-        if not consumer_key:
-            faltantes.append("NETSUITE_CONSUMER_KEY")
-        if not consumer_secret:
-            faltantes.append("NETSUITE_CONSUMER_SECRET")
-        if not token_id:
-            faltantes.append("NETSUITE_TOKEN_KEY")
-        if not token_secret:
-            faltantes.append("NETSUITE_TOKEN_SECRET")
-        print(f"[ERROR NETSUITE] Faltan variables de entorno: {', '.join(faltantes)}")
+    faltantes = []
+    if not account_id:
+        faltantes.append("ACCOUNT_ID")
+    if not consumer_key:
+        faltantes.append("CONSUMER_KEY")
+    if not consumer_secret:
+        faltantes.append("CONSUMER_SECRET")
+    if not token_id:
+        faltantes.append("TOKEN_ID/KEY")
+    if not token_secret:
+        faltantes.append("TOKEN_SECRET")
+
+    if faltantes:
+        ULTIMO_ERROR_NETSUITE = f"Faltan variables en Render Environment: {', '.join(faltantes)}"
+        print(f"[ERROR NETSUITE] {ULTIMO_ERROR_NETSUITE}")
         return None
 
-    # URL requiere minúsculas con guion; Realm OAuth requiere mayúsculas con guion bajo
     account_url = str(account_id).lower().replace("_", "-")
     account_realm = str(account_id).upper().replace("-", "_")
     url_base = f"https://{account_url}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql"
@@ -109,10 +100,13 @@ def consultar_netsuite(query_sql: str, max_registros: int = 5000):
                 else:
                     hay_mas_datos = False
             else:
-                print(f"[ERROR NETSUITE {response.status_code}]: {response.text}")
+                detalle_http = response.text[:180].replace("\n", " ")
+                ULTIMO_ERROR_NETSUITE = f"HTTP {response.status_code}: {detalle_http}"
+                print(f"[ERROR NETSUITE] {ULTIMO_ERROR_NETSUITE}")
                 return pd.DataFrame(todos_los_registros) if todos_los_registros else None
 
         except Exception as e:
+            ULTIMO_ERROR_NETSUITE = f"Error de red/conexión: {e}"
             print(f"[ERROR CONEXION HTTP NETSUITE]: {e}")
             return pd.DataFrame(todos_los_registros) if todos_los_registros else None
 

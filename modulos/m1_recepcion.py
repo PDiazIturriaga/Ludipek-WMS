@@ -1153,13 +1153,96 @@ class RecepcionModulo:
             if not filas_conciliacion_export and not recepciones_asn_actual:
                 notificar("No hay datos de recepción activos para exportar a PDF.", "#D97706")
                 return
+
             try:
-                ruta = generar_acta_recepcion_pdf(cabecera_asn_actual, filas_conciliacion_export, recepciones_asn_actual)
+                ruta = generar_acta_recepcion_pdf(
+                    cabecera_asn_actual,
+                    filas_conciliacion_export,
+                    recepciones_asn_actual,
+                )
                 descargar_o_abrir_archivo(self.page, ruta)
                 notificar(f"Acta de Recepción de PO generada: {ruta}", "#047857")
-                abrir_modal_enviar_correo_acta(cabecera_asn_actual, filas_conciliacion_export, ruta)
             except Exception as ex:
-                notificar(f"Error generando PDF: {ex}", "#B91C1C")                
+                notificar(f"Error generando PDF: {ex}", "#B91C1C")
+                return
+
+            cod_po_str = obtener_nombre_po_cabecera(cabecera_asn_actual)
+            prov_str = str(cabecera_asn_actual.get("proveedor") or "PROVEEDOR").strip()
+            cont_ref = str(cabecera_asn_actual.get("contenedor_referencia") or "").strip()
+            txt_cont = f"N° de Contenedor / Guía: {cont_ref}\n\n" if cont_ref else ""
+
+            asunto_str = f"Acta de Recepción - PO {cod_po_str} ({prov_str})"
+            cuerpo_str = (
+                f"Estimado equipo,\n\n"
+                f"Se adjunta el Acta Oficial de Recepción para la PO {cod_po_str} ({prov_str}) "
+                f"procesada y validada exitosamente en el WMS.\n\n"
+                f"{txt_cont}"
+                f"Saludos cordiales,\nControl Tower WMS"
+            )
+
+            def cerrar_dlg(ev=None):
+                dialogo_correo.open = False
+                try:
+                    self.page.pop_dialog()
+                except Exception:
+                    pass
+                self.page.update()
+
+            def enviar_correo(ev=None):
+                cerrar_dlg()
+                notificar("Preparando correo con el Acta PDF...", ACCENT_TEAL)
+                try:
+                    import pythoncom
+                    import win32com.client
+                    pythoncom.CoInitialize()
+                    outlook = win32com.client.Dispatch("outlook.application")
+                    mail = outlook.CreateItem(0)
+                    mail.To = "compras@ludipek.cl; logistica@ludipek.cl"
+                    mail.Subject = asunto_str
+                    mail.Body = cuerpo_str
+                    mail.Attachments.Add(os.path.abspath(ruta))
+                    mail.Display(True)
+                    notificar("Borrador de Outlook abierto con el PDF adjunto.", "#047857")
+                except Exception:
+                    # Respaldo automático (Web / Nuevo Outlook / Sin pywin32): abre cliente de correo con asunto y cuerpo listos
+                    import urllib.parse
+                    asunto_q = urllib.parse.quote(asunto_str)
+                    cuerpo_q = urllib.parse.quote(cuerpo_str)
+                    self.page.launch_url(
+                        f"mailto:compras@ludipek.cl;logistica@ludipek.cl?subject={asunto_q}&body={cuerpo_q}"
+                    )
+                    notificar(
+                        "Cliente de correo abierto (adjunte el PDF recién descargado).",
+                        "#0284C7",
+                    )
+
+            dialogo_correo = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("¿Enviar Acta por Correo?", color=TEXT_WHITE, weight=ft.FontWeight.BOLD),
+                content=ft.Text(
+                    f"¿Deseas abrir un borrador de correo para Compras y Logística con el Acta de la PO {cod_po_str}?",
+                    color=TEXT_MUTED,
+                ),
+                bgcolor=BG_CARD,
+                actions=[
+                    ft.TextButton("Cancelar", on_click=cerrar_dlg),
+                    boton_primario(
+                        "Sí, Redactar Correo",
+                        ft.Icons.EMAIL_OUTLINED,
+                        enviar_correo,
+                        ACCENT_TEAL,
+                        height_val=32,
+                    ),
+                ],
+            )
+
+            try:
+                self.page.show_dialog(dialogo_correo)
+            except Exception:
+                if dialogo_correo not in self.page.overlay:
+                    self.page.overlay.append(dialogo_correo)
+                dialogo_correo.open = True
+            self.page.update()                
 
 
         def click_exportar_excel_recepcion(e=None):

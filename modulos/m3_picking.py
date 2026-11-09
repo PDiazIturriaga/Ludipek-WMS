@@ -1622,7 +1622,7 @@ class PickingModulo:
             f_hasta = normalizar_fecha_comparacion(txt_fecha_hasta.value)
 
             if not NETSUITE_CONECTADO:
-                notificar("Módulo conexion_erp no conectado en este servidor. Verifica conexion_erp.py y variables en Render.", "#D97706")
+                notificar(f"Módulo conexion_erp no conectado: {ERROR_DETALLE_ERP}", "#D97706")
                 cargar_monitor_packing_dual()
                 return
 
@@ -1631,38 +1631,40 @@ class PickingModulo:
             page.update()
 
             try:
+                from conexion_erp import obtener_ultimo_error_netsuite
+            except Exception:
+                obtener_ultimo_error_netsuite = lambda: ""
+
+            try:
                 skus_fa_catalogo = obtener_skus_farmacia_supabase()
                 df_ov = None
 
-                # Intento 1: Consulta con rango en SuiteQL (trandate o createddate)
+                # Intento 1: Consulta SuiteQL compatible usando BUILTIN.DF(tl.item) y t.trandate
                 q_ov = f"""
                     SELECT
                         t.id AS ov_internal_id,
                         t.tranid AS numero_ov,
                         TO_CHAR(t.trandate, 'YYYY-MM-DD') AS fecha_ov,
-                        TO_CHAR(t.createddate, 'YYYY-MM-DD HH24:MI:SS') AS fecha_hora,
                         BUILTIN.DF(t.entity) AS cliente,
                         BUILTIN.DF(tl.location) AS bodega_ns,
                         i.itemid AS sku,
-                        BUILTIN.DF(i.id) AS descripcion,
+                        BUILTIN.DF(tl.item) AS descripcion,
                         ABS(tl.quantity) AS cantidad
                     FROM transaction t
                     INNER JOIN transactionline tl ON t.id = tl.transaction
                     INNER JOIN item i ON tl.item = i.id
                     WHERE t.type = 'SalesOrd'
                     AND tl.mainline = 'F'
-                    AND (
-                        (t.trandate >= TO_DATE('{f_desde}', 'YYYY-MM-DD') AND t.trandate <= TO_DATE('{f_hasta}', 'YYYY-MM-DD'))
-                        OR (t.createddate >= TO_DATE('{f_desde}', 'YYYY-MM-DD') AND t.createddate < TO_DATE('{f_hasta}', 'YYYY-MM-DD') + 1)
-                    )
+                    AND t.trandate >= TO_DATE('{f_desde}', 'YYYY-MM-DD')
+                    AND t.trandate <= TO_DATE('{f_hasta}', 'YYYY-MM-DD')
                     ORDER BY t.id DESC
                 """
                 try:
-                    df_ov = consultar_netsuite(q_ov)
+                    df_ov = consultar_netsuite(q_ov, max_registros=1000)
                 except Exception:
                     df_ov = None
 
-                # Intento 2 (Respaldo automático si consultar_netsuite devolvió None o vacío)
+                # Intento 2: Respaldo acotado a las últimas 500 líneas de OV sin funciones de fecha
                 usando_fallback = False
                 if df_ov is None or df_ov.empty:
                     usando_fallback = True
@@ -1671,10 +1673,9 @@ class PickingModulo:
                             t.id AS ov_internal_id,
                             t.tranid AS numero_ov,
                             t.trandate AS fecha_ov,
-                            t.createddate AS fecha_hora,
                             BUILTIN.DF(t.entity) AS cliente,
                             i.itemid AS sku,
-                            BUILTIN.DF(i.id) AS descripcion,
+                            BUILTIN.DF(tl.item) AS descripcion,
                             ABS(tl.quantity) AS cantidad
                         FROM transaction t
                         INNER JOIN transactionline tl ON t.id = tl.transaction
@@ -1682,12 +1683,18 @@ class PickingModulo:
                         WHERE t.type = 'SalesOrd'
                         AND tl.mainline = 'F'
                         ORDER BY t.id DESC
+                        FETCH FIRST 500 ROWS ONLY
                     """
-                    df_ov = consultar_netsuite(q_fallback)
+                    try:
+                        df_ov = consultar_netsuite(q_fallback, max_registros=1000)
+                    except Exception:
+                        df_ov = None
 
                 if df_ov is None or df_ov.empty:
-                    notificar("NetSuite no devolvió datos. Verifica que las credenciales OAuth de NetSuite estén en Render.", "#B91C1C")
-                    txt_estado_erp.value = "Sin respuesta de NetSuite (revisar variables OAuth en Render o conexión ERP)."
+                    detalle_real = obtener_ultimo_error_netsuite() or "0 registros devueltos por SuiteQL."
+                    msg_mostrar = f"Diagnóstico NetSuite: {detalle_real}"
+                    notificar(msg_mostrar, "#B91C1C")
+                    txt_estado_erp.value = msg_mostrar
                     txt_estado_erp.color = "#F87171"
                     page.update()
                     return
@@ -1707,17 +1714,13 @@ class PickingModulo:
                     if not sku_str or sku_str in ("NONE", "NULL"):
                         continue
 
-                    fh_raw = str(fila.get("fecha_hora") or fila.get("fecha_ov") or "")
-                    f_ov_norm = normalizar_fecha_comparacion(fila.get("fecha_ov") or fh_raw)
-                    f_crea_norm = normalizar_fecha_comparacion(fh_raw)
+                    fh_raw = str(fila.get("fecha_ov") or "")
+                    f_ov_norm = normalizar_fecha_comparacion(fh_raw)
                     if f_ov_norm:
                         fechas_detectadas_ns.add(f_ov_norm)
 
-                    # Si vino del fallback general, filtramos por el rango Fecha Desde / Fecha Hasta en Python
-                    if usando_fallback and f_desde and f_hasta:
-                        en_rango_ov = (f_desde <= f_ov_norm <= f_hasta) if f_ov_norm else False
-                        en_rango_cr = (f_desde <= f_crea_norm <= f_hasta) if f_crea_norm else False
-                        if not (en_rango_ov or en_rango_cr):
+                    if usando_fallback and f_desde and f_hasta and f_ov_norm:
+                        if not (f_desde <= f_ov_norm <= f_hasta):
                             continue
 
                     desc_str = str(fila.get("descripcion") or "").strip()
@@ -1726,6 +1729,7 @@ class PickingModulo:
 
                     es_linea_fa = (
                         sku_str in skus_fa_catalogo
+                        or sku_str.split("-")[0].strip() in skus_fa_catalogo
                         or detectar_es_farmacia_texto(ov_raw, bodega_ns)
                     )
 
@@ -1737,10 +1741,10 @@ class PickingModulo:
                         agrupado_olas[ov_clave] = {
                             "ov": ov_clave,
                             "ov_original": ov_raw,
-                            "fecha_ov": f_ov_norm or f_crea_norm or f_desde,
+                            "fecha_ov": f_ov_norm or f_desde,
                             "cliente": cli_str,
                             "fecha_hora": fh_raw,
-                            "corte": clasificar_corte_horario(fh_raw, corte_forzado_ui),
+                            "corte": clasificar_corte_horario(None, corte_forzado_ui),
                             "es_farmacia": es_linea_fa,
                             "unidades": 0,
                             "lineas_cnt": 0,
@@ -1761,9 +1765,9 @@ class PickingModulo:
                     )
 
                 if not agrupado_olas:
-                    ult_fechas = ", ".join(sorted(fechas_detectadas_ns, reverse=True)[:3]) if fechas_detectadas_ns else "N/A"
-                    notificar(f"No hay OVs entre {f_desde} y {f_hasta}. Últimas fechas en NetSuite: {ult_fechas}", "#D97706")
-                    txt_estado_erp.value = f"Sin OVs en {f_desde}..{f_hasta}. Últimas fechas detectadas en NetSuite: {ult_fechas}"
+                    ult_fechas = ", ".join(sorted(fechas_detectadas_ns, reverse=True)[:4]) if fechas_detectadas_ns else "Ninguna"
+                    notificar(f"No hay OVs entre {f_desde} y {f_hasta}. Últimas fechas con OVs en NetSuite: {ult_fechas}", "#D97706")
+                    txt_estado_erp.value = f"Sin OVs en {f_desde}..{f_hasta}. Cambia Fecha Desde a: {ult_fechas}"
                     txt_estado_erp.color = "#FBBF24"
                     page.update()
                     return
