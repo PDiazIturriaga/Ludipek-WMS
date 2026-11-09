@@ -139,7 +139,7 @@ class MaestraModulo:
         txt_usr_nombre = texto_dark("Nombre Completo (Ej: Patricio Díaz)", width=240, icon=ft.Icons.PERSON_OUTLINE)
         txt_usr_pass = texto_dark("Contraseña", width=165, password=True, icon=ft.Icons.LOCK_OUTLINE)
         dd_usr_rol = dropdown_dark(
-            label="Rol Principal", width=195, value="OPERADOR RF",
+            label="Rol Principal", width=185, value="OPERADOR RF",
             options=[
                 opt_w("ADMIN", "ADMIN (Acceso Total)"),
                 opt_w("SUPERVISOR", "SUPERVISOR BODEGA"),
@@ -148,8 +148,15 @@ class MaestraModulo:
                 opt_w("CONSULTA", "SOLO CONSULTA"),
             ],
         )
+        dd_usr_bodega = dropdown_dark(
+            label="Bodega Asignada", width=185, value="Bodega Santiago",
+            options=[
+                opt_w("Bodega Santiago", "Bodega Santiago"),
+                opt_w("Bodega Concepcion", "Bodega Concepcion"),
+            ],
+        )
         sw_usr_activo = ft.Switch(label="Usuario Activo", value=True, active_color=ACCENT_GREEN)
-        txt_buscar_usr = texto_dark("Buscar usuario por código, nombre o rol...", expand=True, icon=ft.Icons.SEARCH_ROUNDED)
+        txt_buscar_usr = texto_dark("Buscar usuario por código, nombre, rol o bodega...", expand=True, icon=ft.Icons.SEARCH_ROUNDED)
 
         checks_pc = {
             cod: ft.Checkbox(label=nom, value=True, active_color=ACCENT_CYAN, label_style=ft.TextStyle(size=11, color=TEXT_WHITE))
@@ -167,10 +174,11 @@ class MaestraModulo:
 
         tabla_usuarios = ft.DataTable(
             heading_row_color="#181E20", heading_row_height=34, data_row_min_height=34, data_row_max_height=42,
-            column_spacing=14, data_text_style=ft.TextStyle(color=TEXT_WHITE),
+            column_spacing=12, data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
                 ft.DataColumn(ft.Text("USUARIO", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("NOMBRE COMPLETO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("BODEGA", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_AMBER)),
                 ft.DataColumn(ft.Text("ROL", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
                 ft.DataColumn(ft.Text("ACCESO PC (TORRE)", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("ACCESO CELULAR (APP RF)", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_GREEN)),
@@ -232,6 +240,7 @@ class MaestraModulo:
             txt_usr_nombre.value = ""
             txt_usr_pass.value = ""
             dd_usr_rol.value = "OPERADOR RF"
+            dd_usr_bodega.value = "Bodega Santiago"
             sw_usr_activo.value = True
             for c in checks_pc.values(): c.value = True
             for c in checks_rf.values(): c.value = True
@@ -251,6 +260,13 @@ class MaestraModulo:
             if rol_actual not in opciones_roles_keys:
                 dd_usr_rol.options.append(opt_w(rol_actual, rol_actual))
             dd_usr_rol.value = rol_actual
+
+            bodega_actual = str(row_u.get("bodega") or "Bodega Santiago").strip()
+            opciones_bod_keys = [o.key for o in dd_usr_bodega.options]
+            if bodega_actual not in opciones_bod_keys:
+                dd_usr_bodega.options.append(opt_w(bodega_actual, bodega_actual))
+            dd_usr_bodega.value = bodega_actual
+
             sw_usr_activo.value = bool(row_u.get("activo", True))
 
             pc_list, rf_list = obtener_permisos_usuario(row_u)
@@ -271,6 +287,7 @@ class MaestraModulo:
             for u in copia_usuarios:
                 u_log = str(u.get("usuario") or "").strip()
                 u_nom = str(u.get("nombre_completo") or "").strip()
+                u_bod = str(u.get("bodega") or "Bodega Santiago").strip()
                 u_rol = str(u.get("rol") or "OPERADOR").strip().upper()
                 es_act = bool(u.get("activo", True))
 
@@ -283,13 +300,19 @@ class MaestraModulo:
                 if rf_list:
                     rf_cnt += 1
 
-                if filtro and not any(filtro in s.upper() for s in (u_log, u_nom, u_rol)):
+                if filtro and not any(filtro in s.upper() for s in (u_log, u_nom, u_rol, u_bod)):
                     continue
 
                 badge_est = (
                     crear_badge_estado("ACTIVO", "#065F46", "#D1FAE5")
                     if es_act
                     else crear_badge_estado("INACTIVO", "#991B1B", "#FEE2E2")
+                )
+                es_ccp = "CONCEPCION" in u_bod.upper()
+                badge_bod = crear_badge_estado(
+                    u_bod,
+                    "#92400E" if es_ccp else "#065F46",
+                    "#FEF3C7" if es_ccp else "#D1FAE5",
                 )
 
                 txt_pc_resumen = f"🖥️ {len(pc_list)}/{len(MODULOS_PC_LISTA)} Módulos PC"
@@ -312,7 +335,8 @@ class MaestraModulo:
                     ft.DataRow(
                         cells=[
                             ft.DataCell(ft.Text(u_log, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(u_nom[:28], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(u_nom[:26], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(badge_bod),
                             ft.DataCell(crear_badge_estado(u_rol, "#1E3A8A" if "ADMIN" not in u_rol else "#581C87", "#DBEAFE")),
                             ft.DataCell(ft.Text(txt_pc_resumen, size=11, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN if pc_list else TEXT_MUTED)),
                             ft.DataCell(ft.Text(txt_rf_resumen, size=11, weight=ft.FontWeight.BOLD, color=ACCENT_GREEN if rf_list else TEXT_MUTED)),
@@ -359,9 +383,10 @@ class MaestraModulo:
             nonlocal id_usuario_editando
             u_log = (txt_usr_login.value or "").strip().upper()
             u_nom = (txt_usr_nombre.value or "").strip()
-            u_pass_raw = (txt_usr_pass.value or "").strip()
-            u_pass = u_pass_raw if u_pass_raw.startswith("sha256$") else hash_password_seguro(u_pass_raw)
+            # Guardamos la contraseña en texto directo para que funcione igual en PC y en App Celular RF
+            u_pass = (txt_usr_pass.value or "").strip()
             u_rol = (dd_usr_rol.value or "OPERADOR RF").strip()
+            u_bod = (dd_usr_bodega.value or "Bodega Santiago").strip()
             u_act = bool(sw_usr_activo.value)
 
             if not u_log or not u_nom or not u_pass:
@@ -371,22 +396,24 @@ class MaestraModulo:
             pc_sel = [k for k, chk in checks_pc.items() if chk.value]
             rf_sel = [k for k, chk in checks_rf.items() if chk.value]
 
-            # 1. Guardar permisos en JSON local para disponibilidad inmediata
+            # 1. Guardar permisos y bodega en JSON local
             mapa_local = leer_json_local(RUTA_PERMISOS_LOCAL)
             mapa_local[u_log] = {
                 "modulos_pc": pc_sel,
                 "modulos_rf": rf_sel,
                 "rol": u_rol,
+                "bodega": u_bod,
                 "updated_at": datetime.now().isoformat(),
             }
             guardar_json_local(RUTA_PERMISOS_LOCAL, mapa_local)
 
-            # 2. Guardar o actualizar en Supabase
+            # 2. Guardar o actualizar en Supabase (incluyendo la columna bodega)
             payload_base = {
                 "usuario": u_log,
                 "nombre_completo": u_nom,
                 "password": u_pass,
                 "rol": u_rol,
+                "bodega": u_bod,
                 "activo": u_act,
             }
             payload_ext = dict(payload_base)
@@ -420,7 +447,7 @@ class MaestraModulo:
                 return
 
             if guardado_ok:
-                notificar(f"Usuario [{u_log}] y sus permisos PC/RF guardados correctamente.", "#047857")
+                notificar(f"Usuario [{u_log}] guardado en {u_bod}.", "#047857")
                 limpiar_formulario_usuario()
                 cargar_usuarios_supabase()
 
@@ -853,6 +880,7 @@ class MaestraModulo:
                                             txt_usr_nombre,
                                             txt_usr_pass,
                                             dd_usr_rol,
+                                            dd_usr_bodega,
                                             sw_usr_activo,
                                         ],
                                         spacing=10,

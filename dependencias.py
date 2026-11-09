@@ -945,11 +945,11 @@ def hash_password_seguro(password_plana: str) -> str:
 def verificar_password_seguro(password_ingresada: str, password_guardada: str) -> bool:
     if not password_ingresada or not password_guardada:
         return False
-    guardada_str = str(password_guardada).strip()
-    if guardada_str.startswith("sha256$"):
-        return hmac.compare_digest(hash_password_seguro(password_ingresada.strip()), guardada_str)
-    # Compatibilidad con usuarios actuales mientras migran a hash
-    return hmac.compare_digest(password_ingresada.strip(), guardada_str)
+    ing = password_ingresada.strip()
+    gua = str(password_guardada).strip()
+    if gua.startswith("sha256$"):
+        return hmac.compare_digest(hash_password_seguro(ing), gua)
+    return hmac.compare_digest(ing, gua)
 
 
 def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):

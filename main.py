@@ -256,13 +256,10 @@ def main(page: ft.Page):
             fila_u = res.data[0] if res.data else None
 
             if fila_u and fila_u.get("activo") and verificar_password_seguro(pass_val, fila_u.get("password", "")):
-                intentos_fallidos = 0
-                # Si la contraseña aún estaba en texto plano, encriptarla automáticamente en Supabase
-                if not str(fila_u.get("password", "")).startswith("sha256$"):
-                    try:
-                        supabase.table("wms_usuarios").update({"password": hash_password_seguro(pass_val)}).eq("id", fila_u["id"]).execute()
-                    except Exception:
-                        pass
+                page.usuario_actual = fila_u.get("nombre_completo") or user_val
+                page.rol_actual = str(fila_u.get("rol") or "OPERADOR").upper()
+                page.bodega_actual = str(fila_u.get("bodega") or "Bodega Concepcion").strip()
+                iniciar_torre_de_control()
 
                 page.usuario_actual = fila_u.get("nombre_completo") or user_val
                 page.rol_actual = str(fila_u.get("rol") or "OPERADOR").upper()
