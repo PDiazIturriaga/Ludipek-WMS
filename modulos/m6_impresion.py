@@ -81,7 +81,7 @@ class ImpresionModulo:
                     notificar("No hay ninguna PO activa en Recepción para imprimir.", "#D97706")
                     return
                 cabecera = res_cab.data[0]
-                cod_po = cabecera.get("codigo_asn", "PO-ACTIVA")
+                cod_po = obtener_nombre_po_cabecera(cabecera)
                 
                 res_rec = supabase.table("registro_recepcion").select("*").eq("asn_id", cabecera["id"]).execute()
                 recepciones = res_rec.data or []
@@ -89,11 +89,11 @@ class ImpresionModulo:
                 if not recepciones:
                     notificar(f"No hay pallets (LPNs) registrados en la PO {cod_po}.", "#D97706")
                     return
-                
+                    
                 ruta = generar_pdf_masivo_lpns_po(cod_po, recepciones)
                 descargar_o_abrir_archivo(self.page, ruta)
                 lpns_cnt = len({r.get("lpn") for r in recepciones if r.get("lpn")})
-                notificar(f"Se generó 1 archivo PDF con las {lpns_cnt} etiquetas LPN de {formatear_nombre_po(cod_po)}: {ruta}", "#047857")
+                notificar(f"Se generó 1 archivo PDF con las {lpns_cnt} etiquetas LPN de PO {cod_po}: {ruta}", "#047857")
             except Exception as ex:
                 notificar(f"Error al imprimir lote de LPNs: {ex}", "#B91C1C")
 
@@ -113,11 +113,12 @@ class ImpresionModulo:
             if not cod_u:
                 notificar("Ingrese el código de ubicación.", "#D97706")
                 return
+            zona_u = cod_u.split("-")[0] if "-" in cod_u else "RACK"
             try:
-                supabase.table("bodega_ubicaciones").upsert({"codigo_ubicacion": cod_u, "zona": cod_u.split("-")[0]}).execute()
+                supabase.table("bodega_ubicaciones").upsert({"codigo_ubicacion": cod_u, "zona": zona_u}).execute()
             except Exception:
                 pass
-            ruta = generar_pdf_etiqueta_ubicacion_individual(cod_u, cod_u.split("-")[0])
+            ruta = generar_pdf_etiqueta_ubicacion_individual(cod_u, zona_u)
             descargar_o_abrir_archivo(self.page, ruta)
             notificar(f"Etiqueta de posición {cod_u} generada.", "#047857")
 

@@ -256,12 +256,24 @@ def main(page: ft.Page):
             fila_u = res.data[0] if res.data else None
 
             if fila_u and fila_u.get("activo") and verificar_password_seguro(pass_val, fila_u.get("password", "")):
+                intentos_fallidos = 0
                 page.usuario_actual = fila_u.get("nombre_completo") or user_val
                 page.rol_actual = str(fila_u.get("rol") or "OPERADOR").upper()
-                page.bodega_actual = str(fila_u.get("bodega") or "Bodega Concepcion").strip()
-                page.modulos_pc_usuario = str(fila_u.get("modulos_pc") or "")
-                iniciar_torre_de_control()
+                page.bodega_actual = str(fila_u.get("bodega") or "Bodega Santiago").strip()
 
+                mod_pc_str = str(fila_u.get("modulos_pc") or fila_u.get("permisos_pc") or "").strip()
+                if not mod_pc_str and os.path.exists("config_permisos_wms.json"):
+                    try:
+                        import json
+                        with open("config_permisos_wms.json", "r", encoding="utf-8") as f_p:
+                            mapa_p = json.load(f_p)
+                        if user_val in mapa_p:
+                            mod_pc_str = ",".join(mapa_p[user_val].get("modulos_pc", []))
+                    except Exception:
+                        pass
+
+                page.modulos_pc_usuario = mod_pc_str
+                iniciar_torre_de_control()
             else:
                 intentos_fallidos += 1
                 if intentos_fallidos >= 5:
@@ -274,6 +286,9 @@ def main(page: ft.Page):
             traceback.print_exc()
             lbl_login_error.value = f"Error al iniciar: {ex}"
             page.update()
+
+    txt_login_user.on_submit = intentar_login
+    txt_login_pass.on_submit = intentar_login
 
     pantalla_login = ft.Container(
         expand=True, alignment=ft.Alignment.CENTER, bgcolor="#292526",
@@ -395,7 +410,15 @@ def main(page: ft.Page):
             )
         def activar_modulo_principal(idx_sel: int, sub_idx: int = 0):
             nonlocal indice_modulo_activo
-            codigos_mod = ["PC_DASHBOARD", "PC_RECEPCION", "PC_ALMACENAMIENTO", "PC_OLAS", "PC_INVENTARIO", "PC_ADMIN_MAESTRA", "PC_IMPRESION"]
+            codigos_mod = [
+                "PC_DASHBOARD",
+                "PC_RECEPCION",
+                "PC_ALMACENAMIENTO",
+                "PC_OLAS",
+                "PC_INVENTARIO",
+                "PC_ADMIN_MAESTRA",
+                "PC_IMPRESION",
+            ]
             rol_usr = str(getattr(page, "rol_actual", "")).upper()
             permisos_str = str(getattr(page, "modulos_pc_usuario", "")).upper()
             if "ADMIN" not in rol_usr and permisos_str and codigos_mod[idx_sel] not in permisos_str:
@@ -404,32 +427,19 @@ def main(page: ft.Page):
 
             indice_modulo_activo = idx_sel
             registrar_visita_reciente(idx_sel, sub_idx)
-            _, _, vista_obj, fn_carga, fn_sub, _ = vistas_mapa[idx_sel]
-
             panel_submenus.content = generar_menu_lateral(idx_sel)
             panel_submenus.visible = True
-            contenedor_vista_activa.content = vista_obj
-
-            btn_home.visible = True
-            page.bgcolor = "#F1F5F9" if idx_sel in (0, 6) else "#1B2122"
-
-            cuerpo_principal.content = ft.Row(
-                [panel_submenus, contenedor_vista_activa],
-                spacing=0,
-                expand=True,
-            )
-
-            if fn_carga:
-                try:
-                    fn_carga()
-                except Exception as ex_c:
-                    print(f"[WARN] Error cargando módulo {idx_sel}: {ex_c}")
+            contenedor_vista_activa.content = vistas_mapa[idx_sel][2]
+            accion_recarga = vistas_mapa[idx_sel][3]
+            fn_sub = vistas_mapa[idx_sel][4]
             if fn_sub:
-                try:
-                    fn_sub(sub_idx)
-                except Exception as ex_s:
-                    print(f"[WARN] Error cambiando subvista {sub_idx}: {ex_s}")
-
+                fn_sub(sub_idx)
+            if accion_recarga:
+                accion_recarga()
+            page.bgcolor = "#1B2122"
+            btn_home.visible = True
+            cuerpo_principal.content = ft.Row([panel_submenus, contenedor_vista_activa], expand=True, spacing=0)
+            adaptar_resolucion_automatica()
             page.update()
          
         def volver_al_home(e=None):

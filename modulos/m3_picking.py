@@ -520,27 +520,31 @@ class PickingModulo:
             nonlocal registros_packing_db
             agrupado_por_ov = {}
 
-            # 1. Cargar catálogo de maestra_sku (Descripción y EAN / GTIN Base)
+            # 1. Cargar catálogo de maestra_sku (indexando SKU completo y SKU raíz sin sufijo '-')
             mapa_maestra_sku = {}
             try:
-                res_m = supabase.table("maestra_sku").select("*").limit(4000).execute()
+                res_m = supabase.table("maestra_sku").select("*").limit(5000).execute()
                 for m in (res_m.data or []):
                     s_k = str(m.get("sku") or "").strip().upper()
                     if not s_k:
                         continue
                     ean_val = (
-                        m.get("ean")
+                        m.get("codigo_barras")
+                        or m.get("ean")
                         or m.get("ean_base")
                         or m.get("gtin")
-                        or m.get("codigo_barras")
                         or m.get("barcode")
                         or m.get("upc")
                         or ""
                     )
-                    mapa_maestra_sku[s_k] = {
+                    info_sku_m = {
                         "descripcion": str(m.get("descripcion") or m.get("nombre") or "").strip(),
                         "ean": str(ean_val or "").strip(),
                     }
+                    mapa_maestra_sku[s_k] = info_sku_m
+                    s_base = s_k.split("-")[0].strip()
+                    if s_base and s_base not in mapa_maestra_sku:
+                        mapa_maestra_sku[s_base] = info_sku_m
             except Exception:
                 pass
 
@@ -557,7 +561,7 @@ class PickingModulo:
                     mapa_clientes_ns[k_ov] = cli_ns
                     mapa_clientes_ns[k_ov.replace("-FA", "")] = cli_ns
 
-            # 3. Leer cabeceras desde public.netsuite_ordenes_venta y wms_packing_lists_fa
+            # 3. Leer cabeceras desde public.netsuite_ordenes_venta
             mapa_id_a_ov = {}
             try:
                 res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(500).execute()
@@ -578,7 +582,8 @@ class PickingModulo:
             except Exception:
                 pass
 
-            # Cruzar con los Packing Lists cerrados desde main.dart (wms_packing_lists_fa)
+            # 4. Leer Packing Lists cerrados desde main.dart (wms_packing_lists_fa) y guardarlos en mapa para no perderlos
+            mapa_lineas_pl_por_ov = {}
             try:
                 res_pl = supabase.table("wms_packing_lists_fa").select("*").order("id", desc=True).limit(300).execute()
                 for pl in (res_pl.data or []):
@@ -599,10 +604,13 @@ class PickingModulo:
                     if isinstance(det_json, list):
                         for item_j in det_json:
                             if isinstance(item_j, dict):
+                                sku_j = str(item_j.get("sku") or "").strip().upper()
+                                sku_j_base = sku_j.split("-")[0].strip()
+                                inf_m = mapa_maestra_sku.get(sku_j) or mapa_maestra_sku.get(sku_j_base) or {}
                                 lineas_pl.append({
-                                    "sku": str(item_j.get("sku") or "").strip().upper(),
-                                    "ean": str(item_j.get("ean") or "").strip(),
-                                    "descripcion": str(item_j.get("descripcion") or "").strip(),
+                                    "sku": sku_j,
+                                    "ean": str(item_j.get("ean") or inf_m.get("ean") or "").strip(),
+                                    "descripcion": str(item_j.get("descripcion") or inf_m.get("descripcion") or "").strip(),
                                     "cantidad": int(float(item_j.get("solicitado") or 0)),
                                     "cantidad_pedida": int(float(item_j.get("solicitado") or 0)),
                                     "cantidad_pickeada": int(float(item_j.get("pickeado") or 0)),
@@ -610,11 +618,18 @@ class PickingModulo:
                                     "es_farmacia": True,
                                 })
 
+                    if lineas_pl and ov_pl not in mapa_lineas_pl_por_ov:
+                        mapa_lineas_pl_por_ov[ov_pl] = lineas_pl
+
+                    raw_f_pl = str(pl.get("fecha_emision") or pl.get("created_at") or "").strip()
+                    fecha_ov_pl = raw_f_pl[:10] if len(raw_f_pl) >= 10 else datetime.now().strftime("%Y-%m-%d")
+
                     if ov_pl not in agrupado_por_ov:
                         agrupado_por_ov[ov_pl] = {
                             "raw": pl,
                             "id": pl.get("orden_id"),
                             "ov": ov_pl,
+                            "fecha_ov": fecha_ov_pl,
                             "cliente": str(pl.get("cliente_nombre") or "CLIENTE FARMACIA").strip(),
                             "estado": "EMPACADO",
                             "es_farmacia": True,
@@ -633,7 +648,7 @@ class PickingModulo:
             except Exception:
                 pass
 
-            # 4. Leer líneas desde public.netsuite_detalle_ov usando orden_id
+            # 5. Leer líneas desde public.netsuite_detalle_ov y fusionarlas con wms_packing_lists_fa
             try:
                 res_det = supabase.table("netsuite_detalle_ov").select("*").order("id", desc=False).limit(2000).execute()
                 ovs_con_detalle_db = set()
@@ -647,14 +662,28 @@ class PickingModulo:
                         ovs_con_detalle_db.add(ov_d)
 
                     sku_d = str(d.get("sku") or "-").strip().upper()
-                    info_m = mapa_maestra_sku.get(sku_d, {})
-                    desc_d = str(d.get("descripcion") or info_m.get("descripcion") or "").strip()
-                    ean_d = str(d.get("ean") or info_m.get("ean") or "").strip()
-                    cant_ped = int(float(d.get("cantidad_pedida") or d.get("cantidad_comprometida") or 0))
-                    cant_pick = int(float(d.get("cantidad_pickeada") or 0))
+                    sku_d_base = sku_d.split("-")[0].strip()
+                    info_m = mapa_maestra_sku.get(sku_d) or mapa_maestra_sku.get(sku_d_base) or {}
+
+                    # Buscar si el celular envió respaldo de esta línea en wms_packing_lists_fa
+                    respaldo_pl = next(
+                        (
+                            x for x in mapa_lineas_pl_por_ov.get(ov_d, [])
+                            if x["sku"] == sku_d or x["sku"].split("-")[0].strip() == sku_d_base
+                        ),
+                        {},
+                    )
+
+                    desc_d = str(d.get("descripcion") or info_m.get("descripcion") or respaldo_pl.get("descripcion") or "").strip()
+                    ean_d = str(d.get("ean") or info_m.get("ean") or respaldo_pl.get("ean") or "").strip()
+                    cant_ped = int(float(d.get("cantidad_pedida") or d.get("cantidad_comprometida") or respaldo_pl.get("cantidad_pedida") or 0))
+                    cant_pick_db = int(float(d.get("cantidad_pickeada") or 0))
+                    cant_pick_pl = int(float(respaldo_pl.get("cantidad_pickeada") or 0))
+                    cant_pick = max(cant_pick_db, cant_pick_pl)
+
                     lotes_d = str(d.get("lotes_pickeados") or d.get("lote_asignado") or "").strip()
-                    if lotes_d.upper() in ("NONE", "NULL"):
-                        lotes_d = ""
+                    if lotes_d.upper() in ("NONE", "NULL", ""):
+                        lotes_d = str(respaldo_pl.get("lotes") or "").strip()
 
                     agrupado_por_ov[ov_d]["lineas_detalle"].append({
                         "id_detalle": d.get("id"),
@@ -666,7 +695,7 @@ class PickingModulo:
                         "cantidad_pedida": cant_ped,
                         "cantidad_pickeada": cant_pick,
                         "lotes": lotes_d,
-                        "estado_linea": str(d.get("estado_linea") or "PENDIENTE").upper(),
+                        "estado_linea": str(d.get("estado_linea") or ("COMPLETADO" if cant_pick >= cant_ped and cant_ped > 0 else "PENDIENTE")).upper(),
                         "es_farmacia": agrupado_por_ov[ov_d].get("es_farmacia", False),
                     })
 
@@ -676,6 +705,16 @@ class PickingModulo:
                     agrupado_por_ov[ov_c]["unidades_pickeadas"] = sum(x.get("cantidad_pickeada", 0) for x in lins)
             except Exception as ex_d:
                 print(f"[WARN] Error leyendo netsuite_detalle_ov: {ex_d}")
+
+            # 6. Sincronizar registros_locales_mem con los estados actualizados en BD
+            for item_mem in registros_locales_mem:
+                ov_m = item_mem["ov"]
+                if ov_m not in agrupado_por_ov:
+                    agrupado_por_ov[ov_m] = item_mem
+                else:
+                    item_mem["estado"] = agrupado_por_ov[ov_m]["estado"]
+                    if agrupado_por_ov[ov_m].get("lineas_detalle"):
+                        item_mem["lineas_detalle"] = agrupado_por_ov[ov_m]["lineas_detalle"]
 
             registros_packing_db = list(agrupado_por_ov.values())
 
@@ -737,12 +776,18 @@ class PickingModulo:
             filas_d = []
             for ld in lineas_det:
                 es_sku_fa = ld.get("es_farmacia", False)
+                cant_sol = int(ld.get("cantidad_pedida") or ld.get("cantidad") or 0)
+                cant_pk = int(ld.get("cantidad_pickeada") or 0)
+                lotes_str = str(ld.get("lotes") or "").strip()
+                txt_cant = f"{cant_pk}/{cant_sol} UN" if cant_pk > 0 else f"{cant_sol} UN"
+                sub_lote = f"  • Lotes: {lotes_str}" if lotes_str else ""
+
                 filas_d.append(
                     ft.Row(
                         [
-                            ft.Text(str(ld.get("sku", "-")), size=11, weight=ft.FontWeight.BOLD, color="#FBBF24" if es_sku_fa else ACCENT_CYAN, width=120),
-                            ft.Text(str(ld.get("descripcion", "-"))[:38], size=11, color=TEXT_WHITE, expand=True),
-                            ft.Text(f"{ld.get('cantidad', 0)} UN", size=11, weight=ft.FontWeight.BOLD, color="#34D399"),
+                            ft.Text(str(ld.get("sku", "-")), size=11, weight=ft.FontWeight.BOLD, color="#FBBF24" if es_sku_fa else ACCENT_CYAN, width=110),
+                            ft.Text(f"{str(ld.get('descripcion', '-'))[:34]}{sub_lote}", size=11, color=TEXT_WHITE, expand=True),
+                            ft.Text(txt_cant, size=11, weight=ft.FontWeight.BOLD, color="#34D399"),
                         ],
                         spacing=8,
                     )
@@ -769,7 +814,7 @@ class PickingModulo:
                 ),
                 bgcolor=BG_CARD,
                 content=ft.Container(
-                    width=540,
+                    width=560,
                     height=260,
                     padding=10,
                     bgcolor="#181E20",
@@ -786,21 +831,28 @@ class PickingModulo:
                 page.update()
 
         def cambiar_estado_packing_ov(info_item: dict, nuevo_estado: str):
-            ov_cod = info_item.get("ov")
+            ov_cod = str(info_item.get("ov") or "").strip().upper()
+            ov_sin_fa = ov_cod.removesuffix("-FA").strip()
             info_item["estado"] = nuevo_estado
             for m_it in registros_locales_mem:
-                if m_it["ov"] == ov_cod:
+                if m_it["ov"] in (ov_cod, ov_sin_fa):
                     m_it["estado"] = nuevo_estado
 
-            try:
-                supabase.table("netsuite_ordenes_venta").update({"estado_ns": nuevo_estado}).eq("numero_ov", ov_cod).execute()
-            except Exception:
-                pass
+            for col_ov in ("estado_ns", "estado"):
+                try:
+                    supabase.table("netsuite_ordenes_venta").update({col_ov: nuevo_estado}).or_(
+                        f"numero_ov.eq.{ov_cod},numero_ov.eq.{ov_sin_fa}"
+                    ).execute()
+                    break
+                except Exception:
+                    continue
 
             if info_item.get("es_farmacia"):
                 for col_est in ("estado_ns", "estado_sanitario", "estado"):
                     try:
-                        supabase.table("wms_packing_lists_fa").update({col_est: nuevo_estado}).eq("numero_ov", ov_cod).execute()
+                        supabase.table("wms_packing_lists_fa").update({col_est: nuevo_estado}).or_(
+                            f"numero_ov.eq.{ov_cod},numero_ov.eq.{ov_sin_fa}"
+                        ).execute()
                         break
                     except Exception:
                         continue
@@ -819,27 +871,31 @@ class PickingModulo:
                 notificar("No hay OVs de Farmacia (-FA) cargadas para exportar.", "#D97706")
                 return
 
-            # 1. Cargar maestra_sku para obtener EAN / GTIN Base y Descripción real
+            # 1. Cargar maestra_sku indexando tanto SKU completo como SKU raíz (sin '-'), leyendo codigo_barras y ean
             mapa_sku_info = {}
             try:
-                res_m = supabase.table("maestra_sku").select("*").limit(4000).execute()
+                res_m = supabase.table("maestra_sku").select("*").limit(5000).execute()
                 for m in (res_m.data or []):
                     s_k = str(m.get("sku") or "").strip().upper()
                     if not s_k:
                         continue
                     ean_v = (
-                        m.get("ean")
+                        m.get("codigo_barras")
+                        or m.get("ean")
                         or m.get("ean_base")
                         or m.get("gtin")
-                        or m.get("codigo_barras")
                         or m.get("barcode")
                         or m.get("upc")
                         or ""
                     )
-                    mapa_sku_info[s_k] = {
+                    inf_m = {
                         "descripcion": str(m.get("descripcion") or m.get("nombre") or "").strip(),
                         "ean": str(ean_v or "").strip(),
                     }
+                    mapa_sku_info[s_k] = inf_m
+                    s_limpio = s_k.split("-")[0].strip()
+                    if s_limpio and s_limpio not in mapa_sku_info:
+                        mapa_sku_info[s_limpio] = inf_m
             except Exception:
                 pass
 
@@ -858,13 +914,20 @@ class PickingModulo:
                 for ov_reg in objetivos:
                     ov_raw = str(ov_reg.get("ov") or "OV").strip().upper()
                     ov_limpia = ov_raw.removesuffix("-FA").strip()
+                    ov_con_fa = f"{ov_limpia}-FA"
                     cli_nom = str(ov_reg.get("cliente") or "CLIENTE FARMACIA").strip()
                     id_ov_db = ov_reg.get("id")
 
                     # Buscar id de la orden en netsuite_ordenes_venta si no estaba en memoria
                     if id_ov_db is None:
                         try:
-                            r_cab = supabase.table("netsuite_ordenes_venta").select("id, cliente_nombre").or_(f"numero_ov.eq.{ov_raw},numero_ov.eq.{ov_limpia}").limit(1).execute()
+                            r_cab = (
+                                supabase.table("netsuite_ordenes_venta")
+                                .select("id, cliente_nombre")
+                                .or_(f"numero_ov.eq.{ov_raw},numero_ov.eq.{ov_limpia},numero_ov.eq.{ov_con_fa}")
+                                .limit(1)
+                                .execute()
+                            )
                             if r_cab.data:
                                 id_ov_db = r_cab.data[0].get("id")
                                 if r_cab.data[0].get("cliente_nombre"):
@@ -872,7 +935,50 @@ class PickingModulo:
                         except Exception:
                             pass
 
-                    # Consultar líneas reales y lo pickeado en netsuite_detalle_ov
+                    # Leer también wms_packing_lists_fa para rescatar detalle_json enviado por main.dart
+                    mapa_pl_sku = {}
+                    lineas_desde_pl = []
+                    try:
+                        r_pl = (
+                            supabase.table("wms_packing_lists_fa")
+                            .select("*")
+                            .or_(f"numero_ov.eq.{ov_raw},numero_ov.eq.{ov_limpia},numero_ov.eq.{ov_con_fa}")
+                            .order("id", desc=True)
+                            .limit(1)
+                            .execute()
+                        )
+                        if r_pl.data:
+                            row_pl = r_pl.data[0]
+                            if row_pl.get("cliente_nombre") and cli_nom in ("CLIENTE FARMACIA", "CLIENTE REGISTRADO", "SIN CLIENTE"):
+                                cli_nom = str(row_pl["cliente_nombre"]).strip()
+                            det_j = row_pl.get("detalle_json")
+                            if isinstance(det_j, str):
+                                try:
+                                    det_j = json.loads(det_j)
+                                except Exception:
+                                    det_j = []
+                            if isinstance(det_j, list):
+                                for it_j in det_j:
+                                    if isinstance(it_j, dict):
+                                        s_j = str(it_j.get("sku") or "").strip().upper()
+                                        s_j_base = s_j.split("-")[0].strip()
+                                        inf_m = mapa_sku_info.get(s_j) or mapa_sku_info.get(s_j_base) or {}
+                                        item_norm = {
+                                            "sku": s_j,
+                                            "ean": str(it_j.get("ean") or inf_m.get("ean") or s_j).strip(),
+                                            "descripcion": str(it_j.get("descripcion") or inf_m.get("descripcion") or "").strip(),
+                                            "solicitado": int(float(it_j.get("solicitado") or 0)),
+                                            "pickeado": int(float(it_j.get("pickeado") or 0)),
+                                            "lotes": str(it_j.get("lotes") or "").strip(),
+                                        }
+                                        lineas_desde_pl.append(item_norm)
+                                        mapa_pl_sku[s_j] = item_norm
+                                        if s_j_base:
+                                            mapa_pl_sku[s_j_base] = item_norm
+                    except Exception:
+                        pass
+
+                    # Consultar líneas en netsuite_detalle_ov y enriquecer con wms_packing_lists_fa y maestra_sku
                     lineas_exportar = []
                     if id_ov_db is not None:
                         try:
@@ -881,13 +987,19 @@ class PickingModulo:
                                 sku_c = str(d.get("sku") or "").strip().upper()
                                 sku_limpio = sku_c.split("-")[0].strip()
                                 info_m = mapa_sku_info.get(sku_c) or mapa_sku_info.get(sku_limpio) or {}
-                                ean_c = str(info_m.get("ean") or d.get("ean") or sku_c).strip()
-                                desc_c = str(info_m.get("descripcion") or d.get("descripcion") or "").strip()
-                                sol_c = int(float(d.get("cantidad_pedida") or d.get("cantidad_comprometida") or 0))
-                                pick_c = int(float(d.get("cantidad_pickeada") or 0))
+                                info_pl = mapa_pl_sku.get(sku_c) or mapa_pl_sku.get(sku_limpio) or {}
+
+                                ean_c = str(info_m.get("ean") or d.get("ean") or info_pl.get("ean") or sku_c).strip()
+                                desc_c = str(info_m.get("descripcion") or d.get("descripcion") or info_pl.get("descripcion") or "").strip()
+                                sol_c = int(float(d.get("cantidad_pedida") or d.get("cantidad_comprometida") or info_pl.get("solicitado") or 0))
+                                pick_db = int(float(d.get("cantidad_pickeada") or 0))
+                                pick_pl = int(float(info_pl.get("pickeado") or 0))
+                                pick_c = max(pick_db, pick_pl)
+
                                 lotes_c = str(d.get("lotes_pickeados") or d.get("lote_asignado") or "").strip()
-                                if lotes_c.upper() in ("NONE", "NULL"):
-                                    lotes_c = ""
+                                if lotes_c.upper() in ("NONE", "NULL", ""):
+                                    lotes_c = str(info_pl.get("lotes") or "").strip()
+
                                 lineas_exportar.append({
                                     "sku": sku_c,
                                     "ean": ean_c,
@@ -898,6 +1010,30 @@ class PickingModulo:
                                 })
                         except Exception:
                             pass
+
+                    # Si no hubo filas en netsuite_detalle_ov, usar las de wms_packing_lists_fa o la memoria
+                    if not lineas_exportar and lineas_desde_pl:
+                        lineas_exportar = lineas_desde_pl
+
+                    if not lineas_exportar:
+                        for ld in (ov_reg.get("lineas_detalle") or []):
+                            sku_c = str(ld.get("sku") or "").strip().upper()
+                            sku_limpio = sku_c.split("-")[0].strip()
+                            info_m = mapa_sku_info.get(sku_c) or mapa_sku_info.get(sku_limpio) or {}
+                            ean_c = str(ld.get("ean") or info_m.get("ean") or sku_c).strip()
+                            desc_c = str(ld.get("descripcion") or info_m.get("descripcion") or "").strip()
+                            sol_c = int(float(ld.get("cantidad_pedida") or ld.get("cantidad") or 0))
+                            pick_c = int(float(ld.get("cantidad_pickeada") or 0))
+                            lotes_c = str(ld.get("lotes") or ld.get("lotes_pickeados") or ld.get("lote_asignado") or "").strip()
+                            lineas_exportar.append({
+                                "sku": sku_c,
+                                "ean": ean_c,
+                                "descripcion": desc_c,
+                                "solicitado": sol_c,
+                                "pickeado": pick_c,
+                                "lotes": lotes_c,
+                            })
+                        
 
                     # Respaldo desde memoria enriquecido con maestra_sku
                     if not lineas_exportar:
@@ -1426,31 +1562,43 @@ class PickingModulo:
         def obtener_skus_farmacia_supabase() -> set:
             skus_fa = set()
             try:
-                # 1. Traer de maestra_sku todos los SKUs de marca BOEHRINGER o ubicación PICK-FARM
-                res_b = (
-                    supabase.table("maestra_sku")
-                    .select("sku, marca, ubicacion_picking_fija")
-                    .or_("marca.ilike.%BOEHRINGER%,ubicacion_picking_fija.ilike.%PICK-FARM%,ubicacion_picking_fija.ilike.%FARM%")
-                    .limit(5000)
-                    .execute()
-                )
-                for row in (res_b.data or []):
+                res_m = supabase.table("maestra_sku").select("*").limit(5000).execute()
+                for row in (res_m.data or []):
                     sku_c = str(row.get("sku") or "").strip().upper()
-                    if sku_c:
+                    if not sku_c:
+                        continue
+                    marca_c = str(row.get("marca") or row.get("categoria") or row.get("familia") or "").strip().upper()
+                    ubic_fija = str(
+                        row.get("ubicacion_picking_fija")
+                        or row.get("ubicacion_picking")
+                        or row.get("ubicacion_sugerida")
+                        or ""
+                    ).strip().upper()
+                    if (
+                        "BOEHRINGER" in marca_c
+                        or "FARM" in marca_c
+                        or "-FA" in marca_c
+                        or "PICK-FARM" in ubic_fija
+                        or "FARM" in ubic_fija
+                        or sku_c.endswith("-FA")
+                    ):
                         skus_fa.add(sku_c)
+                        skus_fa.add(sku_c.split("-")[0].strip())
             except Exception:
                 pass
 
-            # 2. Respaldo en caso de lectura completa de maestra_sku
-            if not skus_fa:
+            # Respaldo adicional con config_maestra_extra.json de m5_maestra.py
+            if os.path.exists("config_maestra_extra.json"):
                 try:
-                    res_m = supabase.table("maestra_sku").select("sku, marca, ubicacion_picking_fija").limit(5000).execute()
-                    for row in (res_m.data or []):
-                        sku_c = str(row.get("sku") or "").strip().upper()
-                        marca_c = str(row.get("marca") or "").strip().upper()
-                        ubic_fija = str(row.get("ubicacion_picking_fija") or "").strip().upper()
-                        if sku_c and ("BOEHRINGER" in marca_c or "PICK-FARM" in ubic_fija or "FARMACIA" in ubic_fija):
-                            skus_fa.add(sku_c)
+                    with open("config_maestra_extra.json", "r", encoding="utf-8") as f_ext:
+                        extra_map = json.load(f_ext)
+                    for sku_k, datos_k in extra_map.items():
+                        cat_k = str((datos_k or {}).get("categoria") or "").upper()
+                        ubi_k = str((datos_k or {}).get("ubicacion_picking") or "").upper()
+                        if "FARM" in cat_k or "BOEHRINGER" in cat_k or "-FA" in cat_k or "FARM" in ubi_k:
+                            s_up = str(sku_k).strip().upper()
+                            skus_fa.add(s_up)
+                            skus_fa.add(s_up.split("-")[0].strip())
                 except Exception:
                     pass
 

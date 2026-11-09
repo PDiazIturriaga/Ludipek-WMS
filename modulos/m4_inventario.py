@@ -355,14 +355,14 @@ class InventarioModulo:
                     if lpn_k:
                         mapa_rec_lpn[lpn_k] = r
 
-                # 3. Leer TODAS las tablas de ubicaciones en Racks (sin que una bloquee a la otra)
+                # 3. Leer tablas de ubicaciones en Racks leyendo correctamente cantidad_unidades
                 ubicados_vistos = set()
                 lpns_en_racks = set()
 
-                for nom_t in ("bodega_inventario_ubicacion","inventario_ubicaciones", "bodega_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
+                for nom_t in ("bodega_inventario_ubicacion", "inventario_ubicaciones", "bodega_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
                     filas_u = leer_paginado(nom_t, 4000)
                     for r in filas_u:
-                        ubi_r = str(r.get("ubicacion") or r.get("codigo_ubicacion") or r.get("posicion") or "").strip().upper()
+                        ubi_r = str(r.get("codigo_ubicacion") or r.get("ubicacion") or r.get("posicion") or "").strip().upper()
                         lpn_r = str(r.get("lpn") or r.get("codigo_lpn") or r.get("pallet") or "").strip().upper()
                         sku_r = str(r.get("sku") or "").strip().upper()
 
@@ -417,7 +417,7 @@ class InventarioModulo:
                                 nuevas_ubic_sku[sku_final] = set()
                             nuevas_ubic_sku[sku_final].add(ubi_r)
 
-                # 4. Incluir también LPNs recepcionados en registro_recepcion (Andén o con ubicación asignada ahí)
+                # 4. Incluir también LPNs recepcionados en registro_recepcion (Andén)
                 lpns_anden_vistos = set()
                 for r in filas_rec:
                     lpn_r = str(r.get("lpn") or "").strip().upper()
@@ -467,7 +467,6 @@ class InventarioModulo:
 
         txt_sku_dirigido.on_change = actualizar_preview_sku_dirigido
 
-        # --- ASIGNACIONES DE PASILLO VINCULADAS A WMS_USUARIOS ---
         # --- ASIGNACIONES DE PASILLO VINCULADAS A WMS_USUARIOS ---
         def renderizar_asignaciones():
             nuevas_filas_asig = []
@@ -531,7 +530,6 @@ class InventarioModulo:
                     )
                 )
 
-            # Aquí se asignan todas las filas de golpe (justo fuera del ciclo for)
             tabla_asignacion_pasillos.rows = nuevas_filas_asig
 
             if asignaciones_pasillo_db:
@@ -543,7 +541,7 @@ class InventarioModulo:
         def cargar_asignaciones_piso():
             nonlocal asignaciones_pasillo_db
             cargadas = []
-            for nom_t in ("cantidad_unidades","wms_asignaciones_pasillo", "asignaciones_pasillo", "auditoria_pasillos"):
+            for nom_t in ("wms_asignaciones_pasillo", "asignaciones_pasillo", "auditoria_pasillos"):
                 try:
                     res = supabase.table(nom_t).select("*").order("id", desc=True).limit(100).execute()
                     if res.data is not None:
@@ -614,7 +612,7 @@ class InventarioModulo:
             filtro_c = (txt_buscar_ciclico.value or "").strip().upper()
             filtro_v = (txt_buscar_vacias.value or "").strip().upper()
 
-            # 1. Construir filas de auditoria_ciclico_sku (SKU Dirigido)
+            # 1. Construir filas de auditoria_ciclico_sku (compatible con main.dart)
             nuevas_filas_cic = []
             cic_conciliados = 0
 
@@ -622,22 +620,24 @@ class InventarioModulo:
                 sku_c = str(row_c.get("sku") or row_c.get("codigo_sku") or "-").strip().upper()
                 desc_c = str(row_c.get("descripcion") or mapa_sku_maestra.get(sku_c, "Producto en Conteo Cíclico"))
                 ubi_c = str(
-                    row_c.get("ubicacion")
-                    or row_c.get("codigo_ubicacion")
+                    row_c.get("codigo_ubicacion")
+                    or row_c.get("ubicacion")
                     or ", ".join(sorted(mapa_ubicaciones_por_sku.get(sku_c, set()))[:2])
                     or "MÚLTIPLES"
                 ).strip().upper()
 
-                teo_val = row_c.get("cantidad_esperada")
+                teo_val = row_c.get("unidades_sistema")
                 if teo_val is None:
-                    teo_val = row_c.get("unidades_sistema")
+                    teo_val = row_c.get("cantidad_esperada")
                 if teo_val is None:
                     teo_val = row_c.get("stock_teorico")
                 if teo_val is None:
                     teo_val = row_c.get("stock_sistema")
                 if teo_val is None:
                     teo_val = mapa_stock_por_sku.get(sku_c, 0)
-                teo_int = int(teo_val or 0)
+                teo_int = int(float(teo_val or 0))
+
+                # Leer tanto estado (PC) como estado_auditoria (main.dart: CONFORME / INCIDENCIA / SIN_REVISAR)
                 est_raw = str(row_c.get("estado") or row_c.get("estado_auditoria") or "").strip().upper()
 
                 cont_raw = (
@@ -654,30 +654,42 @@ class InventarioModulo:
                     )
                 )
                 tiene_conteo = cont_raw is not None and str(cont_raw).strip() not in ("", "None", "null")
-                cont_int = int(cont_raw) if tiene_conteo else 0
-                dif_int = (cont_int - teo_int) if tiene_conteo else 0
+
+                if tiene_conteo:
+                    cont_int = int(float(cont_raw))
+                    dif_int = cont_int - teo_int
+                elif est_raw in ("CONFORME", "CONCILIADO", "CUADRADO OK", "APROBADO", "OK"):
+                    tiene_conteo = True
+                    cont_int = teo_int
+                    dif_int = 0
+                elif est_raw == "INCIDENCIA":
+                    tiene_conteo = True
+                    cont_int = 0
+                    dif_int = -teo_int
+                else:
+                    cont_int = 0
+                    dif_int = 0
 
                 usr_raw = (
-                    row_c.get("usuario")
+                    row_c.get("auditor")
+                    or row_c.get("usuario")
                     or row_c.get("operador")
                     or row_c.get("usuario_asignado")
-                    or row_c.get("auditor")
                     or row_c.get("creado_por")
                     or "SIN ASIGNAR"
                 )
                 usr_str = resolver_nombre_usuario(usr_raw)
-                fecha_c = formatear_fecha_hora(row_c.get("created_at") or row_c.get("fecha") or row_c.get("fecha_conteo"))
+                fecha_c = formatear_fecha_hora(row_c.get("fecha") or row_c.get("created_at") or row_c.get("fecha_conteo"))
 
-                est_raw = str(row_c.get("estado") or "").strip().upper()
-                if not est_raw:
+                if not est_raw or est_raw == "SIN_REVISAR":
                     if not tiene_conteo:
                         est_raw = "SKU DIRIGIDO (PEND.)"
                     elif dif_int == 0:
-                        est_raw = "CUADRADO OK"
+                        est_raw = "CONFORME"
                     else:
-                        est_raw = "CON DIFERENCIA"
+                        est_raw = "INCIDENCIA"
 
-                if est_raw in ("CUADRADO OK", "CONCILIADO", "APROBADO", "OK", "COMPLETADO"):
+                if est_raw in ("CONFORME", "CUADRADO OK", "CONCILIADO", "APROBADO", "OK", "COMPLETADO"):
                     cic_conciliados += 1
                     badge_est = crear_badge_estado(est_raw, "#065F46", "#D1FAE5")
                 elif "PEND" in est_raw or "DIRIGIDO" in est_raw or "ASIGNADO" in est_raw:
@@ -690,16 +702,25 @@ class InventarioModulo:
 
                 def validar_ciclico(ev, r_item=row_c):
                     r_item["estado"] = "CONCILIADO"
+                    r_item["estado_auditoria"] = "CONCILIADO"
                     if r_item.get("id") is not None:
-                        try:
-                            supabase.table("auditoria_ciclico_sku").update({"estado": "CONCILIADO"}).eq("id", r_item["id"]).execute()
-                        except Exception:
-                            pass
+                        for col_st in ("estado_auditoria", "estado"):
+                            try:
+                                supabase.table("auditoria_ciclico_sku").update({col_st: "CONCILIADO"}).eq("id", r_item["id"]).execute()
+                                break
+                            except Exception:
+                                continue
                     notificar(f"Conteo cíclico de SKU {r_item.get('sku', '')} validado.", "#047857")
                     renderizar_tablas_auditorias_conteos()
 
-                txt_dif_str = f"{dif_int:+d} UN" if tiene_conteo else "PEND."
-                col_dif = "#34D399" if (tiene_conteo and dif_int == 0) else ("#F87171" if tiene_conteo else TEXT_MUTED)
+                if est_raw == "INCIDENCIA" and cont_raw is None:
+                    txt_conteo_rf = "INCIDENCIA RF"
+                    txt_dif_str = "REVISAR"
+                    col_dif = "#F87171"
+                else:
+                    txt_conteo_rf = f"{cont_int} UN" if tiene_conteo else "En espera RF"
+                    txt_dif_str = f"{dif_int:+d} UN" if tiene_conteo else "PEND."
+                    col_dif = "#34D399" if (tiene_conteo and dif_int == 0) else ("#F87171" if tiene_conteo else TEXT_MUTED)
 
                 nuevas_filas_cic.append(
                     ft.DataRow(
@@ -709,7 +730,7 @@ class InventarioModulo:
                             ft.DataCell(ft.Text(desc_c[:48], size=11, color=TEXT_WHITE)),
                             ft.DataCell(ft.Text(ubi_c, weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                             ft.DataCell(ft.Text(f"{teo_int} UN", size=11, color=TEXT_MUTED)),
-                            ft.DataCell(ft.Text(f"{cont_int} UN" if tiene_conteo else "En espera RF", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(txt_conteo_rf, weight=ft.FontWeight.BOLD, size=11, color="#F87171" if est_raw == "INCIDENCIA" else ACCENT_CYAN)),
                             ft.DataCell(ft.Text(txt_dif_str, weight=ft.FontWeight.BOLD, size=11, color=col_dif)),
                             ft.DataCell(ft.Text(usr_str[:32], size=11, color=TEXT_WHITE)),
                             ft.DataCell(badge_est),
@@ -730,75 +751,98 @@ class InventarioModulo:
             lbl_kpi_cic_total.value = str(len(conteos_ciclico_sku_db))
             lbl_kpi_cic_ok.value = str(cic_conciliados)
 
-            # 2. Construir filas de auditoria_ubicaciones_vacias
+            # 2. Construir filas de auditoria_ubicaciones_vacias (compatible con main.dart)
             nuevas_filas_vac = []
             hallazgos_vacias = 0
 
             for row_v in list(conteos_ubic_vacias_db):
                 ubi_v = str(
-                    row_v.get("ubicacion")
-                    or row_v.get("codigo_ubicacion")
+                    row_v.get("codigo_ubicacion")
+                    or row_v.get("ubicacion")
                     or row_v.get("posicion")
                     or "-"
                 ).strip().upper()
                 res_fisico = str(
-                row_v.get("resultado_auditoria")
-                or row_v.get("resultado")
-                or row_v.get("estado_ubicacion")
-                or row_v.get("hallazgo")
-                or ("VACÍA CONFIRMADA" if row_v.get("es_vacia", True) else "OCUPADA CON STOCK")
+                    row_v.get("resultado_auditoria")
+                    or row_v.get("resultado")
+                    or row_v.get("estado_ubicacion")
+                    or row_v.get("hallazgo")
+                    or ("CONFIRMADA_VACIA" if row_v.get("es_vacia", True) else "OCUPADA_SIN_REGISTRO")
                 ).strip().upper()
-                lpn_hallado = str(
+
+                es_sin_revisar = ("SIN_REVISAR" in res_fisico or "PEND" in res_fisico)
+                es_hallazgo = (
+                    "OCUPAD" in res_fisico
+                    or "CON STOCK" in res_fisico
+                    or "HALLAZGO" in res_fisico
+                )
+                lpn_raw_v = str(
                     row_v.get("lpn_encontrado")
                     or row_v.get("lpn")
                     or row_v.get("sku_encontrado")
                     or row_v.get("sku")
                     or row_v.get("observacion")
-                    or "SIN HALLAZGO (VACÍA)"
+                    or ""
                 ).strip().upper()
+                if lpn_raw_v and lpn_raw_v not in ("NONE", "NULL", "-", "S/N", "SIN HALLAZGO (VACÍA)"):
+                    es_hallazgo = True
+                    lpn_hallado = lpn_raw_v
+                elif es_hallazgo:
+                    lpn_hallado = "ALERTA: OCUPADA SIN REGISTRO"
+                elif es_sin_revisar:
+                    lpn_hallado = "PENDIENTE DE REVISIÓN"
+                else:
+                    lpn_hallado = "SIN HALLAZGO (VACÍA)"
 
-                es_hallazgo = (
-                    "OCUPAD" in res_fisico
-                    or "CON STOCK" in res_fisico
-                    or "HALLAZGO" in res_fisico
-                    or (lpn_hallado not in ("SIN HALLAZGO (VACÍA)", "NONE", "NULL", "-", "S/N", ""))
-                )
                 if es_hallazgo:
                     hallazgos_vacias += 1
 
                 usr_raw_v = (
-                    row_v.get("usuario")
+                    row_v.get("auditor")
+                    or row_v.get("usuario")
                     or row_v.get("operador")
-                    or row_v.get("auditor")
                     or row_v.get("usuario_rf")
                     or "SIN ASIGNAR"
                 )
                 usr_str_v = resolver_nombre_usuario(usr_raw_v)
-                fecha_v = formatear_fecha_hora(row_v.get("created_at") or row_v.get("fecha") or row_v.get("fecha_auditoria"))
-                est_v = str(row_v.get("estado") or ("REVISAR HALLAZGO" if es_hallazgo else "VERIFICADA OK")).strip().upper()
+                fecha_v = formatear_fecha_hora(row_v.get("fecha") or row_v.get("created_at") or row_v.get("fecha_auditoria"))
+                est_v = str(
+                    row_v.get("estado")
+                    or ("REVISAR HALLAZGO" if es_hallazgo else ("SIN REVISAR" if es_sin_revisar else "VERIFICADA OK"))
+                ).strip().upper()
 
                 if filtro_v and not any(filtro_v in v_str.upper() for v_str in (ubi_v, res_fisico, lpn_hallado, usr_str_v, est_v)):
                     continue
 
-                badge_res = (
-                    crear_badge_estado("HALLAZGO STOCK", "#92400E", "#FEF3C7")
-                    if es_hallazgo
-                    else crear_badge_estado("100% VACÍA", "#065F46", "#D1FAE5")
-                )
+                if es_hallazgo:
+                    badge_res = crear_badge_estado("OCUPADA S/REG", "#92400E", "#FEF3C7")
+                elif es_sin_revisar:
+                    badge_res = crear_badge_estado("SIN REVISAR", "#CBD5E1", "#334155")
+                else:
+                    badge_res = crear_badge_estado("100% VACÍA", "#065F46", "#D1FAE5")
+
                 badge_est_v = (
                     crear_badge_estado(est_v, "#065F46", "#D1FAE5")
-                    if est_v in ("VERIFICADA OK", "AUDITADA", "RESUELTO", "OK")
-                    else crear_badge_estado(est_v, "#991B1B", "#FEE2E2")
+                    if est_v in ("VERIFICADA OK", "AUDITADA", "RESUELTO", "OK", "CONFIRMADA_VACIA")
+                    else (
+                        crear_badge_estado(est_v, "#1E3A8A", "#DBEAFE")
+                        if "SIN REVISAR" in est_v
+                        else crear_badge_estado(est_v, "#991B1B", "#FEE2E2")
+                    )
                 )
 
                 def aprobar_vacia(ev, rv=row_v):
                     rv["estado"] = "VERIFICADA OK"
+                    rv["resultado_auditoria"] = "CONFIRMADA_VACIA"
                     if rv.get("id") is not None:
-                        try:
-                            supabase.table("auditoria_ubicaciones_vacias").update({"estado": "VERIFICADA OK"}).eq("id", rv["id"]).execute()
-                        except Exception:
-                            pass
-                    notificar(f"Ubicación {rv.get('ubicacion', '')} marcada como Verificada OK.", "#047857")
+                        for payload_up in ({"estado": "VERIFICADA OK"}, {"resultado_auditoria": "CONFIRMADA_VACIA"}):
+                            try:
+                                supabase.table("auditoria_ubicaciones_vacias").update(payload_up).eq("id", rv["id"]).execute()
+                                break
+                            except Exception:
+                                continue
+                    ubi_notif = rv.get("codigo_ubicacion") or rv.get("ubicacion") or ""
+                    notificar(f"Ubicación {ubi_notif} marcada como Verificada OK.", "#047857")
                     renderizar_tablas_auditorias_conteos()
 
                 nuevas_filas_vac.append(
@@ -807,7 +851,7 @@ class InventarioModulo:
                             ft.DataCell(ft.Text(fecha_v, size=10, color=TEXT_MUTED)),
                             ft.DataCell(ft.Text(ubi_v, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                             ft.DataCell(badge_res),
-                            ft.DataCell(ft.Text(lpn_hallado[:26], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_AMBER if es_hallazgo else TEXT_MUTED)),
+                            ft.DataCell(ft.Text(lpn_hallado[:28], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_AMBER if es_hallazgo else TEXT_MUTED)),
                             ft.DataCell(ft.Text(usr_str_v[:24], size=11, color=TEXT_WHITE)),
                             ft.DataCell(badge_est_v),
                             ft.DataCell(
@@ -872,7 +916,20 @@ class InventarioModulo:
                 ubics_s = sorted(mapa_ubicaciones_por_sku.get(sku_obj, set()))
                 ubic_obj = ubics_s[0] if ubics_s else "GENERAL"
 
+            lote_dir = f"DIR-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            ahora_iso = datetime.now().isoformat()
+
             esquemas_candidatos = [
+                {
+                    "lote_auditoria": lote_dir,
+                    "sku": sku_obj,
+                    "codigo_ubicacion": ubic_obj,
+                    "cajas_sistema": 0,
+                    "unidades_sistema": st_teo,
+                    "estado_auditoria": "PENDIENTE",
+                    "auditor": usr_obj,
+                    "fecha": ahora_iso,
+                },
                 {
                     "sku": sku_obj,
                     "descripcion": desc_s,
@@ -886,12 +943,6 @@ class InventarioModulo:
                     "ubicacion": ubic_obj,
                     "stock_teorico": st_teo,
                     "usuario": usr_obj,
-                    "estado": "PENDIENTE",
-                },
-                {
-                    "sku": sku_obj,
-                    "ubicacion": ubic_obj,
-                    "operador": usr_obj,
                     "estado": "PENDIENTE",
                 },
                 {
@@ -913,12 +964,11 @@ class InventarioModulo:
                     "id": len(conteos_ciclico_sku_db) + 1,
                     "sku": sku_obj,
                     "descripcion": desc_s,
-                    "ubicacion": ubic_obj,
-                    "cantidad_esperada": st_teo,
-                    "cantidad_contada": None,
-                    "usuario": usr_obj,
-                    "estado": "SKU DIRIGIDO (PEND.)",
-                    "created_at": datetime.now().isoformat(),
+                    "codigo_ubicacion": ubic_obj,
+                    "unidades_sistema": st_teo,
+                    "auditor": usr_obj,
+                    "estado_auditoria": "SKU DIRIGIDO (PEND.)",
+                    "fecha": ahora_iso,
                 })
             else:
                 cargar_auditorias_ciclico_y_vacias()
@@ -941,7 +991,7 @@ class InventarioModulo:
                 bg_st = "#991B1B" if est == "PENDIENTE" else "#065F46"
                 tx_st = "#FEE2E2" if est == "PENDIENTE" else "#D1FAE5"
 
-                u_cod = d.get("usuario") or d.get("operador") or "ADMIN"
+                u_cod = d.get("usuario") or d.get("operador") or d.get("auditor") or "ADMIN"
                 u_nom = resolver_nombre_usuario(u_cod)
 
                 nuevas_filas_desv.append(
@@ -973,37 +1023,75 @@ class InventarioModulo:
                 except Exception:
                     continue
 
-            # 2. Sumar hallazgos reales detectados en auditoria_ubicaciones_vacias
+            # 2. Leer alertas en tiempo real de ubicaciones vacías ocupadas desde historial_movimientos (main.dart)
+            try:
+                res_hm = (
+                    supabase.table("historial_movimientos")
+                    .select("*")
+                    .eq("tipo_movimiento", "ALERTA_VACIA_OCUPADA")
+                    .order("id", desc=True)
+                    .limit(50)
+                    .execute()
+                )
+                for hm in (res_hm.data or []):
+                    reales.append({
+                        "id": f"HM-{hm.get('id')}",
+                        "fecha": hm.get("fecha") or hm.get("created_at"),
+                        "lpn": hm.get("lpn") or "SIN-REGISTRO",
+                        "ubicacion_teorica": hm.get("ubicacion_destino") or "-",
+                        "incidencia": "ALERTA ROJA RF: POSICIÓN VACÍA OCUPADA SIN REGISTRO",
+                        "usuario": hm.get("usuario") or "APP_RF",
+                        "estado": "PENDIENTE",
+                    })
+            except Exception:
+                pass
+
+            # 3. Sumar hallazgos reales detectados en auditoria_ubicaciones_vacias
             for rv in conteos_ubic_vacias_db:
-                res_f = str(rv.get("resultado") or rv.get("estado_ubicacion") or rv.get("resultado_auditoria") or"").upper()
+                res_f = str(rv.get("resultado_auditoria") or rv.get("resultado") or rv.get("estado_ubicacion") or "").upper()
                 lpn_h = str(rv.get("lpn_encontrado") or rv.get("lpn") or rv.get("sku_encontrado") or "").strip().upper()
                 if "OCUPAD" in res_f or "HALLAZGO" in res_f or (lpn_h and lpn_h not in ("NONE", "NULL", "-", "SIN HALLAZGO (VACÍA)")):
                     reales.append({
                         "id": f"VAC-{rv.get('id')}",
-                        "fecha": rv.get("created_at") or rv.get("fecha"),
+                        "fecha": rv.get("fecha") or rv.get("created_at"),
                         "lpn": lpn_h or "SIN LPN",
-                        "ubicacion_teorica": rv.get("ubicacion") or rv.get("codigo_ubicacion") or "-",
+                        "ubicacion_teorica": rv.get("codigo_ubicacion") or rv.get("ubicacion") or "-",
                         "incidencia": f"HALLAZGO EN UBICACIÓN VACÍA ({res_f or 'CON STOCK'})",
-                        "usuario": rv.get("usuario") or rv.get("operador") or "AUDITOR",
+                        "usuario": rv.get("auditor") or rv.get("usuario") or rv.get("operador") or "AUDITOR",
                         "estado": "RESUELTO" if str(rv.get("estado") or "").upper() in ("VERIFICADA OK", "RESUELTO") else "PENDIENTE",
                     })
 
-            # 3. Sumar diferencias reales detectadas en auditoria_ciclico_sku
+            # 4. Sumar incidencias y diferencias reales detectadas en auditoria_ciclico_sku
             for rc in conteos_ciclico_sku_db:
+                est_aud = str(rc.get("estado_auditoria") or rc.get("estado") or "").upper()
                 c_cont = rc.get("cantidad_contada") if rc.get("cantidad_contada") is not None else rc.get("conteo_fisico")
-                c_esp = rc.get("cantidad_esperada") if rc.get("cantidad_esperada") is not None else rc.get("stock_teorico")
-                if c_cont is not None and c_esp is not None:
+                c_esp = (
+                    rc.get("unidades_sistema")
+                    if rc.get("unidades_sistema") is not None
+                    else (rc.get("cantidad_esperada") if rc.get("cantidad_esperada") is not None else rc.get("stock_teorico"))
+                )
+                if est_aud == "INCIDENCIA":
+                    reales.append({
+                        "id": f"CIC-{rc.get('id')}",
+                        "fecha": rc.get("fecha") or rc.get("created_at"),
+                        "lpn": f"SKU {rc.get('sku', '-')} ({rc.get('lpn') or 'S/LPN'})",
+                        "ubicacion_teorica": rc.get("codigo_ubicacion") or rc.get("ubicacion") or "GENERAL",
+                        "incidencia": f"INCIDENCIA CONTEO CÍCLICO SKU (Teórico: {c_esp or 0} UN)",
+                        "usuario": rc.get("auditor") or rc.get("usuario") or rc.get("operador") or "AUDITOR",
+                        "estado": "PENDIENTE",
+                    })
+                elif c_cont is not None and c_esp is not None:
                     try:
-                        dif_c = int(c_cont) - int(c_esp)
+                        dif_c = int(float(c_cont)) - int(float(c_esp))
                         if dif_c != 0:
                             reales.append({
                                 "id": f"CIC-{rc.get('id')}",
-                                "fecha": rc.get("created_at") or rc.get("fecha"),
+                                "fecha": rc.get("fecha") or rc.get("created_at"),
                                 "lpn": f"SKU {rc.get('sku', '-')}",
-                                "ubicacion_teorica": rc.get("ubicacion") or "GENERAL",
+                                "ubicacion_teorica": rc.get("codigo_ubicacion") or rc.get("ubicacion") or "GENERAL",
                                 "incidencia": f"DESVÍO CONTEO CÍCLICO ({dif_c:+d} UN)",
-                                "usuario": rc.get("usuario") or rc.get("operador") or "AUDITOR",
-                                "estado": "RESUELTO" if str(rc.get("estado") or "").upper() == "CONCILIADO" else "PENDIENTE",
+                                "usuario": rc.get("auditor") or rc.get("usuario") or rc.get("operador") or "AUDITOR",
+                                "estado": "RESUELTO" if est_aud == "CONCILIADO" else "PENDIENTE",
                             })
                     except Exception:
                         pass
@@ -1121,9 +1209,9 @@ class InventarioModulo:
                 for r in (res_rec.data or []):
                     u_rec = r.get("usuario") or r.get("operador") or r.get("recibido_por") or "RECEPCIÓN"
                     logs.append({
-                        "fecha": formatear_fecha_hora(r.get("created_at") or r.get("fecha_recepcion") or r.get("fecha")),
+                        "fecha": formatear_fecha_hora(r.get("fecha_recepcion") or r.get("created_at") or r.get("fecha")),
                         "evento": f"RECEPCIÓN ANDÉN (SKU: {r.get('sku', '-')} | {r.get('unidades_totales', 0)} UN)",
-                        "origen": str(r.get("codigo_asn") or r.get("numero_oc") or "ANDÉN").upper(),
+                        "origen": str(r.get("contenedor") or r.get("codigo_asn") or r.get("numero_oc") or "ANDÉN").upper(),
                         "destino": str(r.get("ubicacion") or "ANDÉN RECEPCIÓN").upper(),
                         "usuario": resolver_nombre_usuario(u_rec),
                         "validacion": "RECEPCIONADO",
@@ -1131,17 +1219,18 @@ class InventarioModulo:
             except Exception:
                 pass
 
-            # 2. Buscar posición actual en bodega_ubicaciones / inventario_ubicaciones
-            for nom_tu in ("cantidad_unidades","bodega_inventario_ubicacion","bodega_ubicaciones", "inventario_ubicaciones"):
+            # 2. Buscar posición actual en bodega_inventario_ubicacion
+            for nom_tu in ("bodega_inventario_ubicacion", "bodega_ubicaciones", "inventario_ubicaciones"):
                 try:
                     res_ub = supabase.table(nom_tu).select("*").ilike("lpn", val).execute()
                     for r in (res_ub.data or []):
-                        u_put = r.get("usuario") or r.get("operador") or r.get("ubicado_por") or "OPERADOR RF"
+                        u_put = r.get("auditor") or r.get("usuario") or r.get("operador") or r.get("ubicado_por") or "OPERADOR RF"
+                        unid_rack = r.get("cantidad_unidades") or r.get("unidades") or r.get("cantidad") or 0
                         logs.append({
-                            "fecha": formatear_fecha_hora(r.get("updated_at") or r.get("created_at") or r.get("fecha")),
-                            "evento": f"ALMACENADO EN RACK ({r.get('sku', '-')} | {r.get('unidades') or r.get('cantidad') or 0} UN)",
+                            "fecha": formatear_fecha_hora(r.get("fecha") or r.get("updated_at") or r.get("created_at")),
+                            "evento": f"ALMACENADO EN RACK ({r.get('sku', '-')} | {unid_rack} UN)",
                             "origen": "RECEPCIÓN / GRÚA",
-                            "destino": str(r.get("ubicacion") or r.get("codigo_ubicacion") or "-").upper(),
+                            "destino": str(r.get("codigo_ubicacion") or r.get("ubicacion") or "-").upper(),
                             "usuario": resolver_nombre_usuario(u_put),
                             "validacion": "UBICADO EN RACK",
                         })
@@ -1149,17 +1238,17 @@ class InventarioModulo:
                     continue
 
             # 3. Buscar historial en tablas de movimientos
-            for nom_tm in ("wms_movimientos", "registro_movimientos", "movimientos", "historial_movimientos"):
+            for nom_tm in ("historial_movimientos", "wms_movimientos", "registro_movimientos", "movimientos"):
                 for col_lpn in ("lpn", "codigo_lpn"):
                     try:
                         res_m = supabase.table(nom_tm).select("*").ilike(col_lpn, val).order("id", desc=False).execute()
                         for r in (res_m.data or []):
                             u_mov = r.get("usuario") or r.get("operador") or r.get("id_usuario") or "OPERADOR RF"
                             logs.append({
-                                "fecha": formatear_fecha_hora(r.get("created_at") or r.get("fecha_movimiento") or r.get("fecha")),
-                                "evento": str(r.get("evento") or r.get("tipo_movimiento") or r.get("accion") or "MOVIMIENTO RF").upper(),
-                                "origen": str(r.get("origen") or r.get("ubicacion_origen") or "-").upper(),
-                                "destino": str(r.get("destino") or r.get("ubicacion_destino") or r.get("ubicacion") or "-").upper(),
+                                "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at") or r.get("fecha_movimiento")),
+                                "evento": str(r.get("tipo_movimiento") or r.get("evento") or r.get("accion") or "MOVIMIENTO RF").upper(),
+                                "origen": str(r.get("ubicacion_origen") or r.get("origen") or "-").upper(),
+                                "destino": str(r.get("ubicacion_destino") or r.get("destino") or r.get("ubicacion") or "-").upper(),
                                 "usuario": resolver_nombre_usuario(u_mov),
                                 "validacion": str(r.get("estado") or r.get("resultado") or "CONFIRMADO").upper(),
                             })
@@ -1196,9 +1285,9 @@ class InventarioModulo:
 
             logs = []
 
-            # 1. Pallets actualmente ubicados en esa posición (bodega_ubicaciones / inventario_ubicaciones)
-            for nom_tu in ("bodega_inventario_ubicacion","bodega_ubicaciones", "inventario_ubicaciones"):
-                for col_u in ("ubicacion", "codigo_ubicacion"):
+            # 1. Pallets actualmente ubicados en esa posición (bodega_inventario_ubicacion)
+            for nom_tu in ("bodega_inventario_ubicacion", "bodega_ubicaciones", "inventario_ubicaciones"):
+                for col_u in ("codigo_ubicacion", "ubicacion"):
                     try:
                         res_u = supabase.table(nom_tu).select("*").ilike(col_u, val).execute()
                         for r in (res_u.data or []):
@@ -1206,11 +1295,12 @@ class InventarioModulo:
                             sku_r = str(r.get("sku") or "").strip().upper()
                             if not lpn_r and not sku_r:
                                 continue
-                            u_cod = r.get("usuario") or r.get("operador") or r.get("ubicado_por") or "OPERADOR RF"
+                            u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or r.get("ubicado_por") or "OPERADOR RF"
+                            unid_u = r.get("cantidad_unidades") or r.get("unidades") or r.get("cantidad") or 0
                             logs.append({
-                                "fecha": formatear_fecha_hora(r.get("updated_at") or r.get("created_at") or r.get("fecha")),
+                                "fecha": formatear_fecha_hora(r.get("fecha") or r.get("updated_at") or r.get("created_at")),
                                 "lpn": lpn_r or "STOCK EN RACK",
-                                "sku_lote": f"{sku_r or '-'} | Lote: {r.get('lote') or 'S/L'} ({r.get('unidades') or r.get('cantidad') or 0} UN)",
+                                "sku_lote": f"{sku_r or '-'} | Lote: {r.get('lote') or 'S/L'} ({unid_u} UN)",
                                 "accion": "STOCK ACTUAL EN UBICACIÓN",
                                 "usuario": resolver_nombre_usuario(u_cod),
                             })
@@ -1219,50 +1309,58 @@ class InventarioModulo:
                     except Exception:
                         continue
 
-            # 2. Auditorías de ubicaciones vacías realizadas sobre esa ubicación
-            try:
-                res_av = supabase.table("auditoria_ubicaciones_vacias").select("*").ilike("ubicacion", val).order("id", desc=True).execute()
-                for r in (res_av.data or []):
-                    u_cod = r.get("usuario") or r.get("operador") or r.get("auditor") or "AUDITOR"
-                    hallazgo = r.get("lpn_encontrado") or r.get("sku_encontrado") or "VACÍA CONFIRMADA"
-                    logs.append({
-                        "fecha": formatear_fecha_hora(r.get("created_at") or r.get("fecha")),
-                        "lpn": str(hallazgo).upper(),
-                        "sku_lote": str(r.get("estado") or r.get("resultado") or "AUDITORÍA VACÍAS").upper(),
-                        "accion": "AUDITORÍA UBICACIÓN VACÍA",
-                        "usuario": resolver_nombre_usuario(u_cod),
-                    })
-            except Exception:
-                pass
+            # 2. Auditorías de ubicaciones vacías realizadas sobre esa ubicación (codigo_ubicacion o ubicacion)
+            for col_av in ("codigo_ubicacion", "ubicacion"):
+                try:
+                    res_av = supabase.table("auditoria_ubicaciones_vacias").select("*").ilike(col_av, val).order("id", desc=True).execute()
+                    for r in (res_av.data or []):
+                        u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or "AUDITOR"
+                        hallazgo = r.get("lpn_encontrado") or r.get("sku_encontrado") or r.get("resultado_auditoria") or "VACÍA CONFIRMADA"
+                        logs.append({
+                            "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at")),
+                            "lpn": str(hallazgo).upper(),
+                            "sku_lote": str(r.get("resultado_auditoria") or r.get("estado") or "AUDITORÍA VACÍAS").upper(),
+                            "accion": "AUDITORÍA UBICACIÓN VACÍA",
+                            "usuario": resolver_nombre_usuario(u_cod),
+                        })
+                    if res_av.data:
+                        break
+                except Exception:
+                    continue
 
-            # 3. Conteos cíclicos realizados en esa ubicación
-            try:
-                res_ac = supabase.table("auditoria_ciclico_sku").select("*").ilike("ubicacion", val).order("id", desc=True).execute()
-                for r in (res_ac.data or []):
-                    u_cod = r.get("usuario") or r.get("operador") or r.get("auditor") or "AUDITOR"
-                    logs.append({
-                        "fecha": formatear_fecha_hora(r.get("created_at") or r.get("fecha")),
-                        "lpn": f"SKU {r.get('sku', '-')}",
-                        "sku_lote": f"Teórico: {r.get('cantidad_esperada', 0)} | Contado: {r.get('cantidad_contada', 'PEND')}",
-                        "accion": "CONTEO CÍCLICO SKU DIRIGIDO",
-                        "usuario": resolver_nombre_usuario(u_cod),
-                    })
-            except Exception:
-                pass
+            # 3. Conteos cíclicos realizados en esa ubicación (codigo_ubicacion o ubicacion)
+            for col_ac in ("codigo_ubicacion", "ubicacion"):
+                try:
+                    res_ac = supabase.table("auditoria_ciclico_sku").select("*").ilike(col_ac, val).order("id", desc=True).execute()
+                    for r in (res_ac.data or []):
+                        u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or "AUDITOR"
+                        sis_u = r.get("unidades_sistema") if r.get("unidades_sistema") is not None else r.get("cantidad_esperada", 0)
+                        est_a = r.get("estado_auditoria") or r.get("cantidad_contada") or "PEND"
+                        logs.append({
+                            "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at")),
+                            "lpn": f"SKU {r.get('sku', '-')} ({r.get('lpn') or '-'})",
+                            "sku_lote": f"Sist: {sis_u} UN | Resultado: {est_a}",
+                            "accion": "CONTEO CÍCLICO SKU DIRIGIDO",
+                            "usuario": resolver_nombre_usuario(u_cod),
+                        })
+                    if res_ac.data:
+                        break
+                except Exception:
+                    continue
 
             # 4. Movimientos históricos desde/hacia esa ubicación
-            for nom_tm in ("wms_movimientos", "registro_movimientos", "movimientos", "historial_movimientos"):
-                for col_m in ("destino", "ubicacion_destino", "origen", "ubicacion_origen"):
+            for nom_tm in ("historial_movimientos", "wms_movimientos", "registro_movimientos", "movimientos"):
+                for col_m in ("ubicacion_destino", "destino", "ubicacion_origen", "origen"):
                     try:
                         res_m = supabase.table(nom_tm).select("*").ilike(col_m, val).order("id", desc=True).limit(50).execute()
                         for r in (res_m.data or []):
                             u_cod = r.get("usuario") or r.get("operador") or "OPERADOR RF"
                             es_ingreso = "destino" in col_m
                             logs.append({
-                                "fecha": formatear_fecha_hora(r.get("created_at") or r.get("fecha")),
+                                "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at")),
                                 "lpn": str(r.get("lpn") or r.get("codigo_lpn") or "-").upper(),
-                                "sku_lote": str(r.get("sku") or "MOVIMIENTO PALLET").upper(),
-                                "accion": "INGRESO A RACK" if es_ingreso else "EXTRACCIÓN DE RACK",
+                                "sku_lote": f"{str(r.get('sku') or 'MOVIMIENTO').upper()} ({r.get('unidades_afectadas') or 0} UN)",
+                                "accion": str(r.get("tipo_movimiento") or ("INGRESO A RACK" if es_ingreso else "EXTRACCIÓN DE RACK")).upper(),
                                 "usuario": resolver_nombre_usuario(u_cod),
                             })
                     except Exception:
@@ -1279,7 +1377,7 @@ class InventarioModulo:
                     ft.DataCell(ft.Text(l["fecha"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                     ft.DataCell(ft.Text(l["lpn"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                     ft.DataCell(ft.Text(l["sku_lote"], size=11, color=TEXT_MUTED)),
-                    ft.DataCell(ft.Text(l["accion"], weight=ft.FontWeight.BOLD, size=11, color="#34D399" if ("INGRESO" in l["accion"] or "ACTUAL" in l["accion"]) else ACCENT_AMBER)),
+                    ft.DataCell(ft.Text(l["accion"], weight=ft.FontWeight.BOLD, size=11, color="#34D399" if ("INGRESO" in l["accion"] or "ACTUAL" in l["accion"] or "ALMACENAMIENTO" in l["accion"]) else ACCENT_AMBER)),
                     ft.DataCell(ft.Text(l["usuario"], size=11, color=TEXT_WHITE)),
                 ])
                 for l in logs

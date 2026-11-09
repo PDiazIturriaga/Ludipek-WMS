@@ -1140,14 +1140,13 @@ class RecepcionModulo:
                     content=ft.Column([txt_mail_para, txt_mail_cc, txt_mail_asunto, txt_mail_cuerpo, lbl_estado_mail], spacing=8, tight=True),
                 ),
                 actions=[
-                    ft.TextButton("CERRAR", on_click=lambda e: (setattr(dlg_correo, "open", False), page.update())),
+                    ft.TextButton("CERRAR", on_click=lambda e: page.pop_dialog() (setattr(dlg_correo, "open", False), page.update())),
                     boton_primario("ABRIR EN OUTLOOK / CORREO", ft.Icons.OPEN_IN_NEW_ROUNDED, abrir_cliente_correo_mailto, ACCENT_BLUE, height_val=34),
                     boton_primario("ENVIAR CORREO (PDF ADJUNTO)", ft.Icons.SEND_ROUNDED, enviar_via_smtp_con_pdf, "#047857", height_val=34),
                 ],
                 actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             )
-            page.overlay.append(dlg_correo)
-            dlg_correo.open = True
+            page.show_dialog(dlg_correo)
             page.update()
 
         def click_exportar_pdf_recepcion(e=None):
