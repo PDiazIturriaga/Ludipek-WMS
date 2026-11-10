@@ -132,8 +132,8 @@ class RecepcionModulo:
         auto_sync_inbound_activo = False
 
         # --- 3. DEFINICIÓN DE TODOS LOS CONTROLES VISUALES BASE ---
-        dd_asn = dropdown_dark(label="Orden de Compra Activa (PO)", expand=True)
-        txt_po_netsuite = texto_dark(label="N° PO", width=120)
+        dd_asn = dropdown_dark(label="Orden de Compra Activa (N° OC | Nota PO)", expand=True)
+        txt_po_netsuite = texto_dark(label="N° OC (Ej: 2043)", width=135)
         txt_contenedor = texto_dark(label="Contenedor / Guía", width=150)
         txt_ns_location_id = texto_dark(label="Location ID NS", value="1", width=105, keyboard_type=ft.KeyboardType.NUMBER)
         btn_guardar_contenedor = ft.IconButton(
@@ -737,21 +737,36 @@ class RecepcionModulo:
         def cargar_lista_asns(e=None):
             try:
                 res = supabase.table("asn_cabecera").select("*").neq("estado", "COMPLETADO").order("id", desc=True).execute()
-                opciones = [opt_w("LIBRES", "RECEPCIONES DIRECTAS SIN PO (INGRESOS LIBRES)")]
-                for r in res.data:
-                    nombre_po = obtener_nombre_po_cabecera(r)
-                    opciones.append(opt_w(str(r["id"]), f"PO {nombre_po} | {r.get('proveedor','')} | {r.get('estado','ACTIVO')}"))
+                opciones = [opt_w("LIBRES", "RECEPCIONES DIRECTAS SIN OC (INGRESOS LIBRES)")]
+                for r in (res.data or []):
+                    oc_num = str(r.get("numero_oc") or "").strip()
+                    cod_asn = str(r.get("codigo_asn") or "").strip()
+                    nota_po = ""
+                    if "|" in cod_asn:
+                        nota_po = cod_asn.split("|", 1)[1].strip()
+                    elif cod_asn and cod_asn != f"OC-{oc_num}" and cod_asn != f"PO-{oc_num}":
+                        nota_po = cod_asn
+
+                    id_principal = oc_num if oc_num and oc_num not in ("S/OC", "NONE") else formatear_nombre_po(cod_asn)
+                    txt_nota = f" (Nota: {nota_po})" if nota_po else ""
+                    opciones.append(
+                        opt_w(
+                            str(r["id"]),
+                            f"OC {id_principal}{txt_nota} | {r.get('proveedor','')} | {r.get('estado','ACTIVO')}",
+                        )
+                    )
                 dd_asn.options = opciones
                 dd_qa_po_base.options = list(opciones)
                 dd_mod_po_base.options = list(opciones)
-                if not dd_asn.value:
+                valores_validos = [o.key for o in opciones]
+                if not dd_asn.value or dd_asn.value not in valores_validos:
                     dd_asn.value = str(res.data[0]["id"]) if res.data else "LIBRES"
                 dd_qa_po_base.value = dd_asn.value
                 dd_mod_po_base.value = dd_asn.value
                 auditar_asn_seleccionado()
                 page.update()
             except Exception as ex:
-                notificar(f"Error al cargar POs: {ex}", "#B91C1C")
+                notificar(f"Error al cargar OCs: {ex}", "#B91C1C")
 
         def extraer_dia_y_hora_recepcion(fila_rec: dict) -> tuple:
             """Devuelve (fecha_iso_yyyy_mm_dd, fecha_cl_dd_mm_yyyy, hora_hh_mm) de la recepción física del LPN."""
@@ -1327,24 +1342,26 @@ class RecepcionModulo:
             return ruta_csv
 
         def descargar_po_netsuite_inbound(e=None):
-            po_input = (txt_po_netsuite.value or "").strip().upper()
-            if not po_input:
-                notificar("Ingrese un número de PO (Ej: 174) para consultar.", "#D97706")
+            oc_input = (txt_po_netsuite.value or "").strip().upper()
+            if not oc_input:
+                notificar("Ingrese el N° de Orden de Compra (Ej: 2043) para consultar en NetSuite.", "#D97706")
                 return
 
-            # Extraer solo el número limpio por si escribieron "PO-174" o "OC174"
-            po_num_limpio = po_input.replace("PO-", "").replace("OC-", "").replace("PO", "").replace("OC", "").strip()
+            # Limpiar prefijos por si el usuario escribió "OC-2043" o "2043"
+            oc_num_limpio = oc_input.replace("OC-", "").replace("PO-", "").replace("OC", "").strip()
 
             if not NETSUITE_CONECTADO:
                 notificar("Módulo conexion_erp no activo. Verifique credenciales de NetSuite.", "#D97706")
                 return
 
-            notificar(f"Consultando información de la PO {po_num_limpio} en NetSuite...", ACCENT_CYAN)
+            notificar(f"Consultando Orden de Compra N° {oc_num_limpio} en NetSuite...", ACCENT_CYAN)
 
+            # Consulta por N° de Orden de Compra (t.tranid) extrayendo t.memo como Nota/PO asociada
             q_po = f"""
                 SELECT
                     t.id AS po_internal_id,
                     t.tranid AS numero_oc,
+                    t.memo AS nota_po,
                     TO_CHAR(t.trandate, 'YYYY-MM-DD') AS fecha_oc,
                     BUILTIN.DF(t.entity) AS proveedor,
                     BUILTIN.DF(t.status) AS estado_ns,
@@ -1356,7 +1373,11 @@ class RecepcionModulo:
                 INNER JOIN item i ON tl.item = i.id
                 WHERE t.type = 'PurchOrd'
                 AND tl.mainline = 'F'
-                AND (UPPER(t.tranid) = '{po_num_limpio}' OR UPPER(t.tranid) = 'PO{po_num_limpio}' OR UPPER(t.tranid) LIKE '%{po_num_limpio}')
+                AND (
+                    UPPER(TRIM(t.tranid)) = '{oc_num_limpio}'
+                    OR UPPER(TRIM(t.tranid)) = 'OC{oc_num_limpio}'
+                    OR UPPER(t.memo) LIKE '%{oc_input}%'
+                )
                 ORDER BY i.itemid ASC
             """
             try:
@@ -1366,12 +1387,13 @@ class RecepcionModulo:
                 return
 
             if df_po is None or df_po.empty:
-                notificar(f"No se encontró la PO '{po_input}' en NetSuite.", "#D97706")
+                notificar(f"No se encontró la Orden de Compra '{oc_input}' en NetSuite.", "#D97706")
                 return
 
-            # Agrupar SKUs y extraer datos de cabecera de la PO
             primera_fila = df_po.iloc[0]
-            num_oc_real = str(primera_fila.get("numero_oc") or po_num_limpio).strip().upper()
+            num_oc_real = str(primera_fila.get("numero_oc") or oc_num_limpio).strip().upper()
+            raw_nota = primera_fila.get("nota_po")
+            nota_po_str = "" if (raw_nota is None or str(raw_nota).strip().upper() in ("NONE", "NULL", "NAN")) else str(raw_nota).strip()
             proveedor_str = str(primera_fila.get("proveedor") or "PROVEEDOR SIN NOMBRE").strip()
             fecha_oc_str = str(primera_fila.get("fecha_oc") or datetime.now().strftime("%Y-%m-%d")).strip()
             estado_ns_str = str(primera_fila.get("estado_ns") or "ABIERTA").strip()
@@ -1412,7 +1434,7 @@ class RecepcionModulo:
 
             lista_lineas_po = list(skus_agrupados.values())
             if not lista_lineas_po:
-                notificar(f"La PO {num_oc_real} no contiene líneas de artículos válidas.", "#D97706")
+                notificar(f"La OC {num_oc_real} no contiene líneas de artículos válidas.", "#D97706")
                 return
 
             total_skus = len(lista_lineas_po)
@@ -1459,25 +1481,26 @@ class RecepcionModulo:
             def confirmar_uso_po(ev):
                 cerrar_modal_po()
                 try:
-                    cod_asn = f"PO-{num_oc_real}"
+                    # Todo se rige por numero_oc (Ej: 2043), guardando la Nota (Ej: Inaba PO173) asociada en codigo_asn
+                    cod_asn = f"OC-{num_oc_real} | {nota_po_str}" if nota_po_str else f"OC-{num_oc_real}"
                     bodega_usr = getattr(page, "bodega_actual", "Bodega Santiago")
 
-                    # 1. Verificar si ya existe en asn_cabecera (por numero_oc o codigo_asn)
                     res_ex = (
                         supabase.table("asn_cabecera")
                         .select("id")
-                        .or_(f"numero_oc.eq.{num_oc_real},codigo_asn.eq.{cod_asn},codigo_asn.eq.ASN-PO-{num_oc_real}")
+                        .or_(f"numero_oc.eq.{num_oc_real},codigo_asn.ilike.OC-{num_oc_real}%")
                         .limit(1)
                         .execute()
                     )
                     if res_ex.data:
                         asn_id_nuevo = res_ex.data[0]["id"]
                         supabase.table("asn_cabecera").update({
+                            "codigo_asn": cod_asn,
+                            "numero_oc": num_oc_real,
                             "proveedor": proveedor_str,
                             "estado": "EN_RECEPCION",
                         }).eq("id", asn_id_nuevo).execute()
                     else:
-                        # Payload base 100% compatible con las columnas reales de asn_cabecera
                         payload_base = {
                             "codigo_asn": cod_asn,
                             "numero_oc": num_oc_real,
@@ -1500,7 +1523,6 @@ class RecepcionModulo:
                                 res_ins = supabase.table("asn_cabecera").insert(payload_base).execute()
                         asn_id_nuevo = res_ins.data[0]["id"]
 
-                    # 2. Sincronizar líneas en asn_detalle
                     res_det_ex = supabase.table("asn_detalle").select("sku").eq("asn_id", asn_id_nuevo).execute()
                     skus_ya_en_bd = {str(r.get("sku") or "").strip().upper() for r in (res_det_ex.data or [])}
 
@@ -1520,13 +1542,13 @@ class RecepcionModulo:
                     if nuevas_lineas_bd:
                         supabase.table("asn_detalle").insert(nuevas_lineas_bd).execute()
 
-                    # 3. Recargar selector y activar esta PO en pantalla
                     cargar_lista_asns()
                     dd_asn.value = str(asn_id_nuevo)
                     auditar_asn_seleccionado()
-                    notificar(f"PO {num_oc_real} ({proveedor_str}) cargada y activa para recepción.", "#047857")
+                    txt_nota_notif = f" (Nota/PO: {nota_po_str})" if nota_po_str else ""
+                    notificar(f"Orden de Compra {num_oc_real}{txt_nota_notif} activada para recepción.", "#047857")
                 except Exception as ex_save:
-                    notificar(f"Error al activar PO {num_oc_real}: {ex_save}", "#B91C1C")
+                    notificar(f"Error al activar OC {num_oc_real}: {ex_save}", "#B91C1C")
 
             dlg_confirmar_po = ft.AlertDialog(
                 modal=True,
@@ -1534,13 +1556,18 @@ class RecepcionModulo:
                 title=ft.Row(
                     [
                         ft.Icon(ft.Icons.FACT_CHECK_ROUNDED, color=ACCENT_CYAN, size=24),
-                        ft.Text(f"¿Desea utilizar la Orden de Compra PO {num_oc_real}?", size=16, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                        ft.Text(
+                            f"¿Utilizar Orden de Compra N° {num_oc_real}?" + (f" ({nota_po_str})" if nota_po_str else ""),
+                            size=16,
+                            weight=ft.FontWeight.BOLD,
+                            color=TEXT_WHITE,
+                        ),
                     ],
                     spacing=8,
                 ),
                 content=ft.Container(
                     width=680,
-                    height=380,
+                    height=390,
                     content=ft.Column(
                         [
                             ft.Container(
@@ -1552,7 +1579,13 @@ class RecepcionModulo:
                                     [
                                         ft.Text(f"PROVEEDOR: {proveedor_str}", size=14, weight=ft.FontWeight.W_900, color="#34D399"),
                                         ft.Text(
-                                            f"N° OC: {num_oc_real}   |   Fecha OC: {fecha_oc_str}   |   Estado ERP: {estado_ns_str}",
+                                            f"N° ORDEN DE COMPRA (Rige en WMS): {num_oc_real}   |   NOTA / PO ASOCIADA: {nota_po_str or 'SIN NOTA'}",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ACCENT_CYAN,
+                                        ),
+                                        ft.Text(
+                                            f"Fecha OC: {fecha_oc_str}   |   Estado NetSuite: {estado_ns_str}",
                                             size=11,
                                             color=TEXT_WHITE,
                                         ),
@@ -1566,7 +1599,7 @@ class RecepcionModulo:
                                     spacing=4,
                                 ),
                             ),
-                            ft.Text("DETALLE DE SKUs CONTENIDOS EN LA PO:", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED),
+                            ft.Text("DETALLE DE SKUs CONTENIDOS EN LA ORDEN DE COMPRA:", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED),
                             ft.Container(
                                 expand=True,
                                 bgcolor="#181E20",
@@ -1581,7 +1614,7 @@ class RecepcionModulo:
                 actions=[
                     ft.TextButton("CANCELAR", on_click=lambda e: cerrar_modal_po()),
                     boton_primario(
-                        "SÍ, UTILIZAR ESTA PO (CARGAR AL WMS)",
+                        f"SÍ, UTILIZAR OC {num_oc_real}",
                         ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED,
                         confirmar_uso_po,
                         "#047857",
@@ -1594,98 +1627,192 @@ class RecepcionModulo:
             page.show_dialog(dlg_confirmar_po)
             page.update()
 
-            def cancelar_uso_po(ev):
-                dlg_confirmar_po.open = False
+        def abrir_gestor_limpieza_ocs_admin(e=None):
+            """Exclusivo para ADMIN: permite cerrar o eliminar definitivamente OCs/POs del panel y Supabase."""
+            rol_usr = str(getattr(self.page, "rol_actual", "")).upper()
+            if "ADMIN" not in rol_usr:
+                notificar("Acción restringida: solo un usuario Administrador puede cerrar o eliminar OCs.", "#B91C1C")
+                return
+
+            try:
+                res_act = supabase.table("asn_cabecera").select("*").neq("estado", "COMPLETADO").order("id", desc=True).execute()
+                lista_ocs = res_act.data or []
+            except Exception as ex:
+                notificar(f"Error consultando OCs activas: {ex}", "#B91C1C")
+                return
+
+            if not lista_ocs:
+                notificar("No hay órdenes abiertas pendientes por limpiar.", "#047857")
+                return
+
+            checks_admin_oc = {}
+            filas_admin = []
+
+            for r in lista_ocs:
+                id_oc = r["id"]
+                num_oc = str(r.get("numero_oc") or "-").strip()
+                cod_asn = str(r.get("codigo_asn") or "-").strip()
+                prov = str(r.get("proveedor") or "-").strip()
+                est = str(r.get("estado") or "ACTIVO").strip()
+
+                chk = ft.Checkbox(value=(str(id_oc) == str(dd_asn.value)), active_color=ACCENT_CYAN)
+                checks_admin_oc[id_oc] = chk
+
+                filas_admin.append(
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(chk),
+                            ft.DataCell(ft.Text(str(id_oc), size=11, color=TEXT_MUTED)),
+                            ft.DataCell(ft.Text(f"OC {num_oc}", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(cod_asn[:28], size=11, color="#FBBF24")),
+                            ft.DataCell(ft.Text(prov[:28], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(est, size=11, color="#34D399")),
+                        ]
+                    )
+                )
+
+            tabla_limpieza_admin = ft.DataTable(
+                heading_row_color="#0F172A",
+                heading_row_height=32,
+                data_row_min_height=30,
+                data_row_max_height=36,
+                column_spacing=14,
+                columns=[
+                    ft.DataColumn(ft.Text("SEL.", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
+                    ft.DataColumn(ft.Text("ID", size=10, weight=ft.FontWeight.BOLD, color=TEXT_MUTED)),
+                    ft.DataColumn(ft.Text("N° OC", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
+                    ft.DataColumn(ft.Text("NOTA / PO", size=10, weight=ft.FontWeight.BOLD, color="#FBBF24")),
+                    ft.DataColumn(ft.Text("PROVEEDOR", size=10, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)),
+                    ft.DataColumn(ft.Text("ESTADO", size=10, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)),
+                ],
+                rows=filas_admin,
+            )
+
+            def cerrar_dlg_admin():
+                try:
+                    page.pop_dialog()
+                except Exception:
+                    dlg_admin_ocs.open = False
                 page.update()
 
-            dlg_confirmar_po = ft.AlertDialog(
+            def cerrar_seleccionadas_admin(ev):
+                ids_sel = [k for k, c in checks_admin_oc.items() if c.value]
+                if not ids_sel:
+                    notificar("Marque al menos una OC para cerrarla.", "#D97706")
+                    return
+                try:
+                    for id_k in ids_sel:
+                        supabase.table("asn_cabecera").update({"estado": "COMPLETADO"}).eq("id", id_k).execute()
+                    cerrar_dlg_admin()
+                    dd_asn.value = None
+                    cargar_lista_asns()
+                    cargar_historico_recepciones()
+                    notificar(f"{len(ids_sel)} OC(s) cerradas y quitadas del panel activo.", "#047857")
+                except Exception as ex_c:
+                    notificar(f"Error cerrando OCs: {ex_c}", "#B91C1C")
+
+            def eliminar_seleccionadas_admin(ev):
+                ids_sel = [k for k, c in checks_admin_oc.items() if c.value]
+                if not ids_sel:
+                    notificar("Marque al menos una OC para eliminarla de Supabase.", "#D97706")
+                    return
+                try:
+                    for id_k in ids_sel:
+                        # Desvincular o limpiar registros asociados para respetar llaves foráneas
+                        try:
+                            supabase.table("registro_recepcion").update({"asn_id": None}).eq("asn_id", id_k).execute()
+                        except Exception:
+                            pass
+                        supabase.table("asn_detalle").delete().eq("asn_id", id_k).execute()
+                        supabase.table("asn_cabecera").delete().eq("id", id_k).execute()
+                    cerrar_dlg_admin()
+                    dd_asn.value = None
+                    cargar_lista_asns()
+                    cargar_historico_recepciones()
+                    notificar(f"{len(ids_sel)} OC(s) eliminadas definitivamente de Supabase.", "#047857")
+                except Exception as ex_del:
+                    notificar(f"Error eliminando OCs: {ex_del}", "#B91C1C")
+
+            dlg_admin_ocs = ft.AlertDialog(
                 modal=True,
                 bgcolor="#1E293B",
                 title=ft.Row(
                     [
-                        ft.Icon(ft.Icons.FACT_CHECK_ROUNDED, color=ACCENT_CYAN, size=24),
-                        ft.Text(f"¿Desea utilizar la Orden de Compra PO {num_oc_real}?", size=16, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                        ft.Icon(ft.Icons.ADMIN_PANEL_SETTINGS_ROUNDED, color="#F87171", size=24),
+                        ft.Text("Administrador: Cerrar o Eliminar OCs / POs Activas", size=16, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                     ],
                     spacing=8,
                 ),
                 content=ft.Container(
                     width=680,
-                    height=380,
+                    height=360,
                     content=ft.Column(
                         [
-                            ft.Container(
-                                padding=12,
-                                bgcolor="#0F172A",
-                                border_radius=8,
-                                border=ft.Border.all(1, ACCENT_CYAN),
-                                content=ft.Column(
-                                    [
-                                        ft.Text(f"PROVEEDOR: {proveedor_str}", size=14, weight=ft.FontWeight.W_900, color="#34D399"),
-                                        ft.Text(
-                                            f"N° OC: {num_oc_real}   |   Fecha OC: {fecha_oc_str}   |   Estado ERP: {estado_ns_str}",
-                                            size=11,
-                                            color=TEXT_WHITE,
-                                        ),
-                                        ft.Text(
-                                            f"Resumen de Carga: {total_skus} SKUs distintos   |   Total a Recibir: {total_unidades} Unidades",
-                                            size=12,
-                                            weight=ft.FontWeight.BOLD,
-                                            color="#FBBF24",
-                                        ),
-                                    ],
-                                    spacing=4,
-                                ),
+                            ft.Text(
+                                "Marque las Órdenes de Compra que desea archivar (Cerrar) o borrar permanentemente de Supabase (Eliminar):",
+                                size=11,
+                                color=TEXT_MUTED,
                             ),
-                            ft.Text("DETALLE DE SKUs CONTENIDOS EN LA PO:", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED),
+                            ft.Row(
+                                [
+                                    boton_primario(
+                                        "MARCAR TODAS",
+                                        ft.Icons.CHECK_BOX_OUTLINED,
+                                        lambda ev: (
+                                            [setattr(c, "value", True) for c in checks_admin_oc.values()],
+                                            page.update(),
+                                        ),
+                                        "#334155",
+                                        height_val=28,
+                                    ),
+                                    boton_primario(
+                                        "DESMARCAR TODAS",
+                                        ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED,
+                                        lambda ev: (
+                                            [setattr(c, "value", False) for c in checks_admin_oc.values()],
+                                            page.update(),
+                                        ),
+                                        "#475569",
+                                        height_val=28,
+                                    ),
+                                ],
+                                spacing=8,
+                            ),
                             ft.Container(
                                 expand=True,
                                 bgcolor="#181E20",
                                 border_radius=6,
                                 border=ft.Border.all(1, BORDER_COLOR),
-                                content=ft.Column([tabla_preview_po], scroll=ft.ScrollMode.AUTO),
+                                content=ft.Column([tabla_limpieza_admin], scroll=ft.ScrollMode.AUTO),
                             ),
                         ],
-                        spacing=10,
+                        spacing=8,
                     ),
                 ),
                 actions=[
-                    ft.TextButton("CANCELAR", on_click=cancelar_uso_po),
-                    boton_primario(
-                        "SÍ, UTILIZAR ESTA PO (CARGAR AL WMS)",
-                        ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED,
-                        confirmar_uso_po,
-                        "#047857",
-                        height_val=36,
-                    ),
+                    ft.TextButton("CANCELAR", on_click=lambda e: cerrar_dlg_admin()),
+                    boton_primario("CERRAR SELECCIONADAS (ARCHIVAR)", ft.Icons.ARCHIVE_OUTLINED, cerrar_seleccionadas_admin, "#D97706", height_val=34),
+                    boton_primario("ELIMINAR DE SUPABASE", ft.Icons.DELETE_FOREVER_ROUNDED, eliminar_seleccionadas_admin, "#B91C1C", height_val=34),
                 ],
                 actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             )
 
-            page.overlay.append(dlg_confirmar_po)
-            dlg_confirmar_po.open = True
-            page.update() 
+            page.show_dialog(dlg_admin_ocs)
+            page.update()
 
         def cerrar_conciliacion_asn(e=None):
             try:
                 ahora_cierre = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-                cab_copia = dict(cabecera_asn_actual)
-                lineas_copia = list(filas_conciliacion_export)
-                ruta_pdf_cierre = None
                 if filas_conciliacion_export or recepciones_asn_actual:
                     exportar_csv_recepcion_netsuite()
-                    try:
-                        ruta_pdf_cierre = generar_acta_recepcion_pdf(cabecera_asn_actual, filas_conciliacion_export, recepciones_asn_actual)
-                        descargar_o_abrir_archivo(self.page, ruta_pdf_cierre)
-                    except Exception:
-                        pass
                 if asn_actual_id:
                     supabase.table("asn_cabecera").update({"estado": "COMPLETADO"}).eq("id", asn_actual_id).execute()
                 cargar_lista_asns()
                 cargar_historico_recepciones()
-                notificar(f"PO cerrada oficialmente ({ahora_cierre}).", "#047857")
+                notificar(f"OC cerrada oficialmente ({ahora_cierre}).", "#047857")
                 enviar_correo_acta_po()
             except Exception as ex:
-                notificar(f"Error al cerrar PO: {ex}", "#B91C1C")
+                notificar(f"Error al cerrar OC: {ex}", "#B91C1C")
 
         def guardar_ajuste_linea_asn(e=None):
             sku_objetivo = (txt_nuevo_sku_po.value or dd_edit_sku_asn.value or "").strip().upper()
@@ -2083,6 +2210,40 @@ class RecepcionModulo:
         txt_po_netsuite.on_submit = descargar_po_netsuite_inbound
 
         # --- 6. COMPOSICIÓN DE VISTAS (ARMADO FINAL DE LA INTERFAZ) ---
+        es_admin_usuario = "ADMIN" in str(getattr(self.page, "rol_actual", "")).upper()
+
+        controles_superiores_po = [
+            txt_po_netsuite,
+            boton_primario(
+                "LLAMAR OC",
+                ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
+                descargar_po_netsuite_inbound,
+                ACCENT_BLUE,
+                height_val=34,
+            ),
+            txt_contenedor,
+            btn_guardar_contenedor,
+            dd_accion_po,
+            ft.IconButton(
+                icon=ft.Icons.SYNC_ROUNDED,
+                icon_color=ACCENT_CYAN,
+                tooltip="Sincronizar recepción en vivo",
+                on_click=auditar_asn_seleccionado,
+            ),
+        ]
+
+        # Si el usuario logueado es ADMIN, se agrega el botón rojo para cerrar/eliminar OCs
+        if es_admin_usuario:
+            controles_superiores_po.append(
+                boton_primario(
+                    "ADMIN: LIMPIAR OCs",
+                    ft.Icons.DELETE_SWEEP_ROUNDED,
+                    abrir_gestor_limpieza_ocs_admin,
+                    "#B91C1C",
+                    height_val=34,
+                )
+            )
+
         barra_titulo_monitor = ft.Container(
             padding=ft.Padding.symmetric(horizontal=16, vertical=10),
             bgcolor="#222A2C",
@@ -2090,30 +2251,6 @@ class RecepcionModulo:
             border=ft.Border.all(1, BORDER_COLOR),
             content=ft.Column(
                 [
-                    ft.Row(
-                                [
-                                    txt_po_netsuite,
-                                    boton_primario(
-                                        "LLAMAR PO",
-                                        ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
-                                        descargar_po_netsuite_inbound,
-                                        ACCENT_BLUE,
-                                        height_val=34,
-                                    ),
-                                    txt_contenedor,
-                                    btn_guardar_contenedor,
-                                    dd_accion_po,
-                                    ft.IconButton(
-                                        icon=ft.Icons.SYNC_ROUNDED,
-                                        icon_color=ACCENT_CYAN,
-                                        tooltip="Sincronizar recepción en vivo",
-                                        on_click=auditar_asn_seleccionado,
-                                    ),
-                                ],
-                                spacing=8,
-                                wrap=True,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
                     ft.Row(
                         [
                             ft.Row(
@@ -2126,7 +2263,12 @@ class RecepcionModulo:
                                 spacing=8,
                                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                             ),
-                            
+                            ft.Row(
+                                controles_superiores_po,
+                                spacing=8,
+                                wrap=True,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         wrap=True,
