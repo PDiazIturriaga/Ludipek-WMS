@@ -821,7 +821,23 @@ class PickingModulo:
                     border_radius=6,
                     content=ft.Column(filas_d, spacing=6, scroll=ft.ScrollMode.AUTO),
                 ),
-                actions=[ft.TextButton("Cerrar", on_click=cerrar_d)],
+                actions=[
+                    boton_primario(
+                        "DESCARGAR ETIQUETA LPN (15x10)",
+                        ft.Icons.QR_CODE_2_ROUNDED,
+                        lambda ev: descargar_lpn_consolidado_ov(info_ov),
+                        ACCENT_TEAL,
+                        height_val=32,
+                    ),
+                    boton_primario(
+                        "DESCARGAR PACKING LIST (PDF + EXCEL)",
+                        ft.Icons.PICTURE_AS_PDF_OUTLINED,
+                        lambda ev: exportar_ov_farmacia_excel_pdf(info_ov),
+                        "#B45309",
+                        height_val=32,
+                    ),
+                    ft.TextButton("Cerrar", on_click=cerrar_d),
+                ],
             )
             try:
                 page.open(dlg_det)
@@ -861,14 +877,249 @@ class PickingModulo:
             recargar_datos_supabase()
             renderizar_monitor_cortes_y_tablas()
 
+        def descargar_lpn_consolidado_ov(info_ov: dict):
+            """Genera y descarga en el navegador la etiqueta térmica 15x10 cm del LPN consolidado de la OV/OT."""
+            if not info_ov:
+                notificar("Seleccione una Orden de Venta / Traslado válida.", "#D97706")
+                return
+
+            ov_raw = str(info_ov.get("ov") or "OV").strip().upper()
+            ov_base = ov_raw.split("(")[0].strip()
+            ov_limpia = ov_base.removesuffix("-FA").replace("OT-", "").strip()
+
+            # 1. Cargar múltiplos desde maestra_sku para calcular cajas reales por SKU
+            mapa_mult_sku = {}
+            try:
+                res_m = supabase.table("maestra_sku").select("sku, multiplo").limit(5000).execute()
+                for m in (res_m.data or []):
+                    s_k = str(m.get("sku") or "").strip().upper()
+                    if s_k:
+                        mult_v = max(1, int(float(m.get("multiplo") or 1)))
+                        mapa_mult_sku[s_k] = mult_v
+                        s_raiz = s_k.split("-")[0].strip()
+                        if s_raiz not in mapa_mult_sku:
+                            mapa_mult_sku[s_raiz] = mult_v
+            except Exception:
+                pass
+
+            # 2. Buscar si ya se consolidó un LPN físico desde el celular en registro_recepcion
+            try:
+                res_rec = (
+                    supabase.table("registro_recepcion")
+                    .select("*")
+                    .or_(f"contenedor.eq.{ov_raw},contenedor.eq.{ov_base},contenedor.eq.{ov_limpia},contenedor.eq.OT-{ov_limpia}")
+                    .order("id", desc=True)
+                    .execute()
+                )
+                filas_rec = res_rec.data or []
+                if filas_rec:
+                    lpns_unicos = sorted({str(r.get("lpn") or "").strip() for r in filas_rec if r.get("lpn")})
+                    if len(lpns_unicos) == 1:
+                        ruta_pdf = generar_pdf_recepcion_15x10(lpns_unicos[0], filas_rec)
+                    else:
+                        ruta_pdf = generar_pdf_masivo_lpns_po(ov_base, filas_rec)
+                    descargar_o_abrir_archivo(self.page, ruta_pdf)
+                    notificar(f"Etiqueta LPN 15x10 descargada ({', '.join(lpns_unicos)}).", "#047857")
+                    return
+            except Exception:
+                pass
+
+            # 3. Si no está en registro_recepcion, construir el LPN desde netsuite_detalle_ov / wms_packing_lists_fa
+            lpn_detectado = f"LPN-{ov_base}"
+            lineas_fuente = list(info_ov.get("lineas_detalle") or [])
+
+            if not lineas_fuente and info_ov.get("id") is not None:
+                try:
+                    r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", info_ov["id"]).execute()
+                    for d in (r_det.data or []):
+                        lineas_fuente.append({
+                            "sku": str(d.get("sku") or "").strip().upper(),
+                            "cantidad_pedida": int(float(d.get("cantidad_pedida") or 0)),
+                            "cantidad_pickeada": int(float(d.get("cantidad_pickeada") or 0)),
+                            "lotes": str(d.get("lotes_pickeados") or d.get("lote_asignado") or "").strip(),
+                        })
+                except Exception:
+                    pass
+
+            if not lineas_fuente:
+                notificar(f"La orden {ov_base} no tiene líneas de artículos para generar etiqueta LPN.", "#D97706")
+                return
+
+            lineas_pallet_pdf = []
+            for lin in lineas_fuente:
+                sku_c = str(lin.get("sku") or "-").strip().upper()
+                sku_raiz = sku_c.split("-")[0].strip()
+                mult_c = mapa_mult_sku.get(sku_c) or mapa_mult_sku.get(sku_raiz) or 1
+                unid_c = int(float(lin.get("cantidad_pickeada") or lin.get("cantidad_pedida") or lin.get("cantidad") or 0))
+                if unid_c <= 0:
+                    continue
+                cajas_c = max(1, round(unid_c / mult_c))
+
+                raw_lotes = str(lin.get("lotes") or "").strip()
+                # Extraer código [LPN-...] si fue enviado en lotes_pickeados desde main.dart
+                if raw_lotes.startswith("[") and "]" in raw_lotes:
+                    lpn_extraido = raw_lotes[1:raw_lotes.index("]")].strip()
+                    if lpn_extraido:
+                        lpn_detectado = lpn_extraido
+                    raw_lotes = raw_lotes[raw_lotes.index("]") + 1:].strip()
+
+                lote_limpio = "S/L"
+                venc_limpio = "S/F"
+                if raw_lotes and raw_lotes.upper() not in ("NONE", "NULL"):
+                    primer_lote = raw_lotes.split("|")[0].split("(")[0].strip()
+                    if "/" in primer_lote:
+                        partes_lv = primer_lote.split("/")
+                        lote_limpio = partes_lv[0].strip() or "S/L"
+                        venc_limpio = partes_lv[1].strip() or "S/F"
+                    else:
+                        lote_limpio = primer_lote or "S/L"
+
+                lineas_pallet_pdf.append({
+                    "sku": sku_c,
+                    "cajas": cajas_c,
+                    "multiplo_aplicado": mult_c,
+                    "unidades_sueltas": 0,
+                    "unidades_totales": unid_c,
+                    "lote": lote_limpio,
+                    "fecha_vencimiento_cl": venc_limpio,
+                })
+
+            if not lineas_pallet_pdf:
+                notificar(f"No hay unidades válidas en {ov_base} para emitir el LPN.", "#D97706")
+                return
+
+            try:
+                ruta_pdf = generar_pdf_recepcion_15x10(lpn_detectado, lineas_pallet_pdf)
+                descargar_o_abrir_archivo(self.page, ruta_pdf)
+                notificar(f"Etiqueta 15x10 generada para {lpn_detectado} ({len(lineas_pallet_pdf)} SKUs).", "#047857")
+            except Exception as ex:
+                notificar(f"Error generando etiqueta LPN: {ex}", "#B91C1C")
+
+        def descargar_lpn_consolidado_ov(info_ov: dict):
+            """Genera y descarga en el navegador la etiqueta térmica 15x10 cm del LPN consolidado de la OV/OT."""
+            if not info_ov:
+                notificar("Seleccione una Orden de Venta / Traslado válida.", "#D97706")
+                return
+
+            ov_raw = str(info_ov.get("ov") or "OV").strip().upper()
+            ov_base = ov_raw.split("(")[0].strip()
+            ov_limpia = ov_base.removesuffix("-FA").replace("OT-", "").strip()
+
+            # 1. Cargar múltiplos desde maestra_sku para calcular cajas reales por SKU
+            mapa_mult_sku = {}
+            try:
+                res_m = supabase.table("maestra_sku").select("sku, multiplo").limit(5000).execute()
+                for m in (res_m.data or []):
+                    s_k = str(m.get("sku") or "").strip().upper()
+                    if s_k:
+                        mult_v = max(1, int(float(m.get("multiplo") or 1)))
+                        mapa_mult_sku[s_k] = mult_v
+                        s_raiz = s_k.split("-")[0].strip()
+                        if s_raiz not in mapa_mult_sku:
+                            mapa_mult_sku[s_raiz] = mult_v
+            except Exception:
+                pass
+
+            # 2. Buscar si ya se consolidó un LPN físico desde el celular en registro_recepcion
+            try:
+                res_rec = (
+                    supabase.table("registro_recepcion")
+                    .select("*")
+                    .or_(f"contenedor.eq.{ov_raw},contenedor.eq.{ov_base},contenedor.eq.{ov_limpia},contenedor.eq.OT-{ov_limpia}")
+                    .order("id", desc=True)
+                    .execute()
+                )
+                filas_rec = res_rec.data or []
+                if filas_rec:
+                    lpns_unicos = sorted({str(r.get("lpn") or "").strip() for r in filas_rec if r.get("lpn")})
+                    if len(lpns_unicos) == 1:
+                        ruta_pdf = generar_pdf_recepcion_15x10(lpns_unicos[0], filas_rec)
+                    else:
+                        ruta_pdf = generar_pdf_masivo_lpns_po(ov_base, filas_rec)
+                    descargar_o_abrir_archivo(self.page, ruta_pdf)
+                    notificar(f"Etiqueta LPN 15x10 descargada ({', '.join(lpns_unicos)}).", "#047857")
+                    return
+            except Exception:
+                pass
+
+            # 3. Si no está en registro_recepcion, construir el LPN desde netsuite_detalle_ov / wms_packing_lists_fa
+            lpn_detectado = f"LPN-{ov_base}"
+            lineas_fuente = list(info_ov.get("lineas_detalle") or [])
+
+            if not lineas_fuente and info_ov.get("id") is not None:
+                try:
+                    r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", info_ov["id"]).execute()
+                    for d in (r_det.data or []):
+                        lineas_fuente.append({
+                            "sku": str(d.get("sku") or "").strip().upper(),
+                            "cantidad_pedida": int(float(d.get("cantidad_pedida") or 0)),
+                            "cantidad_pickeada": int(float(d.get("cantidad_pickeada") or 0)),
+                            "lotes": str(d.get("lotes_pickeados") or d.get("lote_asignado") or "").strip(),
+                        })
+                except Exception:
+                    pass
+
+            if not lineas_fuente:
+                notificar(f"La orden {ov_base} no tiene líneas de artículos para generar etiqueta LPN.", "#D97706")
+                return
+
+            lineas_pallet_pdf = []
+            for lin in lineas_fuente:
+                sku_c = str(lin.get("sku") or "-").strip().upper()
+                sku_raiz = sku_c.split("-")[0].strip()
+                mult_c = mapa_mult_sku.get(sku_c) or mapa_mult_sku.get(sku_raiz) or 1
+                unid_c = int(float(lin.get("cantidad_pickeada") or lin.get("cantidad_pedida") or lin.get("cantidad") or 0))
+                if unid_c <= 0:
+                    continue
+                cajas_c = max(1, round(unid_c / mult_c))
+
+                raw_lotes = str(lin.get("lotes") or "").strip()
+                if raw_lotes.startswith("[") and "]" in raw_lotes:
+                    lpn_extraido = raw_lotes[1:raw_lotes.index("]")].strip()
+                    if lpn_extraido:
+                        lpn_detectado = lpn_extraido
+                    raw_lotes = raw_lotes[raw_lotes.index("]") + 1:].strip()
+
+                lote_limpio = "S/L"
+                venc_limpio = "S/F"
+                if raw_lotes and raw_lotes.upper() not in ("NONE", "NULL"):
+                    primer_lote = raw_lotes.split("|")[0].split("(")[0].strip()
+                    if "/" in primer_lote:
+                        partes_lv = primer_lote.split("/")
+                        lote_limpio = partes_lv[0].strip() or "S/L"
+                        venc_limpio = partes_lv[1].strip() or "S/F"
+                    else:
+                        lote_limpio = primer_lote or "S/L"
+
+                lineas_pallet_pdf.append({
+                    "sku": sku_c,
+                    "cajas": cajas_c,
+                    "multiplo_aplicado": mult_c,
+                    "unidades_sueltas": 0,
+                    "unidades_totales": unid_c,
+                    "lote": lote_limpio,
+                    "fecha_vencimiento_cl": venc_limpio,
+                })
+
+            if not lineas_pallet_pdf:
+                notificar(f"No hay unidades válidas en {ov_base} para emitir el LPN.", "#D97706")
+                return
+
+            try:
+                ruta_pdf = generar_pdf_recepcion_15x10(lpn_detectado, lineas_pallet_pdf)
+                descargar_o_abrir_archivo(self.page, ruta_pdf)
+                notificar(f"Etiqueta 15x10 generada para {lpn_detectado} ({len(lineas_pallet_pdf)} SKUs).", "#047857")
+            except Exception as ex:
+                notificar(f"Error generando etiqueta LPN: {ex}", "#B91C1C")
+
         def exportar_ov_farmacia_excel_pdf(info_ov: dict = None):
             import textwrap
             import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-            objetivos = [info_ov] if info_ov else [r for r in registros_packing_db if r.get("es_farmacia")]
+            objetivos = [info_ov] if info_ov else list(registros_packing_db)
             if not objetivos:
-                notificar("No hay OVs de Farmacia (-FA) cargadas para exportar.", "#D97706")
+                notificar("No hay órdenes cargadas para exportar.", "#D97706")
                 return
 
             # 1. Cargar maestra_sku indexando tanto SKU completo como SKU raíz (sin '-'), leyendo codigo_barras y ean
@@ -913,10 +1164,26 @@ class PickingModulo:
 
                 for ov_reg in objetivos:
                     ov_raw = str(ov_reg.get("ov") or "OV").strip().upper()
-                    ov_limpia = ov_raw.removesuffix("-FA").strip()
+                    ov_base = ov_raw.split("(")[0].strip()
+                    ov_limpia = ov_base.removesuffix("-FA").strip()
                     ov_con_fa = f"{ov_limpia}-FA"
-                    cli_nom = str(ov_reg.get("cliente") or "CLIENTE FARMACIA").strip()
+                    cli_nom = str(ov_reg.get("cliente") or "CLIENTE / DESTINO").strip()
                     id_ov_db = ov_reg.get("id")
+
+                    # --- AQUÍ SE DETECTA AUTOMÁTICAMENTE EL LPN CONSOLIDADO ASOCIADO A LA OV/OT ---
+                    lpn_asociado_str = "S/LPN"
+                    try:
+                        r_lpn_rec = (
+                            supabase.table("registro_recepcion")
+                            .select("lpn")
+                            .or_(f"contenedor.eq.{ov_raw},contenedor.eq.{ov_base},contenedor.eq.{ov_limpia},contenedor.eq.{ov_con_fa}")
+                            .limit(5)
+                            .execute()
+                        )
+                        if r_lpn_rec.data:
+                            lpn_asociado_str = ", ".join(sorted({str(x["lpn"]) for x in r_lpn_rec.data if x.get("lpn")}))
+                    except Exception:
+                        pass
 
                     # Buscar id de la orden en netsuite_ordenes_venta si no estaba en memoria
                     if id_ov_db is None:
@@ -942,14 +1209,14 @@ class PickingModulo:
                         r_pl = (
                             supabase.table("wms_packing_lists_fa")
                             .select("*")
-                            .or_(f"numero_ov.eq.{ov_raw},numero_ov.eq.{ov_limpia},numero_ov.eq.{ov_con_fa}")
+                            .or_(f"numero_ov.ilike.{ov_limpia}%,numero_ov.eq.{ov_raw},numero_ov.eq.{ov_con_fa}")
                             .order("id", desc=True)
                             .limit(1)
                             .execute()
                         )
                         if r_pl.data:
                             row_pl = r_pl.data[0]
-                            if row_pl.get("cliente_nombre") and cli_nom in ("CLIENTE FARMACIA", "CLIENTE REGISTRADO", "SIN CLIENTE"):
+                            if row_pl.get("cliente_nombre") and cli_nom in ("CLIENTE FARMACIA", "CLIENTE REGISTRADO", "SIN CLIENTE", "CLIENTE / DESTINO"):
                                 cli_nom = str(row_pl["cliente_nombre"]).strip()
                             det_j = row_pl.get("detalle_json")
                             if isinstance(det_j, str):
@@ -960,6 +1227,8 @@ class PickingModulo:
                             if isinstance(det_j, list):
                                 for it_j in det_j:
                                     if isinstance(it_j, dict):
+                                        if lpn_asociado_str == "S/LPN" and it_j.get("lpn_consolidado"):
+                                            lpn_asociado_str = str(it_j.get("lpn_consolidado")).strip()
                                         s_j = str(it_j.get("sku") or "").strip().upper()
                                         s_j_base = s_j.split("-")[0].strip()
                                         inf_m = mapa_sku_info.get(s_j) or mapa_sku_info.get(s_j_base) or {}
@@ -1000,6 +1269,9 @@ class PickingModulo:
                                 if lotes_c.upper() in ("NONE", "NULL", ""):
                                     lotes_c = str(info_pl.get("lotes") or "").strip()
 
+                                if lpn_asociado_str == "S/LPN" and lotes_c.startswith("[") and "]" in lotes_c:
+                                    lpn_asociado_str = lotes_c[1:lotes_c.index("]")].strip()
+
                                 lineas_exportar.append({
                                     "sku": sku_c,
                                     "ean": ean_c,
@@ -1011,7 +1283,6 @@ class PickingModulo:
                         except Exception:
                             pass
 
-                    # Si no hubo filas en netsuite_detalle_ov, usar las de wms_packing_lists_fa o la memoria
                     if not lineas_exportar and lineas_desde_pl:
                         lineas_exportar = lineas_desde_pl
 
@@ -1033,57 +1304,38 @@ class PickingModulo:
                                 "pickeado": pick_c,
                                 "lotes": lotes_c,
                             })
-                        
 
-                    # Respaldo desde memoria enriquecido con maestra_sku
-                    if not lineas_exportar:
-                        for ld in (ov_reg.get("lineas_detalle") or []):
-                            sku_c = str(ld.get("sku") or "").strip().upper()
-                            info_m = mapa_sku_info.get(sku_c, {})
-                            ean_c = str(ld.get("ean") or info_m.get("ean") or sku_c).strip()
-                            desc_c = str(ld.get("descripcion") or info_m.get("descripcion") or "").strip()
-                            sol_c = int(float(ld.get("cantidad_pedida") or ld.get("cantidad") or 0))
-                            pick_c = int(float(ld.get("cantidad_pickeada") or 0))
-                            lotes_c = str(ld.get("lotes") or ld.get("lotes_pickeados") or ld.get("lote_asignado") or "").strip()
-                            lineas_exportar.append({
-                                "sku": sku_c,
-                                "ean": ean_c,
-                                "descripcion": desc_c,
-                                "solicitado": sol_c,
-                                "pickeado": pick_c,
-                                "lotes": lotes_c,
-                            })
-
-                    ruta_excel = os.path.join("reportes_farmacia", f"PackingList_FA_{ov_limpia}_{ts_arch}.xlsx")
-                    ruta_pdf = os.path.join("reportes_farmacia", f"PackingList_FA_{ov_limpia}_{ts_arch}.pdf")
+                    ruta_excel = os.path.join("reportes_farmacia", f"PackingList_{ov_limpia}_{ts_arch}.xlsx")
+                    ruta_pdf = os.path.join("reportes_farmacia", f"PackingList_{ov_limpia}_{ts_arch}.pdf")
 
                     # =========================================================================
-                    # A) GENERAR EXCEL (.XLSX) CON FORMATO CORPORATIVO LUDIPEK WMS
+                    # A) GENERAR EXCEL (.XLSX) CON COLUMNA DE LPN CONSOLIDADO
                     # =========================================================================
                     wb = openpyxl.Workbook()
                     ws = wb.active
-                    ws.title = "Packing_FA"
+                    ws.title = "Packing_List"
 
                     ws["A1"] = "LUDIPEK WMS"
                     ws["A1"].font = Font(name="Calibri", size=16, bold=True, color="1E3A8A")
 
-                    ws["G2"] = "PACKING LIST - FARMACIA (FA)"
-                    ws["G2"].font = Font(name="Calibri", size=14, bold=True, color="000000")
-                    ws["G2"].alignment = Alignment(horizontal="right")
+                    ws["H2"] = f"PACKING LIST OFICIAL | LPN: {lpn_asociado_str}"
+                    ws["H2"].font = Font(name="Calibri", size=14, bold=True, color="000000")
+                    ws["H2"].alignment = Alignment(horizontal="right")
 
-                    ws["G3"] = f"Fecha de Emisión: {fecha_emision_str}"
-                    ws["G3"].font = Font(name="Calibri", size=11, bold=False, color="64748B")
-                    ws["G3"].alignment = Alignment(horizontal="right")
+                    ws["H3"] = f"Fecha de Emisión: {fecha_emision_str}"
+                    ws["H3"].font = Font(name="Calibri", size=11, bold=False, color="64748B")
+                    ws["H3"].alignment = Alignment(horizontal="right")
 
                     encabezados = [
-                        "ORDEN DE VENTA",
-                        "CLIENTE",
+                        "ORDEN (OV/OT)",
+                        "LPN CONSOLIDADO",
+                        "CLIENTE / DESTINO",
                         "SKU",
                         "EAN / GTIN Base",
                         "Descripción",
                         "Solicitado",
                         "Pickeado",
-                        "Lotes Trazabilidad",
+                        "Lotes y Vencimientos",
                     ]
                     fill_hdr = PatternFill(fill_type="solid", start_color="1E3A8A", end_color="1E3A8A")
                     font_hdr = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -1100,6 +1352,7 @@ class PickingModulo:
                     for r_idx, lin in enumerate(lineas_exportar, start=6):
                         valores_fila = [
                             ov_limpia,
+                            lpn_asociado_str,
                             cli_nom,
                             lin["sku"],
                             lin["ean"],
@@ -1112,19 +1365,19 @@ class PickingModulo:
                             celda = ws.cell(row=r_idx, column=c_idx, value=val)
                             celda.font = Font(name="Calibri", size=11, bold=False)
                             celda.border = border_celda
-                            if c_idx in (1, 3, 4, 6, 7):
+                            if c_idx in (1, 2, 4, 5, 7, 8):
                                 celda.alignment = Alignment(horizontal="center", vertical="center")
                             else:
-                                celda.alignment = Alignment(horizontal="left", vertical="center", wrap_text=(c_idx == 8))
+                                celda.alignment = Alignment(horizontal="left", vertical="center", wrap_text=(c_idx == 9))
 
-                    anchos_cols = {"A": 15.0, "B": 35.0, "C": 15.0, "D": 22.0, "E": 45.0, "F": 11.0, "G": 13.0, "H": 70.0}
+                    anchos_cols = {"A": 15.0, "B": 20.0, "C": 32.0, "D": 15.0, "E": 20.0, "F": 42.0, "G": 11.0, "H": 12.0, "I": 65.0}
                     for col_l, w_val in anchos_cols.items():
                         ws.column_dimensions[col_l].width = w_val
 
                     wb.save(ruta_excel)
 
                     # =========================================================================
-                    # B) GENERAR PDF (.PDF) HORIZONTAL SIN DESBORDES DE BORDES
+                    # B) GENERAR PDF (.PDF) HORIZONTAL CON EL LPN EN LA CABECERA
                     # =========================================================================
                     cmds = [
                         "2 J",
@@ -1132,18 +1385,16 @@ class PickingModulo:
                         "BT /F1 22.00 Tf ET",
                         "q BT 42.52 531.99 Td 0.1176 0.2275 0.5412 rg (LUDIPEK) Tj ET Q",
                         "BT /F1 18.00 Tf ET",
-                        "q BT 519.40 536.02 Td 0 g (PACKING LIST - FARMACIA \\(FA\\)) Tj ET Q",
+                        "q BT 495.00 536.02 Td 0 g (PACKING LIST - CONSOLIDADO LPN) Tj ET Q",
                         "BT /F2 10.00 Tf ET",
                         f"q BT 625.00 517.16 Td 0.3922 0.4549 0.5451 rg (Fecha de Emisión: {esc_pdf(fecha_emision_str)}) Tj ET Q",
-                        # Recuadro gris de cabecera (x=39.69 a 802.21)
                         "0.9451 0.9608 0.9765 rg",
                         "0.7961 0.8353 0.8824 RG",
                         "39.69 481.89 762.52 -45.35 re B",
-                        # Clipping estricto dentro del recuadro gris para evitar que el cliente se salga del borde
                         "q 39.69 436.54 758.00 45.35 re W n",
-                        "BT /F1 12.00 Tf ET",
-                        f"BT 53.86 455.32 Td 0 g (ORDEN DE VENTA: {esc_pdf(ov_limpia)}) Tj ET",
-                        f"BT 310.00 455.32 Td 0 g (CLIENTE: {esc_pdf(cli_nom[:52])}) Tj ET",
+                        "BT /F1 11.50 Tf ET",
+                        f"BT 50.00 455.32 Td 0 g (ORDEN: {esc_pdf(ov_limpia)}   |   LPN: {esc_pdf(lpn_asociado_str[:22])}) Tj ET",
+                        f"BT 360.00 455.32 Td 0 g (DESTINO/CLIENTE: {esc_pdf(cli_nom[:44])}) Tj ET",
                         "Q",
                     ]
 
@@ -1175,7 +1426,6 @@ class PickingModulo:
                         ean_txt = str(lin.get("ean") or "").strip()
                         sku_txt = str(lin.get("sku") or "").strip()
 
-                        # Envolver textos largos en hasta 2 líneas para que entren dentro del ancho de cada celda
                         lotes_lines = textwrap.wrap(lotes_txt, width=46)[:2] if lotes_txt else [""]
                         desc_lines = textwrap.wrap(desc_txt, width=46)[:2] if desc_txt else [""]
                         ean_lines = textwrap.wrap(ean_txt, width=19)[:2] if ean_txt else [""]
@@ -1194,7 +1444,6 @@ class PickingModulo:
 
                         for lista_txt, (_, cx, cw, align_c) in celdas_vals:
                             cmds.append(f"q 0.5588 0.6353 0.7224 RG {cx:.2f} {y_curr:.2f} {cw:.2f} -{row_h:.2f} re S Q")
-                            # Máscara de recorte por celda (impide que cualquier letra cruce la línea divisoria)
                             cmds.append(f"q {cx+1.5:.2f} {y_curr-row_h+1.0:.2f} {cw-3.0:.2f} {row_h-2.0:.2f} re W n")
                             font_sz = 8.5 if len(lista_txt) > 1 else 9.0
                             cmds.append(f"BT /F2 {font_sz:.2f} Tf ET")
@@ -1212,7 +1461,6 @@ class PickingModulo:
 
                         y_curr -= row_h
 
-                    # Firmas al pie (PREPARADO POR / REVISADO QA)
                     y_sig = min(181.42, y_curr - 40.0)
                     if y_sig < 48.0:
                         y_sig = 48.0
@@ -1222,7 +1470,7 @@ class PickingModulo:
                         f"524.41 {y_sig:.2f} m 694.49 {y_sig:.2f} l S",
                         "BT /F1 10.00 Tf ET",
                         f"q BT 196.77 {y_sig - 18.59:.2f} Td 0 g (PREPARADO POR) Tj ET Q",
-                        f"q BT 574.44 {y_sig - 18.59:.2f} Td 0 g (REVISADO QA) Tj ET Q",
+                        f"q BT 574.44 {y_sig - 18.59:.2f} Td 0 g (AUDITADO PACKING / QA) Tj ET Q",
                     ])
 
                     stream_bytes = "\n".join(cmds).encode("latin-1")
@@ -1251,14 +1499,14 @@ class PickingModulo:
 
                     descargar_o_abrir_archivo(self.page, ruta_pdf)
                     descargar_o_abrir_archivo(self.page, ruta_excel)
-                    archivos_generados.append(f"PackingList_FA_{ov_limpia}")
+                    archivos_generados.append(f"PackingList_{ov_limpia}")
 
                 notificar(
                     f"Excel y PDF generados y descargados ({', '.join(archivos_generados[:2])}).",
                     "#047857",
                 )
             except Exception as ex:
-                notificar(f"Error al generar Packing List FA: {ex}", "#B91C1C")
+                notificar(f"Error al generar Packing List: {ex}", "#B91C1C")
 
         def renderizar_monitor_cortes_y_tablas():
             txt_t, col_t = obtener_tip_corte_actual()
@@ -1403,13 +1651,33 @@ class PickingModulo:
                             ft.DataCell(ft.Text(f"{r_norm['corte']} hrs", size=11, weight=ft.FontWeight.BOLD, color="#A78BFA")),
                             ft.DataCell(ft.Text(r_norm["cliente"][:26], size=11, color=TEXT_WHITE)),
                             ft.DataCell(badge_n),
-                            ft.DataCell(
-                                boton_primario(
-                                    "EMPACAR",
-                                    ft.Icons.INVENTORY_2_OUTLINED,
-                                    lambda ev, it=r_norm: cambiar_estado_packing_ov(it, "EMPACADO"),
-                                    "#047857" if est_n != "EMPACADO" else "#334155",
-                                    height_val=26,
+                           ft.DataCell(
+                                ft.Row(
+                                    [
+                                        boton_primario(
+                                            "EMPACAR",
+                                            ft.Icons.INVENTORY_2_OUTLINED,
+                                            lambda ev, it=r_norm: cambiar_estado_packing_ov(it, "EMPACADO"),
+                                            "#047857" if est_n != "EMPACADO" else "#334155",
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
+                                            "LPN 15x10",
+                                            ft.Icons.QR_CODE_2_ROUNDED,
+                                            lambda ev, it=r_norm: descargar_lpn_consolidado_ov(it),
+                                            ACCENT_TEAL,
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
+                                            "PACKING",
+                                            ft.Icons.DOWNLOAD_ROUNDED,
+                                            lambda ev, it=r_norm: exportar_ov_farmacia_excel_pdf(it),
+                                            "#B45309",
+                                            height_val=26,
+                                        ),
+                                    ],
+                                    spacing=5,
+                                    tight=True,
                                 )
                             ),
                         ]
@@ -1444,6 +1712,13 @@ class PickingModulo:
                                             height_val=26,
                                         ),
                                         boton_primario(
+                                            "LPN 15x10",
+                                            ft.Icons.QR_CODE_2_ROUNDED,
+                                            lambda ev, it=r_fa: descargar_lpn_consolidado_ov(it),
+                                            ACCENT_TEAL,
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
                                             "XLS / PDF",
                                             ft.Icons.DOWNLOAD_ROUNDED,
                                             lambda ev, it=r_fa: exportar_ov_farmacia_excel_pdf(it),
@@ -1451,7 +1726,7 @@ class PickingModulo:
                                             height_val=26,
                                         ),
                                     ],
-                                    spacing=6,
+                                    spacing=5,
                                     tight=True,
                                 )
                             ),
@@ -1640,12 +1915,16 @@ class PickingModulo:
                 df_ov = None
 
                 # Intento 1: Consulta SuiteQL compatible usando BUILTIN.DF(tl.item) y t.trandate
+                # En q_ov de extraer_ordenes_netsuite, cambia el SELECT y WHERE por:
                 q_ov = f"""
                     SELECT
                         t.id AS ov_internal_id,
+                        t.type AS tipo_doc,
                         t.tranid AS numero_ov,
+                        t.memo AS nota_ot,
                         TO_CHAR(t.trandate, 'YYYY-MM-DD') AS fecha_ov,
                         BUILTIN.DF(t.entity) AS cliente,
+                        BUILTIN.DF(t.transferlocation) AS bodega_destino,
                         BUILTIN.DF(tl.location) AS bodega_ns,
                         i.itemid AS sku,
                         BUILTIN.DF(tl.item) AS descripcion,
@@ -1653,7 +1932,7 @@ class PickingModulo:
                     FROM transaction t
                     INNER JOIN transactionline tl ON t.id = tl.transaction
                     INNER JOIN item i ON tl.item = i.id
-                    WHERE t.type = 'SalesOrd'
+                    WHERE t.type IN ('SalesOrd', 'TrnfrOrd')
                     AND tl.mainline = 'F'
                     AND t.trandate >= TO_DATE('{f_desde}', 'YYYY-MM-DD')
                     AND t.trandate <= TO_DATE('{f_hasta}', 'YYYY-MM-DD')
@@ -1669,22 +1948,26 @@ class PickingModulo:
                 if df_ov is None or df_ov.empty:
                     usando_fallback = True
                     q_fallback = """
-                        SELECT
-                            t.id AS ov_internal_id,
-                            t.tranid AS numero_ov,
-                            t.trandate AS fecha_ov,
-                            BUILTIN.DF(t.entity) AS cliente,
-                            i.itemid AS sku,
-                            BUILTIN.DF(tl.item) AS descripcion,
-                            ABS(tl.quantity) AS cantidad
-                        FROM transaction t
-                        INNER JOIN transactionline tl ON t.id = tl.transaction
-                        INNER JOIN item i ON tl.item = i.id
-                        WHERE t.type = 'SalesOrd'
-                        AND tl.mainline = 'F'
-                        ORDER BY t.id DESC
-                        FETCH FIRST 500 ROWS ONLY
-                    """
+                        t.id AS ov_internal_id,
+                        t.type AS tipo_doc,
+                        t.tranid AS numero_ov,
+                        t.memo AS nota_ot,
+                        TO_CHAR(t.trandate, 'YYYY-MM-DD') AS fecha_ov,
+                        BUILTIN.DF(t.entity) AS cliente,
+                        BUILTIN.DF(t.transferlocation) AS bodega_destino,
+                        BUILTIN.DF(tl.location) AS bodega_ns,
+                        i.itemid AS sku,
+                        BUILTIN.DF(tl.item) AS descripcion,
+                        ABS(tl.quantity) AS cantidad
+                    FROM transaction t
+                    INNER JOIN transactionline tl ON t.id = tl.transaction
+                    INNER JOIN item i ON tl.item = i.id
+                    WHERE t.type IN ('SalesOrd', 'TrnfrOrd')
+                    AND tl.mainline = 'F'
+                    AND t.trandate >= TO_DATE('{f_desde}', 'YYYY-MM-DD')
+                    AND t.trandate <= TO_DATE('{f_hasta}', 'YYYY-MM-DD')
+                    ORDER BY t.id DESC
+                """
                     try:
                         df_ov = consultar_netsuite(q_fallback, max_registros=1000)
                     except Exception:
@@ -1713,6 +1996,13 @@ class PickingModulo:
                     sku_str = str(fila.get("sku") or "").strip().upper()
                     if not sku_str or sku_str in ("NONE", "NULL"):
                         continue
+                    tipo_doc = str(fila.get("tipo_doc") or "").strip()
+                    es_traslado = (tipo_doc == "TrnfrOrd") or ("TRASLADO" in str(fila.get("nota_ot") or "").upper())
+                    if es_traslado:
+                        ov_base = ov_raw.replace("OT-", "").strip()
+                        ov_clave = f"OT-{ov_base}"
+                        cli_str = str(fila.get("bodega_destino") or fila.get("nota_ot") or "BODEGA CONCEPCION").strip()
+                        es_linea_fa = True  # Para que viaje directo al módulo de picking con trazabilidad de lote/vencimiento en el celular
 
                     fh_raw = str(fila.get("fecha_ov") or "")
                     f_ov_norm = normalizar_fecha_comparacion(fh_raw)
