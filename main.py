@@ -222,6 +222,15 @@ def main(page: ft.Page):
     # PANTALLA DE LOGIN INICIAL
     txt_login_user = ft.TextField(label="Usuario / RUT", width=300, prefix_icon=ft.Icons.PERSON)
     txt_login_pass = ft.TextField(label="Contraseña", width=300, password=True, can_reveal_password=True, prefix_icon=ft.Icons.LOCK)
+    dd_login_bodega = ft.Dropdown(
+        label="Bodega a Operar",
+        width=300,
+        value="Bodega Santiago",
+        options=[
+            ft.DropdownOption(key="Bodega Santiago", text="Bodega Santiago (CD Central)"),
+            ft.DropdownOption(key="Bodega Concepcion", text="Bodega Concepción (CCP)"),
+        ],
+    )
     lbl_login_error = ft.Text("", color="#B91C1C", size=12, weight=ft.FontWeight.BOLD)
 
     def mostrar_pantalla_login():
@@ -230,6 +239,7 @@ def main(page: ft.Page):
         page.bgcolor = "#292526"
         txt_login_pass.value = ""
         lbl_login_error.value = ""
+        txt_login_user, txt_login_pass, dd_login_bodega, lbl_login_error,
         page.add(pantalla_login)
         page.update()
 
@@ -259,7 +269,7 @@ def main(page: ft.Page):
                 intentos_fallidos = 0
                 page.usuario_actual = fila_u.get("nombre_completo") or user_val
                 page.rol_actual = str(fila_u.get("rol") or "OPERADOR").upper()
-                page.bodega_actual = str(fila_u.get("bodega") or "Bodega Santiago").strip()
+                page.bodega_actual = (dd_login_bodega.value or fila_u.get("bodega") or "Bodega Santiago").strip()
 
                 mod_pc_str = str(fila_u.get("modulos_pc") or fila_u.get("permisos_pc") or "").strip()
                 if not mod_pc_str and os.path.exists("config_permisos_wms.json"):
@@ -930,11 +940,37 @@ def main(page: ft.Page):
                     ),
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([
-                    btn_home,
+                    btn_home, dd_bodega_header,
                     menu_apps_rapido,
                     menu_usuario_header,
                 ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+        )
+
+        def cambiar_bodega_activa_pc(e):
+            page.bodega_actual = dd_bodega_header.value
+            notificar_global(page, f"Bodega activa cambiada a: {page.bodega_actual}", "#047857")
+            if indice_modulo_activo != -1:
+                accion_recarga = vistas_mapa[indice_modulo_activo][3]
+                if accion_recarga:
+                    accion_recarga()
+            else:
+                cargar_datos_vivos_panel_izquierdo()
+            page.update()
+
+        dd_bodega_header = ft.Dropdown(
+            width=185,
+            dense=True,
+            value=getattr(page, "bodega_actual", "Bodega Santiago"),
+            bgcolor="#232A2B",
+            border_color="#38BDF8",
+            text_style=ft.TextStyle(size=11, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+            content_padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+            options=[
+                ft.DropdownOption(key="Bodega Santiago", text="📍 Bodega Santiago"),
+                ft.DropdownOption(key="Bodega Concepcion", text="📍 Bodega Concepcion"),
+            ],
+            on_select=cambiar_bodega_activa_pc,
         )
 
         def adaptar_resolucion_automatica(e=None):
