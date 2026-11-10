@@ -782,12 +782,79 @@ class RecepcionModulo:
             dd_fecha_hist_rec.value = "TODAS"
             cargar_historico_recepciones()
 
+        historico_filtrado_actual = []
+
+        def descargar_pdf_historico_grupo(items_grupo: list, dia_cl: str, po_real_str: str):
+            """Genera y descarga directamente el PDF de recepción de un Día y PO específicos sin pedir correo."""
+            if not items_grupo:
+                notificar("No hay registros en este grupo para generar el PDF.", "#D97706")
+                return
+            try:
+                res_maestra = supabase.table("maestra_sku").select("sku, descripcion").execute()
+                mapa_desc = {
+                    str(r["sku"]).strip().upper(): str(r.get("descripcion") or "")
+                    for r in (res_maestra.data or [])
+                    if r.get("sku")
+                }
+            except Exception:
+                mapa_desc = {}
+
+            recepciones_raw = [x["raw"] for x in items_grupo]
+            primera = items_grupo[0]
+            prov_str = primera.get("proveedor") or "RECEPCIÓN HISTÓRICA"
+            cont_str = str(primera["raw"].get("contenedor") or primera.get("contenedor") or "N/A").strip()
+            po_limpia = po_real_str.replace("PO ", "").strip()
+
+            cabecera_hist = {
+                "codigo_asn": f"{po_real_str} (Recepción {dia_cl})",
+                "numero_oc": po_limpia,
+                "proveedor": prov_str,
+                "estado": f"RECEPCIONADO EL {dia_cl}",
+                "contenedor_referencia": cont_str,
+                "fecha_cierre": f"{dia_cl} {primera.get('hora') or ''}".strip(),
+            }
+
+            agrupado_sku = {}
+            for r in recepciones_raw:
+                s_k = str(r.get("sku") or "").strip().upper()
+                if not s_k:
+                    continue
+                unid_r = int(r.get("unidades_totales") or 0)
+                agrupado_sku[s_k] = agrupado_sku.get(s_k, 0) + unid_r
+
+            filas_conc_hist = [
+                {
+                    "sku": s_k,
+                    "descripcion": mapa_desc.get(s_k, "Ingreso Recepción"),
+                    "unidades_esperadas": u_tot,
+                    "unidades_recibidas": u_tot,
+                }
+                for s_k, u_tot in sorted(agrupado_sku.items())
+            ]
+
+            try:
+                ruta = generar_acta_recepcion_pdf(cabecera_hist, filas_conc_hist, recepciones_raw)
+                descargar_o_abrir_archivo(self.page, ruta)
+            except Exception as ex:
+                notificar(f"Error generando PDF histórico: {ex}", "#B91C1C")
+
+        def descargar_pdf_historico_filtrado(e=None):
+            """Descarga el PDF de recepción con todos los registros actualmente filtrados en el Consultor Histórico."""
+            if not historico_filtrado_actual:
+                notificar("No hay recepciones en la vista actual para descargar en PDF.", "#D97706")
+                return
+            primera = historico_filtrado_actual[0]
+            dia_lbl = dd_fecha_hist_rec.value if (dd_fecha_hist_rec.value and dd_fecha_hist_rec.value != "TODAS") else primera["dia_cl"]
+            po_unicas = sorted({x["po_real"] for x in historico_filtrado_actual})
+            po_lbl = po_unicas[0] if len(po_unicas) == 1 else f"{len(po_unicas)} POs"
+            descargar_pdf_historico_grupo(historico_filtrado_actual, dia_lbl, po_lbl)
+
         def cargar_historico_recepciones(e=None):
+            nonlocal historico_filtrado_actual
             filtro_h = (txt_buscar_hist_rec.value or "").strip().upper()
             filtro_fecha_txt = (txt_fecha_hist_rec.value or "").strip()
             dia_dropdown = dd_fecha_hist_rec.value or "TODAS"
 
-            # Si el usuario escribió una fecha manual (DD-MM-YYYY o YYYY-MM-DD), normalizarla a YYYY-MM-DD
             fecha_manual_iso = ""
             if filtro_fecha_txt:
                 for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
@@ -818,21 +885,24 @@ class RecepcionModulo:
                 # 2. Cargar recepciones físicas y enriquecer cada una con su Día de Recepción y N° PO Real
                 res_h = supabase.table("registro_recepcion").select("*").order("id", desc=True).limit(600).execute()
                 registros_enriquecidos = []
-                resumen_por_dia = {}      # {dia_iso: {"fecha_cl": ..., "lpns": set(), "unid": 0, "pos": set()}}
-                resumen_dia_y_po = {}     # {(dia_iso, po_display): {"fecha_cl": ..., "po": ..., "lpns": set(), "unid": 0}}
+                resumen_por_dia = {}
+                resumen_dia_y_po = {}
 
                 for r in (res_h.data or []):
                     dia_iso, dia_cl, hora_str = extraer_dia_y_hora_recepcion(r)
                     aid_str = str(r.get("asn_id")) if r.get("asn_id") is not None else ""
                     cont_rec = str(r.get("contenedor") or "").strip().upper()
+                    cont_cab = ""
 
                     if aid_str and aid_str in mapa_po_real:
                         info_po = mapa_po_real[aid_str]
                         po_real_str = info_po["po_display"]
                         prov_str = info_po["proveedor"]
+                        cont_cab = info_po["contenedor"]
                     elif cont_rec and not cont_rec.startswith("PO-"):
                         po_real_str = "SIN PO (LIBRE)"
                         prov_str = f"CONT: {cont_rec}"
+                        cont_cab = cont_rec
                     else:
                         po_real_str = f"PO {formatear_nombre_po(cont_rec)}" if cont_rec else "SIN PO"
                         prov_str = "RECEPCIÓN DIRECTA"
@@ -842,7 +912,6 @@ class RecepcionModulo:
                     unid_h = int(r.get("unidades_totales") or 0)
                     lote_c, qa_c = extraer_estado_qa(r.get("lote", "S/L"))
 
-                    # Acumular para el selector de Día de Recepción
                     if dia_iso not in resumen_por_dia:
                         resumen_por_dia[dia_iso] = {"fecha_cl": dia_cl, "lpns": set(), "unid": 0, "pos": set()}
                     resumen_por_dia[dia_iso]["lpns"].add(lpn_h)
@@ -862,6 +931,7 @@ class RecepcionModulo:
                         "hora": hora_str,
                         "po_real": po_real_str,
                         "proveedor": prov_str,
+                        "contenedor": cont_rec or cont_cab or "N/A",
                         "lpn": lpn_h,
                         "sku": sku_h,
                         "lote": lote_c,
@@ -881,7 +951,7 @@ class RecepcionModulo:
                     dia_dropdown = "TODAS"
                     dd_fecha_hist_rec.value = "TODAS"
 
-                # 4. Construir chips rápidos de Recepción por Día y PO (muestra la misma PO separada si se recibió en 2 días)
+                # 4. Construir chips rápidos de Recepción por Día y PO
                 fila_resumen_dias_hist.controls.clear()
                 for (d_iso, po_s), inf_dp in sorted(resumen_dia_y_po.items(), key=lambda x: (x[0][0], x[0][1]), reverse=True)[:10]:
                     es_dia_sel = (dia_dropdown == d_iso)
@@ -908,7 +978,7 @@ class RecepcionModulo:
                         )
                     )
 
-                # 5. Filtrar y ordenar por (dia_iso DESC, po_real ASC, id DESC) para separar visualmente por día
+                # 5. Filtrar y ordenar por (dia_iso DESC, po_real ASC, id DESC)
                 filtrados = []
                 for item in registros_enriquecidos:
                     if dia_dropdown != "TODAS" and item["dia_iso"] != dia_dropdown:
@@ -925,8 +995,9 @@ class RecepcionModulo:
                     filtrados.append(item)
 
                 filtrados.sort(key=lambda x: (x["dia_iso"], x["po_real"], int(x["raw"].get("id") or 0)), reverse=True)
+                historico_filtrado_actual = filtrados
 
-                # 6. Llenar tabla insertando una fila separadora cada vez que cambia el Día de Recepción (y PO)
+                # 6. Llenar tabla con botón "PDF RECEPCIÓN" en cada separador de (Día + PO)
                 tabla_historico_recepciones.rows.clear()
                 grupo_actual = None
 
@@ -955,7 +1026,15 @@ class RecepcionModulo:
                                     ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
                                     ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
                                     ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
-                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                    ft.DataCell(
+                                        boton_primario(
+                                            "PDF RECEPCIÓN",
+                                            ft.Icons.PICTURE_AS_PDF_OUTLINED,
+                                            lambda ev, g_it=list(lotes_grupo), d_c=item["dia_cl"], p_r=item["po_real"]: descargar_pdf_historico_grupo(g_it, d_c, p_r),
+                                            "#047857",
+                                            height_val=26,
+                                        )
+                                    ),
                                 ],
                             )
                         )
@@ -1003,157 +1082,14 @@ class RecepcionModulo:
                 cod_po = obtener_nombre_po_cabecera(cabecera_asn_actual)
                 ruta = generar_pdf_masivo_lpns_po(cod_po, recepciones_asn_actual)
                 descargar_o_abrir_archivo(self.page, ruta)
-                lpns_cnt = len({r.get("lpn") for r in recepciones_asn_actual if r.get("lpn")})
-                notificar(f"PDF generado con las {lpns_cnt} etiquetas LPN de PO {cod_po}: {ruta}", "#047857")
             except Exception as ex:
                 notificar(f"Error al imprimir lote de LPNs: {ex}", "#B91C1C")
 
-        def abrir_modal_enviar_correo_acta(cabecera_po: dict, lineas_conciliacion: list, ruta_pdf_generado: str = None):
-            oc_num = obtener_nombre_po_cabecera(cabecera_po)
-            prov_nom = str(cabecera_po.get("proveedor") or "PROVEEDOR").strip()
-            cont_ref = str(cabecera_po.get("contenedor_referencia") or "").strip()
-            fecha_hoy = datetime.now().strftime("%d-%m-%Y %H:%M")
-
-            tot_esp = sum(int(x.get("unidades_esperadas") or 0) for x in lineas_conciliacion)
-            tot_rec = sum(int(x.get("unidades_recibidas") or 0) for x in lineas_conciliacion)
-            dif_tot = tot_rec - tot_esp
-
-            lineas_texto = []
-            for l in lineas_conciliacion:
-                sku_l = l.get("sku", "-")
-                esp_l = int(l.get("unidades_esperadas") or 0)
-                rec_l = int(l.get("unidades_recibidas") or 0)
-                dif_l = rec_l - esp_l
-                est_l = "OK" if dif_l == 0 else (f"SOBRANTE +{dif_l}" if dif_l > 0 else f"FALTANTE {dif_l}")
-                lineas_texto.append(f"• {sku_l}: Esperado {esp_l} UN | Recibido {rec_l} UN ({est_l})")
-
-            cuerpo_default = (
-                f"Estimado equipo,\n\n"
-                f"Se adjunta resumen del Acta Oficial de Recepción procesada en LUDIPEK WMS:\n\n"
-                f"• Orden de Compra (PO): {oc_num}\n"
-                f"• Proveedor: {prov_nom}\n"
-                + (f"• Contenedor / Guía: {cont_ref}\n" if cont_ref else "")
-                + f"• Fecha / Hora: {fecha_hoy}\n"
-                f"• Total Esperado: {tot_esp} UN | Total Recibido: {tot_rec} UN (Diferencia: {dif_tot} UN)\n\n"
-                f"Detalle por SKU:\n" + "\n".join(lineas_texto[:25]) + "\n\n"
-                f"Saludos cordiales,\nTorre de Control LUDIPEK WMS"
-            )
-
-            txt_mail_para = texto_dark("Para (Correos separados por coma)", width=620, value=os.environ.get("WMS_EMAIL_DESTINO", "compras@ludipek.cl, logistica@ludipek.cl"))
-            txt_mail_cc = texto_dark("CC (Opcional)", width=620, value="")
-            txt_mail_asunto = texto_dark(
-                "Asunto del Correo",
-                width=620,
-                value=f"Acta Oficial de Recepción PO {oc_num} - {prov_nom} | LUDIPEK WMS",
-            )
-            txt_mail_cuerpo = ft.TextField(
-                label="Mensaje / Resumen de Conciliación",
-                value=cuerpo_default,
-                multiline=True,
-                min_lines=7,
-                max_lines=10,
-                width=620,
-                text_style=ft.TextStyle(size=11, color=TEXT_WHITE),
-                bgcolor=BG_INPUT,
-                border_color=BORDER_COLOR,
-            )
-            lbl_estado_mail = ft.Text(
-                f"Archivo PDF generado: {os.path.basename(ruta_pdf_generado)}" if ruta_pdf_generado else "Resumen listo para enviar por correo.",
-                size=11,
-                color="#34D399",
-            )
-
-            def abrir_cliente_correo_mailto(ev=None):
-                dest = (txt_mail_para.value or "").strip()
-                cc = (txt_mail_cc.value or "").strip()
-                subj = urllib.parse.quote(txt_mail_asunto.value or "")
-                body = urllib.parse.quote(txt_mail_cuerpo.value or "")
-                page.launch_url(f"mailto:{dest}?cc={cc}&subject={subj}&body={body}")
-                dlg_correo.open = False
-                page.update()
-                notificar("Se abrió su cliente de correo con el resumen del Acta.", ACCENT_TEAL)
-
-            def enviar_via_smtp_con_pdf(ev=None):
-                dest_raw = (txt_mail_para.value or "").strip()
-                if not dest_raw:
-                    notificar("Ingrese al menos un destinatario en 'Para'.", "#D97706")
-                    return
-
-                smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-                smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-                smtp_user = os.environ.get("SMTP_USER", "")
-                smtp_pass = os.environ.get("SMTP_PASS", "")
-
-                if not smtp_user or not smtp_pass:
-                    abrir_cliente_correo_mailto()
-                    return
-
-                try:
-                    import smtplib
-                    from email.message import EmailMessage
-
-                    msg = EmailMessage()
-                    msg["Subject"] = txt_mail_asunto.value or f"Acta Recepción PO {oc_num}"
-                    msg["From"] = smtp_user
-                    lista_para = [x.strip() for x in dest_raw.replace(";", ",").split(",") if x.strip()]
-                    msg["To"] = ", ".join(lista_para)
-                    if (txt_mail_cc.value or "").strip():
-                        lista_cc = [x.strip() for x in txt_mail_cc.value.replace(";", ",").split(",") if x.strip()]
-                        msg["Cc"] = ", ".join(lista_cc)
-                    msg.set_content(txt_mail_cuerpo.value or "")
-
-                    if ruta_pdf_generado and os.path.exists(ruta_pdf_generado):
-                        with open(ruta_pdf_generado, "rb") as f_pdf:
-                            msg.add_attachment(
-                                f_pdf.read(),
-                                maintype="application",
-                                subtype="pdf",
-                                filename=os.path.basename(ruta_pdf_generado),
-                            )
-
-                    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
-                        server.starttls()
-                        server.login(smtp_user, smtp_pass)
-                        server.send_message(msg)
-
-                    dlg_correo.open = False
-                    page.update()
-                    notificar(f"Correo enviado con el Acta PDF adjunta a {', '.join(lista_para)}.", "#047857")
-                except Exception as ex_smtp:
-                    lbl_estado_mail.value = f"Aviso SMTP ({ex_smtp}). Abriendo cliente de correo..."
-                    lbl_estado_mail.color = "#F87171"
-                    page.update()
-                    abrir_cliente_correo_mailto()
-
-            dlg_correo = ft.AlertDialog(
-                modal=True,
-                bgcolor="#1E293B",
-                title=ft.Row(
-                    [
-                        ft.Icon(ft.Icons.MARK_EMAIL_READ_ROUNDED, color=ACCENT_CYAN, size=24),
-                        ft.Text(f"Enviar Acta Oficial por Correo (PO {oc_num})", size=16, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ],
-                    spacing=8,
-                ),
-                content=ft.Container(
-                    width=640,
-                    content=ft.Column([txt_mail_para, txt_mail_cc, txt_mail_asunto, txt_mail_cuerpo, lbl_estado_mail], spacing=8, tight=True),
-                ),
-                actions=[
-                    ft.TextButton("CERRAR", on_click=lambda e: page.pop_dialog() (setattr(dlg_correo, "open", False), page.update())),
-                    boton_primario("ABRIR EN OUTLOOK / CORREO", ft.Icons.OPEN_IN_NEW_ROUNDED, abrir_cliente_correo_mailto, ACCENT_BLUE, height_val=34),
-                    boton_primario("ENVIAR CORREO (PDF ADJUNTO)", ft.Icons.SEND_ROUNDED, enviar_via_smtp_con_pdf, "#047857", height_val=34),
-                ],
-                actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            )
-            page.show_dialog(dlg_correo)
-            page.update()
-
         def click_exportar_pdf_recepcion(e=None):
+            """Genera y descarga directamente el Acta PDF de la PO activa sin pedir correo ni abrir AlertDialog."""
             if not filas_conciliacion_export and not recepciones_asn_actual:
                 notificar("No hay datos de recepción activos para exportar a PDF.", "#D97706")
                 return
-
             try:
                 ruta = generar_acta_recepcion_pdf(
                     cabecera_asn_actual,
@@ -1161,9 +1097,22 @@ class RecepcionModulo:
                     recepciones_asn_actual,
                 )
                 descargar_o_abrir_archivo(self.page, ruta)
-                notificar(f"Acta de Recepción de PO generada: {ruta}", "#047857")
             except Exception as ex:
                 notificar(f"Error generando PDF: {ex}", "#B91C1C")
+
+        def enviar_correo_acta_po(e=None):
+            """Genera el Acta PDF y abre directamente el correo (Outlook o cliente del sistema) sin usar AlertDialog ni launch_url."""
+            if not filas_conciliacion_export and not recepciones_asn_actual:
+                notificar("No hay datos de recepción activos para enviar por correo.", "#D97706")
+                return
+            try:
+                ruta = generar_acta_recepcion_pdf(
+                    cabecera_asn_actual,
+                    filas_conciliacion_export,
+                    recepciones_asn_actual,
+                )
+            except Exception as ex:
+                notificar(f"Error generando PDF para correo: {ex}", "#B91C1C")
                 return
 
             cod_po_str = obtener_nombre_po_cabecera(cabecera_asn_actual)
@@ -1180,69 +1129,32 @@ class RecepcionModulo:
                 f"Saludos cordiales,\nControl Tower WMS"
             )
 
-            def cerrar_dlg(ev=None):
-                dialogo_correo.open = False
+            try:
+                import pythoncom
+                import win32com.client
+                pythoncom.CoInitialize()
+                outlook = win32com.client.Dispatch("outlook.application")
+                mail = outlook.CreateItem(0)
+                mail.To = "compras@ludipek.cl; logistica@ludipek.cl"
+                mail.Subject = asunto_str
+                mail.Body = cuerpo_str
+                mail.Attachments.Add(os.path.abspath(ruta))
+                mail.Display(True)
+                notificar(f"Borrador de Outlook abierto con el Acta de PO {cod_po_str} adjunta.", "#047857")
+            except Exception:
+                import urllib.parse
+                import webbrowser
+                asunto_q = urllib.parse.quote(asunto_str)
+                cuerpo_q = urllib.parse.quote(cuerpo_str)
+                mailto_link = f"mailto:compras@ludipek.cl;logistica@ludipek.cl?subject={asunto_q}&body={cuerpo_q}"
                 try:
-                    self.page.pop_dialog()
+                    if os.name == "nt":
+                        os.startfile(mailto_link)
+                    else:
+                        webbrowser.open(mailto_link)
                 except Exception:
                     pass
-                self.page.update()
-
-            def enviar_correo(ev=None):
-                cerrar_dlg()
-                notificar("Preparando correo con el Acta PDF...", ACCENT_TEAL)
-                try:
-                    import pythoncom
-                    import win32com.client
-                    pythoncom.CoInitialize()
-                    outlook = win32com.client.Dispatch("outlook.application")
-                    mail = outlook.CreateItem(0)
-                    mail.To = "compras@ludipek.cl; logistica@ludipek.cl"
-                    mail.Subject = asunto_str
-                    mail.Body = cuerpo_str
-                    mail.Attachments.Add(os.path.abspath(ruta))
-                    mail.Display(True)
-                    notificar("Borrador de Outlook abierto con el PDF adjunto.", "#047857")
-                except Exception:
-                    # Respaldo automático (Web / Nuevo Outlook / Sin pywin32): abre cliente de correo con asunto y cuerpo listos
-                    import urllib.parse
-                    asunto_q = urllib.parse.quote(asunto_str)
-                    cuerpo_q = urllib.parse.quote(cuerpo_str)
-                    self.page.launch_url(
-                        f"mailto:compras@ludipek.cl;logistica@ludipek.cl?subject={asunto_q}&body={cuerpo_q}"
-                    )
-                    notificar(
-                        "Cliente de correo abierto (adjunte el PDF recién descargado).",
-                        "#0284C7",
-                    )
-
-            dialogo_correo = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("¿Enviar Acta por Correo?", color=TEXT_WHITE, weight=ft.FontWeight.BOLD),
-                content=ft.Text(
-                    f"¿Deseas abrir un borrador de correo para Compras y Logística con el Acta de la PO {cod_po_str}?",
-                    color=TEXT_MUTED,
-                ),
-                bgcolor=BG_CARD,
-                actions=[
-                    ft.TextButton("Cancelar", on_click=cerrar_dlg),
-                    boton_primario(
-                        "Sí, Redactar Correo",
-                        ft.Icons.EMAIL_OUTLINED,
-                        enviar_correo,
-                        ACCENT_TEAL,
-                        height_val=32,
-                    ),
-                ],
-            )
-
-            try:
-                self.page.show_dialog(dialogo_correo)
-            except Exception:
-                if dialogo_correo not in self.page.overlay:
-                    self.page.overlay.append(dialogo_correo)
-                dialogo_correo.open = True
-            self.page.update()                
+                descargar_o_abrir_archivo(self.page, ruta)                
 
 
         def click_exportar_excel_recepcion(e=None):
@@ -2287,6 +2199,7 @@ class RecepcionModulo:
                                         [
                                             sw_auto_sync_rf,
                                             boton_primario("ACTA PDF", ft.Icons.PICTURE_AS_PDF_OUTLINED, click_exportar_pdf_recepcion, ACCENT_TEAL, height_val=30),
+                                            boton_primario("ENVIAR CORREO", ft.Icons.EMAIL_OUTLINED, enviar_correo_acta_po, "#0F766E", height_val=30),
                                             boton_primario("EXCEL", ft.Icons.TABLE_VIEW_OUTLINED, click_exportar_excel_recepcion, "#0284C7", height_val=30),
                                             boton_primario("IMPRIMIR LPNs (15x10)", ft.Icons.PRINT_ROUNDED, imprimir_todos_los_lpns_po_activa, "#4F46E5", height_val=30),
                                         ],
@@ -2329,6 +2242,7 @@ class RecepcionModulo:
                                     txt_buscar_hist_rec,
                                     boton_primario("FILTRAR", ft.Icons.SEARCH_ROUNDED, cargar_historico_recepciones, ACCENT_TEAL),
                                     boton_primario("LIMPIAR", ft.Icons.FILTER_ALT_OFF_OUTLINED, limpiar_filtros_historico, "#475569"),
+                                    boton_primario("DESCARGAR PDF RECEPCIÓN", ft.Icons.PICTURE_AS_PDF_OUTLINED, descargar_pdf_historico_filtrado, "#047857"),
                                 ],
                                 spacing=8,
                                 wrap=True,

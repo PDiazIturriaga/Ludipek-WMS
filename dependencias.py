@@ -953,7 +953,7 @@ def verificar_password_seguro(password_ingresada: str, password_guardada: str) -
 
 
 def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):
-    """Publica el archivo en assets/descargas/ y lo abre/descarga en el navegador web."""
+    """Abre el archivo en PC y publica un enlace de descarga directa en el navegador sin usar page.launch_url."""
     if not ruta_archivo or not os.path.exists(ruta_archivo):
         return
     try:
@@ -963,7 +963,43 @@ def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):
         destino_pub = os.path.join(carpeta_pub, nombre_limpio)
         if os.path.abspath(ruta_archivo) != os.path.abspath(destino_pub):
             shutil.copy2(ruta_archivo, destino_pub)
+
+        # 1. En Windows (PC Torre de Control), abrir el PDF/Excel de inmediato
+        if os.name == "nt":
+            try:
+                os.startfile(os.path.abspath(ruta_archivo))
+            except Exception:
+                pass
+
+        # 2. En navegador Web, mostrar botón con atributo nativo url= (compatible con Flet 0.80+)
         if page is not None:
-            page.launch_url(f"/descargas/{urllib.parse.quote(nombre_limpio)}")
+            url_rel = f"/descargas/{urllib.parse.quote(nombre_limpio)}"
+            page.show_dialog(
+                ft.SnackBar(
+                    bgcolor="#047857",
+                    content=ft.Row(
+                        [
+                            ft.Text(
+                                f"Archivo listo: {nombre_limpio}",
+                                color=ft.Colors.WHITE,
+                                weight=ft.FontWeight.BOLD,
+                                size=12,
+                                expand=True,
+                            ),
+                            ft.TextButton(
+                                content=ft.Text(
+                                    "📥 ABRIR / DESCARGAR PDF",
+                                    color="#FEF08A",
+                                    weight=ft.FontWeight.W_900,
+                                    size=12,
+                                ),
+                                url=url_rel,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                )
+            )
+            page.update()
     except Exception as ex_dl:
-        print(f"[WARN] Error enviando archivo al navegador: {ex_dl}")
+        print(f"[WARN] Error preparando archivo: {ex_dl}")
