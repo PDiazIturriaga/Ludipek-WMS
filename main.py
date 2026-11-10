@@ -218,10 +218,17 @@ def main(page: ft.Page):
     page.padding = 0
     page.window.maximized = True
     page.overlay.clear()
+    page.bodega_actual = "Bodega Santiago"
 
-    # PANTALLA DE LOGIN INICIAL
+    # PANTALLA DE LOGIN INICIAL CON SELECTOR DE BODEGA
     txt_login_user = ft.TextField(label="Usuario / RUT", width=300, prefix_icon=ft.Icons.PERSON)
-    txt_login_pass = ft.TextField(label="Contraseña", width=300, password=True, can_reveal_password=True, prefix_icon=ft.Icons.LOCK)
+    txt_login_pass = ft.TextField(
+        label="Contraseña",
+        width=300,
+        password=True,
+        can_reveal_password=True,
+        prefix_icon=ft.Icons.LOCK,
+    )
     dd_login_bodega = ft.Dropdown(
         label="Bodega a Operar",
         width=300,
@@ -239,7 +246,6 @@ def main(page: ft.Page):
         page.bgcolor = "#292526"
         txt_login_pass.value = ""
         lbl_login_error.value = ""
-        txt_login_user, txt_login_pass, dd_login_bodega, lbl_login_error,
         page.add(pantalla_login)
         page.update()
 
@@ -301,25 +307,41 @@ def main(page: ft.Page):
     txt_login_pass.on_submit = intentar_login
 
     pantalla_login = ft.Container(
-        expand=True, alignment=ft.Alignment.CENTER, bgcolor="#292526",
+        expand=True,
+        alignment=ft.Alignment.CENTER,
+        bgcolor="#292526",
         content=ft.Container(
-            padding=40, width=400, bgcolor=ft.Colors.WHITE, border_radius=16,
+            padding=40,
+            width=400,
+            bgcolor=ft.Colors.WHITE,
+            border_radius=16,
             shadow=ft.BoxShadow(blur_radius=30, color="#73000000", spread_radius=5, offset=ft.Offset(0, 10)),
-            content=ft.Column([
-                ft.Icon(ft.Icons.ACCOUNT_CIRCLE_ROUNDED, size=80, color="#507572"),
-                ft.Text("INICIAR SESIÓN", size=24, weight=ft.FontWeight.W_900, color="#273132"),
-                ft.Text("LUDIPEK WMS CLOUD", size=12, color="#64748B", weight=ft.FontWeight.BOLD),
-                ft.Divider(height=25, color="transparent"),
-                txt_login_user, txt_login_pass, lbl_login_error,
-                ft.Divider(height=15, color="transparent"),
-                ft.Button(
-                    content=ft.Text("INGRESAR A WMS", weight=ft.FontWeight.BOLD),
-                    bgcolor="#507572", color=ft.Colors.WHITE, width=300, height=48,
-                    on_click=intentar_login,
-                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))
-                )
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True, spacing=10)
-        )
+            content=ft.Column(
+                [
+                    ft.Icon(ft.Icons.ACCOUNT_CIRCLE_ROUNDED, size=80, color="#507572"),
+                    ft.Text("INICIAR SESIÓN", size=24, weight=ft.FontWeight.W_900, color="#273132"),
+                    ft.Text("LUDIPEK WMS CLOUD", size=12, color="#64748B", weight=ft.FontWeight.BOLD),
+                    ft.Divider(height=18, color="transparent"),
+                    txt_login_user,
+                    txt_login_pass,
+                    dd_login_bodega,
+                    lbl_login_error,
+                    ft.Divider(height=10, color="transparent"),
+                    ft.Button(
+                        content=ft.Text("INGRESAR A WMS", weight=ft.FontWeight.BOLD),
+                        bgcolor="#507572",
+                        color=ft.Colors.WHITE,
+                        width=300,
+                        height=48,
+                        on_click=intentar_login,
+                        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)),
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                tight=True,
+                spacing=10,
+            ),
+        ),
     )
 
     page.bgcolor = "#292526"
@@ -892,6 +914,32 @@ def main(page: ft.Page):
             sesion_activa = False
             mostrar_pantalla_login()
 
+        def cambiar_bodega_activa_pc(e=None):
+            page.bodega_actual = dd_bodega_header.value or "Bodega Santiago"
+            notificar_global(page, f"Bodega activa cambiada a: {page.bodega_actual}", "#047857")
+            if indice_modulo_activo != -1:
+                accion_recarga = vistas_mapa[indice_modulo_activo][3]
+                if accion_recarga:
+                    accion_recarga()
+            else:
+                cargar_datos_vivos_panel_izquierdo()
+            page.update()
+
+        dd_bodega_header = ft.Dropdown(
+            width=190,
+            dense=True,
+            value=getattr(page, "bodega_actual", "Bodega Santiago"),
+            bgcolor="#232A2B",
+            border_color="#38BDF8",
+            text_style=ft.TextStyle(size=11, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+            content_padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+            options=[
+                ft.DropdownOption(key="Bodega Santiago", text="📍 Bodega Santiago"),
+                ft.DropdownOption(key="Bodega Concepcion", text="📍 Bodega Concepcion"),
+            ],
+            on_select=cambiar_bodega_activa_pc,
+        )
+
         # --- MENÚ DE PERFIL Y ESTADO DE SISTEMA (Icono de Usuario + Nombre ▼) ---
         menu_usuario_header = ft.PopupMenuButton(
             tooltip="Perfil de Usuario y Sesión",
@@ -919,58 +967,47 @@ def main(page: ft.Page):
         )
 
         encabezado = ft.Container(
-            bgcolor=COLOR_HEADER, padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-            content=ft.Row([
-                ft.Row([
-                    ft.IconButton(
-                        icon=ft.Icons.MENU,
-                        icon_color=ft.Colors.WHITE,
-                        tooltip="Mostrar / Ocultar Panel Lateral (Modo Pantalla Completa)",
-                        on_click=toggle_menu_tres_rayas,
+            bgcolor=COLOR_HEADER,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+            content=ft.Row(
+                [
+                    ft.Row(
+                        [
+                            ft.IconButton(
+                                icon=ft.Icons.MENU,
+                                icon_color=ft.Colors.WHITE,
+                                tooltip="Mostrar / Ocultar Panel Lateral (Modo Pantalla Completa)",
+                                on_click=toggle_menu_tres_rayas,
+                            ),
+                            ft.Container(
+                                ink=True,
+                                on_click=volver_al_home,
+                                tooltip="Ir al Inicio",
+                                content=ft.Row(
+                                    [
+                                        ft.Text("LUDIPEK", color=ft.Colors.WHITE, size=18, weight=ft.FontWeight.W_900),
+                                        ft.Container(width=10),
+                                        ft.Text("WMS Ludipek", color="#94A3B8", size=13),
+                                    ],
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                ),
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    ft.Container(
-                        ink=True,
-                        on_click=volver_al_home,
-                        tooltip="Ir al Inicio",
-                        content=ft.Row([
-                            ft.Text("LUDIPEK", color=ft.Colors.WHITE, size=18, weight=ft.FontWeight.W_900),
-                            ft.Container(width=10),
-                            ft.Text("WMS Ludipek", color="#94A3B8", size=13),
-                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Row(
+                        [
+                            dd_bodega_header,
+                            btn_home,
+                            menu_apps_rapido,
+                            menu_usuario_header,
+                        ],
+                        spacing=10,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Row([
-                    btn_home, dd_bodega_header,
-                    menu_apps_rapido,
-                    menu_usuario_header,
-                ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-        )
-
-        def cambiar_bodega_activa_pc(e):
-            page.bodega_actual = dd_bodega_header.value
-            notificar_global(page, f"Bodega activa cambiada a: {page.bodega_actual}", "#047857")
-            if indice_modulo_activo != -1:
-                accion_recarga = vistas_mapa[indice_modulo_activo][3]
-                if accion_recarga:
-                    accion_recarga()
-            else:
-                cargar_datos_vivos_panel_izquierdo()
-            page.update()
-
-        dd_bodega_header = ft.Dropdown(
-            width=185,
-            dense=True,
-            value=getattr(page, "bodega_actual", "Bodega Santiago"),
-            bgcolor="#232A2B",
-            border_color="#38BDF8",
-            text_style=ft.TextStyle(size=11, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
-            content_padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-            options=[
-                ft.DropdownOption(key="Bodega Santiago", text="📍 Bodega Santiago"),
-                ft.DropdownOption(key="Bodega Concepcion", text="📍 Bodega Concepcion"),
-            ],
-            on_select=cambiar_bodega_activa_pc,
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
         )
 
         def adaptar_resolucion_automatica(e=None):
