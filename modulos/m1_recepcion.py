@@ -1329,10 +1329,10 @@ class RecepcionModulo:
         def descargar_po_netsuite_inbound(e=None):
             po_input = (txt_po_netsuite.value or "").strip().upper()
             if not po_input:
-                notificar("Ingrese un número de PO (Ej: 1076) para consultar.", "#D97706")
+                notificar("Ingrese un número de PO (Ej: 174) para consultar.", "#D97706")
                 return
 
-            # Extraer solo el número limpio por si escribieron "PO-1076" o "OC1076"
+            # Extraer solo el número limpio por si escribieron "PO-174" o "OC174"
             po_num_limpio = po_input.replace("PO-", "").replace("OC-", "").replace("PO", "").replace("OC", "").strip()
 
             if not NETSUITE_CONECTADO:
@@ -1349,7 +1349,7 @@ class RecepcionModulo:
                     BUILTIN.DF(t.entity) AS proveedor,
                     BUILTIN.DF(t.status) AS estado_ns,
                     i.itemid AS sku,
-                    BUILTIN.DF(i.id) AS descripcion,
+                    BUILTIN.DF(tl.item) AS descripcion,
                     ABS(tl.quantity) AS cantidad
                 FROM transaction t
                 INNER JOIN transactionline tl ON t.id = tl.transaction
@@ -1418,7 +1418,6 @@ class RecepcionModulo:
             total_skus = len(lista_lineas_po)
             total_unidades = sum(x["unidades_esperadas"] for x in lista_lineas_po)
 
-            # Construir tabla visual de previsualización para el modal
             filas_preview = []
             for item_p in lista_lineas_po:
                 cajas_est = max(1, round(item_p["unidades_esperadas"] / item_p["multiplo"]))
@@ -1460,11 +1459,17 @@ class RecepcionModulo:
             def confirmar_uso_po(ev):
                 cerrar_modal_po()
                 try:
-                    cod_asn = f"ASN-PO-{num_oc_real}"
+                    cod_asn = f"PO-{num_oc_real}"
                     bodega_usr = getattr(page, "bodega_actual", "Bodega Santiago")
 
-                    # 1. Verificar si ya existe en asn_cabecera o crearla
-                    res_ex = supabase.table("asn_cabecera").select("id").eq("numero_oc", num_oc_real).limit(1).execute()
+                    # 1. Verificar si ya existe en asn_cabecera (por numero_oc o codigo_asn)
+                    res_ex = (
+                        supabase.table("asn_cabecera")
+                        .select("id")
+                        .or_(f"numero_oc.eq.{num_oc_real},codigo_asn.eq.{cod_asn},codigo_asn.eq.ASN-PO-{num_oc_real}")
+                        .limit(1)
+                        .execute()
+                    )
                     if res_ex.data:
                         asn_id_nuevo = res_ex.data[0]["id"]
                         supabase.table("asn_cabecera").update({
@@ -1472,17 +1477,27 @@ class RecepcionModulo:
                             "estado": "EN_RECEPCION",
                         }).eq("id", asn_id_nuevo).execute()
                     else:
-                        payload_cab = {
+                        # Payload base 100% compatible con las columnas reales de asn_cabecera
+                        payload_base = {
                             "codigo_asn": cod_asn,
                             "numero_oc": num_oc_real,
                             "proveedor": proveedor_str,
-                            "fecha_esperada": fecha_oc_str,
                             "estado": "EN_RECEPCION",
                         }
                         try:
-                            res_ins = supabase.table("asn_cabecera").insert({**payload_cab, "bodega": bodega_usr}).execute()
+                            res_ins = supabase.table("asn_cabecera").insert({
+                                **payload_base,
+                                "fecha_documento": fecha_oc_str,
+                                "bodega": bodega_usr,
+                            }).execute()
                         except Exception:
-                            res_ins = supabase.table("asn_cabecera").insert(payload_cab).execute()
+                            try:
+                                res_ins = supabase.table("asn_cabecera").insert({
+                                    **payload_base,
+                                    "fecha_documento": fecha_oc_str,
+                                }).execute()
+                            except Exception:
+                                res_ins = supabase.table("asn_cabecera").insert(payload_base).execute()
                         asn_id_nuevo = res_ins.data[0]["id"]
 
                     # 2. Sincronizar líneas en asn_detalle
@@ -1500,7 +1515,7 @@ class RecepcionModulo:
                                 "cajas_esperadas": cajas_esp,
                                 "multiplo_empaque": item_p["multiplo"],
                                 "unidades_esperadas": item_p["unidades_esperadas"],
-                                "unidades_recibidas": 0,
+                                "lote_sugerido": "S/L",
                             })
                     if nuevas_lineas_bd:
                         supabase.table("asn_detalle").insert(nuevas_lineas_bd).execute()
@@ -1668,7 +1683,7 @@ class RecepcionModulo:
                 cargar_lista_asns()
                 cargar_historico_recepciones()
                 notificar(f"PO cerrada oficialmente ({ahora_cierre}).", "#047857")
-                abrir_modal_enviar_correo_acta(cab_copia, lineas_copia, ruta_pdf_cierre)
+                enviar_correo_acta_po()
             except Exception as ex:
                 notificar(f"Error al cerrar PO: {ex}", "#B91C1C")
 
