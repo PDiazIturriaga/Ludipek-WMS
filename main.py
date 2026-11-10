@@ -272,10 +272,29 @@ def main(page: ft.Page):
             fila_u = res.data[0] if res.data else None
 
             if fila_u and fila_u.get("activo") and verificar_password_seguro(pass_val, fila_u.get("password", "")):
+                rol_usr = str(fila_u.get("rol") or "OPERADOR").strip().upper()
+                bodega_asignada = str(fila_u.get("bodega") or "Bodega Santiago").strip()
+                bodega_elegida = str(dd_login_bodega.value or bodega_asignada).strip()
+
+                # Solo ADMIN o usuarios con "AMBAS" pueden entrar a una bodega distinta a la asignada
+                tiene_acceso_global = (
+                    "ADMIN" in rol_usr
+                    or "AMBAS" in bodega_asignada.upper()
+                    or "TODAS" in bodega_asignada.upper()
+                )
+
+                if not tiene_acceso_global and bodega_asignada.upper() != bodega_elegida.upper():
+                    lbl_login_error.value = (
+                        f"Acceso denegado: Tu usuario pertenece exclusivamente a {bodega_asignada}."
+                    )
+                    page.update()
+                    return
+
                 intentos_fallidos = 0
                 page.usuario_actual = fila_u.get("nombre_completo") or user_val
-                page.rol_actual = str(fila_u.get("rol") or "OPERADOR").upper()
-                page.bodega_actual = (dd_login_bodega.value or fila_u.get("bodega") or "Bodega Santiago").strip()
+                page.rol_actual = rol_usr
+                page.bodega_actual = bodega_elegida if tiene_acceso_global else bodega_asignada
+                page.tiene_acceso_multibodega = tiene_acceso_global
 
                 mod_pc_str = str(fila_u.get("modulos_pc") or fila_u.get("permisos_pc") or "").strip()
                 if not mod_pc_str and os.path.exists("config_permisos_wms.json"):
@@ -914,7 +933,18 @@ def main(page: ft.Page):
             sesion_activa = False
             mostrar_pantalla_login()
 
+        puede_cambiar_bodega_pc = bool(getattr(page, "tiene_acceso_multibodega", False))
+
         def cambiar_bodega_activa_pc(e=None):
+            if not puede_cambiar_bodega_pc:
+                dd_bodega_header.value = getattr(page, "bodega_actual", "Bodega Santiago")
+                notificar_global(
+                    page,
+                    f"Acceso restringido: solo puedes operar en {page.bodega_actual}.",
+                    "#B91C1C",
+                )
+                page.update()
+                return
             page.bodega_actual = dd_bodega_header.value or "Bodega Santiago"
             notificar_global(page, f"Bodega activa cambiada a: {page.bodega_actual}", "#047857")
             if indice_modulo_activo != -1:
@@ -926,11 +956,12 @@ def main(page: ft.Page):
             page.update()
 
         dd_bodega_header = ft.Dropdown(
-            width=190,
+            width=195,
             dense=True,
             value=getattr(page, "bodega_actual", "Bodega Santiago"),
+            disabled=not puede_cambiar_bodega_pc,
             bgcolor="#232A2B",
-            border_color="#38BDF8",
+            border_color="#38BDF8" if puede_cambiar_bodega_pc else "#475569",
             text_style=ft.TextStyle(size=11, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
             content_padding=ft.Padding.symmetric(horizontal=10, vertical=6),
             options=[
