@@ -2091,6 +2091,7 @@ class RecepcionModulo:
             return k.strip('"').strip("'")
 
         def _llamar_gemini_rest_sincrono(ruta_archivo: str, prompt: str) -> str:
+            import time
             import mimetypes
 
             api_key = _obtener_gemini_api_key()
@@ -2104,31 +2105,34 @@ class RecepcionModulo:
             if not mime_t:
                 mime_t = "application/pdf" if ruta_archivo.lower().endswith(".pdf") else "image/jpeg"
 
-            # 1. Consultar ModelService.ListModels en v1beta para usar exactamente los modelos activos en la cuenta
-            modelos_candidatos = [
-                "gemini-2.5-flash",
-                "gemini-2.0-flash",
+            # Prioridad directa a Gemini 3.8 Flash y serie 3.x Flash-Lite (baja latencia y sin bloqueo 2.5)
+            modelos_prioritarios = [
+                "gemini-3.8-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.6-flash",
+                "gemini-3.5-flash",
+                "gemini-3.1-flash-lite",
+                "gemini-flash-lite-latest",
                 "gemini-flash-latest",
-                "gemini-2.5-pro",
             ]
+
+            # Agregar cualquier otro modelo 3.x de texto disponible, filtrando 1.5/2.0/2.5 y modelos de audio/imagen
             try:
                 r_list = requests.get(
                     f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
-                    timeout=10,
+                    timeout=8,
                 )
                 if r_list.status_code == 200:
-                    disponibles = []
+                    excluidos = (
+                        "1.5", "2.0", "2.5", "tts", "image", "audio",
+                        "live", "embedding", "vision", "robotics", "computer",
+                    )
                     for m in r_list.json().get("models", []):
                         metodos = m.get("supportedGenerationMethods") or []
                         nombre_m = str(m.get("name") or "").replace("models/", "")
-                        if "generateContent" in metodos and "gemini" in nombre_m and "embedding" not in nombre_m and "vision" not in nombre_m:
-                            disponibles.append(nombre_m)
-                    if disponibles:
-                        # Ordenar priorizando 2.5-flash y 2.0-flash
-                        priorizados = [c for c in modelos_candidatos if c in disponibles]
-                        otros_flash = [d for d in disponibles if "flash" in d and d not in priorizados]
-                        otros_pro = [d for d in disponibles if d not in priorizados and d not in otros_flash]
-                        modelos_candidatos = priorizados + otros_flash + otros_pro
+                        if "generateContent" in metodos and "gemini" in nombre_m:
+                            if not any(x in nombre_m.lower() for x in excluidos) and nombre_m not in modelos_prioritarios:
+                                modelos_prioritarios.append(nombre_m)
             except Exception:
                 pass
 
@@ -2148,29 +2152,36 @@ class RecepcionModulo:
             }
 
             errores = []
-            for mod_name in modelos_candidatos[:5]:
+            for mod_name in modelos_prioritarios:
                 url_gen = f"https://generativelanguage.googleapis.com/v1beta/models/{mod_name}:generateContent?key={api_key}"
-                try:
-                    resp = requests.post(
-                        url_gen,
-                        headers={"Content-Type": "application/json"},
-                        json=payload_json,
-                        timeout=90,
-                    )
-                    if resp.status_code == 200:
-                        data_r = resp.json()
-                        cands = data_r.get("candidates") or []
-                        if cands:
-                            parts = (cands[0].get("content") or {}).get("parts") or []
-                            for p in parts:
-                                if p.get("text"):
-                                    return p["text"]
-                    else:
-                        errores.append(f"{mod_name} ({resp.status_code}): {resp.text[:140]}")
-                except Exception as ex_req:
-                    errores.append(f"{mod_name}: {ex_req}")
+                # Hasta 2 intentos por modelo en caso de pico temporal de demanda (HTTP 503 o 429)
+                for intento in range(2):
+                    try:
+                        resp = requests.post(
+                            url_gen,
+                            headers={"Content-Type": "application/json"},
+                            json=payload_json,
+                            timeout=90,
+                        )
+                        if resp.status_code == 200:
+                            data_r = resp.json()
+                            cands = data_r.get("candidates") or []
+                            if cands:
+                                parts = (cands[0].get("content") or {}).get("parts") or []
+                                for p in parts:
+                                    if p.get("text"):
+                                        return p["text"]
+                        elif resp.status_code in (503, 429) and intento == 0:
+                            time.sleep(1.5)
+                            continue
+                        else:
+                            errores.append(f"{mod_name} ({resp.status_code}): {resp.text[:120]}")
+                            break
+                    except Exception as ex_req:
+                        errores.append(f"{mod_name}: {ex_req}")
+                        break
 
-            raise RuntimeError(" | ".join(errores[:2]) if errores else "Sin respuesta de Gemini API v1beta.")
+            raise RuntimeError(" | ".join(errores[:3]) if errores else "Sin respuesta de API.")
 
         def _extraer_json_limpio_ia(texto_resp: str):
             s = (texto_resp or "").strip()
