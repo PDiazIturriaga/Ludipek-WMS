@@ -357,14 +357,23 @@ class RecepcionModulo:
         # --- 4. DEFINICIÓN DE TODAS LAS FUNCIONES DE LÓGICA ---
         def normalizar_fecha_sql(fecha_texto: str):
             texto = (fecha_texto or "").strip()
-            if not texto:
+            if not texto or texto.upper() in ("S/F", "NONE", "NULL", "-"):
                 return None
-            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d.%m.%Y", "%Y.%m.%d"):
+            for fmt in (
+                "%d-%m-%Y",
+                "%d/%m/%Y",
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+                "%d.%m.%Y",
+                "%m.%d.%Y",
+                "%m/%d/%Y",
+                "%Y.%m.%d",
+            ):
                 try:
-                    return datetime.strptime(texto, fmt).strftime("%Y-%m-%d")
+                    return datetime.strptime(texto, fmt).strftime("%d-%m-%Y")
                 except ValueError:
                     continue
-            return texto
+            return texto.replace("/", "-").replace(".", "-")
 
         def recalcular_mod_lpn_totales(e=None):
             try:
@@ -2254,11 +2263,22 @@ class RecepcionModulo:
                     mapa_skus[sku_limpio]["cajas"] += cajas
                     mapa_skus[sku_limpio]["unidades"] += unid
 
+                    reg_es_fecha = re.compile(r"^\d{1,4}[\-\/\.]\d{1,2}[\-\/\.]\d{1,4}$")
+
                     for lt in lote_sug.split(","):
-                        if lt.strip() and lt.strip() not in ("S/L", "NONE", "NULL"):
-                            mapa_skus[sku_limpio]["lotes"].add(lt.strip())
+                        lt_limpio = lt.strip()
+                        if not lt_limpio or lt_limpio in ("S/L", "NONE", "NULL"):
+                            continue
+                        # Si la IA puso una fecha (ej: 06.14.2028) en el lote, pasarla a vencimientos
+                        if reg_es_fecha.match(lt_limpio):
+                            f_norm = normalizar_fecha_sql(lt_limpio)
+                            if f_norm:
+                                mapa_skus[sku_limpio]["vencimientos"].add(f_norm)
+                        else:
+                            mapa_skus[sku_limpio]["lotes"].add(lt_limpio)
+
                     for v in venc_sug.split(","):
-                        v_norm = normalizar_fecha_sql(v.strip()) or v.strip()
+                        v_norm = normalizar_fecha_sql(v.strip())
                         if v_norm and v_norm.upper() not in ("NONE", "NULL", "S/F", ""):
                             mapa_skus[sku_limpio]["vencimientos"].add(v_norm)
 
