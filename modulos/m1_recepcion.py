@@ -135,8 +135,20 @@ class RecepcionModulo:
             except Exception as ex_dl:
                 notificar(f"Error preparando descarga web: {ex_dl}", "#B91C1C")
 
+        def _buscar_ruta_logo_ludipek():
+            raiz_proy = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            posibles = [
+                os.path.join(os.getcwd(), "assets", "logo.png"),
+                os.path.join(os.getcwd(), "logo.png"),
+                os.path.join(raiz_proy, "assets", "logo.png"),
+                os.path.join(raiz_proy, "logo.png"),
+                obtener_ruta_recurso("logo.png"),
+                obtener_ruta_recurso(os.path.join("assets", "logo.png")),
+            ]
+            return next((p for p in posibles if p and os.path.exists(p)), None)
+
         def generar_acta_pdf_completa(cabecera_po: dict, filas_conc: list, recepciones_lpn: list) -> str:
-            """Genera el Acta PDF A4 con la Conciliación por SKU y el Desglose de todos los LPNs/Lotes/Vencimientos ingresados."""
+            """Genera el Acta Oficial PDF A4 con Logo Ludipek y Resumen por SKU, Lote y Vencimiento (sin listado de LPNs)."""
             from fpdf import FPDF
 
             os.makedirs("reportes_recepcion", exist_ok=True)
@@ -149,27 +161,53 @@ class RecepcionModulo:
             ahora_str = datetime.now().strftime("%d-%m-%Y %H:%M")
 
             pdf = FPDF(orientation="P", unit="mm", format="A4")
-            pdf.set_auto_page_break(auto=True, margin=14)
+            pdf.set_auto_page_break(auto=True, margin=15)
             pdf.add_page()
 
-            # Encabezado oscuro corporativo
+            # --- ENCABEZADO CORPORATIVO CON LOGO LUDIPEK ---
             pdf.set_fill_color(15, 23, 42)
-            pdf.rect(0, 0, 210, 24, style="F")
+            pdf.rect(0, 0, 210, 28, style="F")
+
+            ruta_logo = _buscar_ruta_logo_ludipek()
+            x_texto = 10
+            if ruta_logo:
+                try:
+                    # Recuadro blanco limpio para resaltar el logo de Ludipek
+                    pdf.set_fill_color(255, 255, 255)
+                    pdf.rect(8, 3, 28, 22, style="F")
+                    pdf.image(ruta_logo, x=9.5, y=4.5, w=25)
+                    x_texto = 41
+                except Exception:
+                    x_texto = 10
+
             pdf.set_text_color(255, 255, 255)
             pdf.set_font("Helvetica", "B", 13)
-            pdf.set_xy(10, 5)
-            pdf.cell(190, 6, txt=_txt_latin(f"LUDIPEK WMS - ACTA DE RECEPCION (OC: {oc_num})"), ln=True)
+            pdf.set_xy(x_texto, 5)
+            pdf.cell(200 - x_texto, 6, txt=_txt_latin(f"LUDIPEK WMS - ACTA OFICIAL DE RECEPCION (OC: {oc_num})"), ln=True)
             pdf.set_font("Helvetica", "", 9)
-            pdf.set_x(10)
-            pdf.cell(190, 5, txt=_txt_latin(f"Proveedor: {proveedor[:45]}   |   Fecha Emision: {ahora_str}"), ln=True)
-            pdf.set_x(10)
-            pdf.cell(190, 5, txt=_txt_latin(f"Referencia / Nota PO: {codigo_po[:40]}   |   Contenedor: {contenedor_guia}   |   Estado: {estado_po}"), ln=True)
+            pdf.set_x(x_texto)
+            pdf.cell(200 - x_texto, 5, txt=_txt_latin(f"Proveedor: {proveedor[:48]}   |   Fecha Emision: {ahora_str}"), ln=True)
+            pdf.set_x(x_texto)
+            pdf.cell(200 - x_texto, 5, txt=_txt_latin(f"Referencia / Nota: {codigo_po[:38]}   |   Contenedor: {contenedor_guia}   |   Estado: {estado_po}"), ln=True)
             pdf.set_text_color(0, 0, 0)
 
-            # 1. TABLA DE CONCILIACIÓN POR LOTE Y SKU
-            pdf.set_xy(10, 29)
+            # --- BLOQUE RESUMEN DE CABECERA ---
+            pdf.set_xy(10, 33)
+            pdf.set_fill_color(241, 245, 249)
+            pdf.set_draw_color(203, 213, 225)
+            pdf.rect(10, 33, 190, 16, style="DF")
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_xy(14, 35.5)
+            pdf.cell(92, 5, txt=_txt_latin(f"ORDEN DE COMPRA: {oc_num}"[:44]))
+            pdf.cell(92, 5, txt=_txt_latin(f"PROVEEDOR: {proveedor}"[:44]), ln=True)
+            pdf.set_x(14)
+            pdf.cell(92, 5, txt=_txt_latin(f"NOTA / PO: {codigo_po}"[:44]))
+            pdf.cell(92, 5, txt=_txt_latin(f"CONTENEDOR / GUIA: {contenedor_guia}"[:44]), ln=True)
+
+            # --- TABLA ÚNICA: CONCILIACIÓN POR SKU, LOTE Y VENCIMIENTO ---
+            pdf.set_xy(10, 54)
             pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(190, 6, txt="1. RESUMEN RECIBIDO POR SKU, LOTE Y FECHA DE VENCIMIENTO", ln=True)
+            pdf.cell(190, 6, txt="DETALLE DE RECEPCION POR SKU, LOTE Y FECHA DE VENCIMIENTO", ln=True)
 
             mapa_desc_sku = {
                 str(f.get("sku") or "").strip().upper(): str(f.get("descripcion") or "")
@@ -177,31 +215,31 @@ class RecepcionModulo:
             }
 
             lotes_agrupados = {}
-            skus_con_rec = set()
             for r in recepciones_lpn:
                 s_r = str(r.get("sku") or "").strip().upper()
                 if not s_r:
                     continue
-                lote_limpio, qa_est = extraer_estado_qa(r.get("lote", "S/L"))
+                lote_limpio, _ = extraer_estado_qa(r.get("lote", "S/L"))
                 venc_r = str(r.get("fecha_vencimiento_cl") or "S/F").strip()
                 cajas_r = int(r.get("cajas") or 0)
                 unid_r = int(r.get("unidades_totales") or 0)
-                skus_con_rec.add(s_r)
                 clave = (s_r, lote_limpio, venc_r)
                 if clave not in lotes_agrupados:
-                    lotes_agrupados[clave] = {"cajas": 0, "unidades": 0, "qa": qa_est}
+                    lotes_agrupados[clave] = {"cajas": 0, "unidades": 0}
                 lotes_agrupados[clave]["cajas"] += cajas_r
                 lotes_agrupados[clave]["unidades"] += unid_r
 
-            pdf.set_fill_color(226, 232, 240)
-            pdf.set_font("Helvetica", "B", 8)
-            pdf.cell(26, 6, "SKU", border=1, fill=True)
-            pdf.cell(68, 6, "DESCRIPCION", border=1, fill=True)
-            pdf.cell(34, 6, "LOTE FISICO", border=1, align="C", fill=True)
-            pdf.cell(24, 6, "VENCIMIENTO", border=1, align="C", fill=True)
-            pdf.cell(18, 6, "CAJAS", border=1, align="C", fill=True)
-            pdf.cell(20, 6, "UNIDADES", border=1, align="C", fill=True, ln=True)
+            pdf.set_fill_color(30, 58, 138)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("Helvetica", "B", 8.5)
+            pdf.cell(28, 7, "SKU", border=1, fill=True)
+            pdf.cell(72, 7, "DESCRIPCION", border=1, fill=True)
+            pdf.cell(32, 7, "LOTE", border=1, align="C", fill=True)
+            pdf.cell(24, 7, "VENCIMIENTO", border=1, align="C", fill=True)
+            pdf.cell(16, 7, "CAJAS", border=1, align="C", fill=True)
+            pdf.cell(18, 7, "UNIDADES", border=1, align="C", fill=True, ln=True)
 
+            pdf.set_text_color(0, 0, 0)
             pdf.set_font("Helvetica", "", 8)
             tot_cajas_acta = 0
             tot_unid_acta = 0
@@ -210,14 +248,13 @@ class RecepcionModulo:
                 desc_k = mapa_desc_sku.get(sku_k, "Ingreso Recepcion")
                 tot_cajas_acta += inf_l["cajas"]
                 tot_unid_acta += inf_l["unidades"]
-                pdf.cell(26, 5.5, _txt_latin(sku_k)[:14], border=1)
-                pdf.cell(68, 5.5, _txt_latin(desc_k)[:38], border=1)
-                pdf.cell(34, 5.5, _txt_latin(lote_k)[:16], border=1, align="C")
-                pdf.cell(24, 5.5, _txt_latin(venc_k)[:12], border=1, align="C")
-                pdf.cell(18, 5.5, str(inf_l["cajas"]), border=1, align="C")
-                pdf.cell(20, 5.5, str(inf_l["unidades"]), border=1, align="C", ln=True)
+                pdf.cell(28, 6, _txt_latin(sku_k)[:15], border=1)
+                pdf.cell(72, 6, _txt_latin(desc_k)[:40], border=1)
+                pdf.cell(32, 6, _txt_latin(lote_k)[:16], border=1, align="C")
+                pdf.cell(24, 6, _txt_latin(venc_k)[:12], border=1, align="C")
+                pdf.cell(16, 6, str(inf_l["cajas"]), border=1, align="C")
+                pdf.cell(18, 6, str(inf_l["unidades"]), border=1, align="C", ln=True)
 
-            # Si no hay LPNs pero sí líneas de OC, listar las líneas de la OC
             if not lotes_agrupados and filas_conc:
                 for f in filas_conc:
                     s_f = str(f.get("sku") or "").strip().upper()
@@ -225,61 +262,33 @@ class RecepcionModulo:
                     u_rec = int(f.get("unidades_recibidas") or 0)
                     tot_cajas_acta += c_rec
                     tot_unid_acta += u_rec
-                    pdf.cell(26, 5.5, _txt_latin(s_f)[:14], border=1)
-                    pdf.cell(68, 5.5, _txt_latin(f.get("descripcion", ""))[:38], border=1)
-                    pdf.cell(34, 5.5, _txt_latin(f.get("lotes_reales", "SIN INGRESO"))[:16], border=1, align="C")
-                    pdf.cell(24, 5.5, "-", border=1, align="C")
-                    pdf.cell(18, 5.5, str(c_rec), border=1, align="C")
-                    pdf.cell(20, 5.5, str(u_rec), border=1, align="C", ln=True)
+                    pdf.cell(28, 6, _txt_latin(s_f)[:15], border=1)
+                    pdf.cell(72, 6, _txt_latin(f.get("descripcion", ""))[:40], border=1)
+                    pdf.cell(32, 6, _txt_latin(f.get("lotes_reales", "SIN INGRESO"))[:16], border=1, align="C")
+                    pdf.cell(24, 6, "-", border=1, align="C")
+                    pdf.cell(16, 6, str(c_rec), border=1, align="C")
+                    pdf.cell(18, 6, str(u_rec), border=1, align="C", ln=True)
 
-            pdf.set_font("Helvetica", "B", 8)
-            pdf.set_fill_color(241, 245, 249)
-            pdf.cell(152, 6, "TOTAL FISICO RECIBIDO", border=1, align="R", fill=True)
-            pdf.cell(18, 6, str(tot_cajas_acta), border=1, align="C", fill=True)
-            pdf.cell(20, 6, str(tot_unid_acta), border=1, align="C", fill=True, ln=True)
-
-            # 2. DETALLE DE PALLETS (LPNs) INGRESADOS
-            if recepciones_lpn:
-                pdf.ln(5)
-                pdf.set_font("Helvetica", "B", 10)
-                pdf.cell(190, 6, txt=f"2. DETALLE DE PALLETS / LPNs INGRESADOS ({len(recepciones_lpn)} REGISTROS)", ln=True)
-
-                pdf.set_fill_color(226, 232, 240)
-                pdf.set_font("Helvetica", "B", 8)
-                pdf.cell(38, 6, "LPN PALLET", border=1, fill=True)
-                pdf.cell(26, 6, "SKU", border=1, fill=True)
-                pdf.cell(18, 6, "CAJAS", border=1, align="C", fill=True)
-                pdf.cell(16, 6, "MULT.", border=1, align="C", fill=True)
-                pdf.cell(22, 6, "UNIDADES", border=1, align="C", fill=True)
-                pdf.cell(32, 6, "LOTE", border=1, align="C", fill=True)
-                pdf.cell(22, 6, "VENC.", border=1, align="C", fill=True)
-                pdf.cell(16, 6, "QA", border=1, align="C", fill=True, ln=True)
-
-                pdf.set_font("Helvetica", "", 7.5)
-                for r in recepciones_lpn:
-                    lote_c, qa_c = extraer_estado_qa(r.get("lote", "S/L"))
-                    pdf.cell(38, 5, _txt_latin(r.get("lpn", "-"))[:20], border=1)
-                    pdf.cell(26, 5, _txt_latin(r.get("sku", "-"))[:14], border=1)
-                    pdf.cell(18, 5, str(r.get("cajas", 0)), border=1, align="C")
-                    pdf.cell(16, 5, f"x{r.get('multiplo_aplicado', 1)}", border=1, align="C")
-                    pdf.cell(22, 5, str(r.get("unidades_totales", 0)), border=1, align="C")
-                    pdf.cell(32, 5, _txt_latin(lote_c)[:16], border=1, align="C")
-                    pdf.cell(22, 5, _txt_latin(r.get("fecha_vencimiento_cl") or "S/F")[:11], border=1, align="C")
-                    pdf.cell(16, 5, _txt_latin(qa_c)[:8], border=1, align="C", ln=True)
-
-            # Firmas
-            pdf.ln(12)
-            y_f = pdf.get_y()
-            if y_f > 255:
-                pdf.add_page()
-                y_f = 35
-            pdf.line(20, y_f + 12, 85, y_f + 12)
-            pdf.line(125, y_f + 12, 190, y_f + 12)
-            pdf.set_xy(20, y_f + 14)
             pdf.set_font("Helvetica", "B", 8.5)
+            pdf.set_fill_color(226, 232, 240)
+            pdf.cell(156, 6.5, "TOTAL FISICO RECIBIDO", border=1, align="R", fill=True)
+            pdf.cell(16, 6.5, str(tot_cajas_acta), border=1, align="C", fill=True)
+            pdf.cell(18, 6.5, str(tot_unid_acta), border=1, align="C", fill=True, ln=True)
+
+            # --- FIRMAS DE CONFORMIDAD ---
+            pdf.ln(16)
+            y_f = pdf.get_y()
+            if y_f > 250:
+                pdf.add_page()
+                y_f = 40
+            pdf.set_draw_color(0, 0, 0)
+            pdf.line(20, y_f + 14, 85, y_f + 14)
+            pdf.line(125, y_f + 14, 190, y_f + 14)
+            pdf.set_xy(20, y_f + 16)
+            pdf.set_font("Helvetica", "B", 9)
             pdf.cell(65, 5, "RECEPCION BODEGA", align="C")
-            pdf.set_xy(125, y_f + 14)
-            pdf.cell(65, 5, "CONTROL DE CALIDAD (QA)", align="C")
+            pdf.set_xy(125, y_f + 16)
+            pdf.cell(65, 5, "CONTROL DE CALIDAD / SUPERVISION", align="C")
 
             oc_limpio = _nombre_archivo_seguro_local(oc_num)
             ruta_out = os.path.join("reportes_recepcion", f"Acta_OC_{oc_limpio}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
@@ -1462,6 +1471,9 @@ class RecepcionModulo:
                 notificar(f"Error generando Acta PDF: {ex}", "#B91C1C")
 
         def click_exportar_excel_recepcion(e=None):
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
             auditar_asn_seleccionado()
             if not filas_conciliacion_export and not recepciones_asn_actual:
                 notificar("No hay datos de recepción activos para exportar a Excel.", "#D97706")
@@ -1484,19 +1496,15 @@ class RecepcionModulo:
                     if s_f and s_f not in mapa_mult:
                         mapa_mult[s_f] = max(1, int(f.get("multiplo") or 1))
 
-                # 1. Agrupado por SKU + Lote + Vencimiento (Hoja 1)
                 agrupado_excel = {}
-                filas_detalle_lpn = []
-
                 for r in recepciones_asn_actual:
                     sku_r = str(r.get("sku", "")).strip().upper()
                     if not sku_r:
                         continue
-                    lote_limpio, qa_est = extraer_estado_qa(r.get("lote", "S/L"))
+                    lote_limpio, _ = extraer_estado_qa(r.get("lote", "S/L"))
                     fecha_raw = str(r.get("fecha_vencimiento_cl") or "").strip()
                     fecha_fmt = normalizar_fecha_sql(fecha_raw) or "S/F"
                     cajas_r = int(r.get("cajas") or 0)
-                    mult_r = int(r.get("multiplo_aplicado") or mapa_mult.get(sku_r, 1))
                     unid_r = int(r.get("unidades_totales") or 0)
 
                     clave = (sku_r, lote_limpio, fecha_fmt)
@@ -1504,20 +1512,6 @@ class RecepcionModulo:
                         agrupado_excel[clave] = {"packs": 0, "unidades": 0}
                     agrupado_excel[clave]["packs"] += cajas_r
                     agrupado_excel[clave]["unidades"] += unid_r
-
-                    filas_detalle_lpn.append({
-                        "LPN": str(r.get("lpn") or "-"),
-                        "SKU": sku_r,
-                        "Descripcion": mapa_desc.get(sku_r, "Ingreso Recepcion"),
-                        "Cajas": cajas_r,
-                        "Multiplo": mult_r,
-                        "Unidades_Sueltas": int(r.get("unidades_sueltas") or 0),
-                        "Unidades_Totales": unid_r,
-                        "Lote_Fisico": lote_limpio,
-                        "Fecha_Vencimiento": fecha_fmt,
-                        "Estado_QA": qa_est,
-                        "Contenedor_Ref": str(r.get("contenedor") or cabecera_asn_actual.get("contenedor_referencia") or ""),
-                    })
 
                 filas_lotes = []
                 for (sku_k, lote_k, fecha_k), totales in sorted(agrupado_excel.items(), key=lambda x: (x[0][0], x[0][1])):
@@ -1530,61 +1524,148 @@ class RecepcionModulo:
                         else (lote_k if lote_k != "S/L" else fecha_k)
                     )
                     filas_lotes.append({
-                        "SKU": sku_k,
-                        "Descripcion": mapa_desc.get(sku_k, "Ingreso Directo"),
-                        "Cantidad (Pack)": packs_tot,
-                        "Lote": lote_k,
-                        "LOTE FECHA": lote_fecha_str,
-                        "Fecha": fecha_k,
-                        "Cantidad (Unidades)": unid_tot,
+                        "sku": sku_k,
+                        "descripcion": mapa_desc.get(sku_k, "Ingreso Directo"),
+                        "packs": packs_tot,
+                        "lote": lote_k,
+                        "lote_fecha": lote_fecha_str,
+                        "fecha": fecha_k,
+                        "unidades": unid_tot,
                     })
 
                 if not filas_lotes and filas_conciliacion_export:
                     for f in filas_conciliacion_export:
                         sku_f = str(f.get("sku", "")).strip().upper()
                         filas_lotes.append({
-                            "SKU": sku_f,
-                            "Descripcion": mapa_desc.get(sku_f, str(f.get("descripcion", ""))),
-                            "Cantidad (Pack)": int(f.get("cajas_recibidas") or f.get("cajas_esperadas") or 0),
-                            "Lote": str(f.get("lotes_reales") or "S/L"),
-                            "LOTE FECHA": str(f.get("lotes_reales") or "S/L"),
-                            "Fecha": "S/F",
-                            "Cantidad (Unidades)": int(f.get("unidades_recibidas") or f.get("unidades_esperadas") or 0),
+                            "sku": sku_f,
+                            "descripcion": mapa_desc.get(sku_f, str(f.get("descripcion", ""))),
+                            "packs": int(f.get("cajas_recibidas") or f.get("cajas_esperadas") or 0),
+                            "lote": str(f.get("lotes_reales") or "S/L"),
+                            "lote_fecha": str(f.get("lotes_reales") or "S/L"),
+                            "fecha": "S/F",
+                            "unidades": int(f.get("unidades_recibidas") or f.get("unidades_esperadas") or 0),
                         })
 
-                filas_conc_sheet = [
-                    {
-                        "SKU": f.get("sku"),
-                        "Descripcion": f.get("descripcion"),
-                        "Cajas_OC": f.get("cajas_esperadas", 0),
-                        "Multiplo_OC": f.get("multiplo", 1),
-                        "Unidades_OC": f.get("unidades_esperadas", 0),
-                        "Cajas_Recibidas_RF": f.get("cajas_recibidas", 0),
-                        "Unidades_Recibidas_RF": f.get("unidades_recibidas", 0),
-                        "Diferencia_Unidades": f.get("diferencia", 0),
-                        "Lotes_y_Vencimientos_Reales": f.get("lotes_reales", ""),
-                        "Estado": f.get("estado", ""),
-                    }
-                    for f in filas_conciliacion_export
+                codigo_po_raw = str(cabecera_asn_actual.get("numero_oc") or cabecera_asn_actual.get("codigo_asn") or "LIBRE").strip()
+                prov_str = str(cabecera_asn_actual.get("proveedor") or "RECEPCION DIRECTA").strip()
+                nota_str = str(cabecera_asn_actual.get("codigo_asn") or "").strip()
+                cont_str = str(cabecera_asn_actual.get("contenedor_referencia") or "N/A").strip()
+                ahora_fmt = datetime.now().strftime("%d-%m-%Y %H:%M")
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Acta_Recepcion"
+                ws.views.sheetView[0].showGridLines = True
+
+                # --- INSERTAR LOGO LUDIPEK Y ENCABEZADO EJECUTIVO ---
+                ruta_logo = _buscar_ruta_logo_ludipek()
+                logo_insertado = False
+                if ruta_logo:
+                    try:
+                        from openpyxl.drawing.image import Image as OpenpyxlImage
+                        img_xl = OpenpyxlImage(ruta_logo)
+                        img_xl.width = 115
+                        img_xl.height = 55
+                        ws.add_image(img_xl, "A1")
+                        logo_insertado = True
+                    except Exception:
+                        logo_insertado = False
+
+                if not logo_insertado:
+                    ws["A1"] = "LUDIPEK WMS"
+                    ws["A1"].font = Font(name="Calibri", size=18, bold=True, color="1E3A8A")
+
+                ws["C1"] = f"REPORTE Y ACTA DE RECEPCIÓN - OC {codigo_po_raw}"
+                ws["C1"].font = Font(name="Calibri", size=15, bold=True, color="0F172A")
+
+                ws["C2"] = f"Proveedor: {prov_str}   |   Nota / PO: {nota_str}"
+                ws["C2"].font = Font(name="Calibri", size=11, bold=True, color="334155")
+
+                ws["C3"] = f"Contenedor / Guía: {cont_str}   |   Fecha de Emisión: {ahora_fmt}"
+                ws["C3"].font = Font(name="Calibri", size=10, italic=True, color="64748B")
+
+                # --- TABLA DE LOTES Y VENCIMIENTOS ---
+                encabezados = [
+                    "SKU",
+                    "Descripción del Producto",
+                    "Cantidad (Pack / Cj)",
+                    "Lote Físico",
+                    "LOTE - FECHA",
+                    "Fecha Vencimiento",
+                    "Cantidad (Unidades)",
                 ]
+                fill_hdr = PatternFill(fill_type="solid", start_color="1E3A8A", end_color="1E3A8A")
+                fill_zebra = PatternFill(fill_type="solid", start_color="F8FAFC", end_color="F8FAFC")
+                fill_total = PatternFill(fill_type="solid", start_color="E2E8F0", end_color="E2E8F0")
+                font_hdr = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+                borde_fino = Side(style="thin", color="CBD5E1")
+                border_celda = Border(left=borde_fino, right=borde_fino, top=borde_fino, bottom=borde_fino)
+
+                ws.row_dimensions[5].height = 24
+                for col_idx, texto_h in enumerate(encabezados, start=1):
+                    c = ws.cell(row=5, column=col_idx, value=texto_h)
+                    c.fill = fill_hdr
+                    c.font = font_hdr
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                    c.border = border_celda
+
+                tot_packs = 0
+                tot_unidades = 0
+                fila_actual = 6
+
+                for idx_f, item in enumerate(filas_lotes):
+                    tot_packs += int(item["packs"])
+                    tot_unidades += int(item["unidades"])
+                    valores = [
+                        item["sku"],
+                        item["descripcion"],
+                        int(item["packs"]),
+                        item["lote"],
+                        item["lote_fecha"],
+                        item["fecha"],
+                        int(item["unidades"]),
+                    ]
+                    ws.row_dimensions[fila_actual].height = 20
+                    for c_idx, val in enumerate(valores, start=1):
+                        celda = ws.cell(row=fila_actual, column=c_idx, value=val)
+                        celda.font = Font(name="Calibri", size=11, bold=(c_idx in (1, 7)))
+                        celda.border = border_celda
+                        if idx_f % 2 == 1:
+                            celda.fill = fill_zebra
+                        if c_idx in (1, 3, 4, 5, 6, 7):
+                            celda.alignment = Alignment(horizontal="center", vertical="center")
+                        else:
+                            celda.alignment = Alignment(horizontal="left", vertical="center")
+                    fila_actual += 1
+
+                # Fila de Totales
+                ws.row_dimensions[fila_actual].height = 22
+                ws.cell(row=fila_actual, column=1, value="TOTAL").alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=fila_actual, column=2, value="TOTAL FÍSICO RECIBIDO").alignment = Alignment(horizontal="right", vertical="center")
+                ws.cell(row=fila_actual, column=3, value=tot_packs).alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=fila_actual, column=4, value="-").alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=fila_actual, column=5, value="-").alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=fila_actual, column=6, value="-").alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=fila_actual, column=7, value=tot_unidades).alignment = Alignment(horizontal="center", vertical="center")
+
+                for c_i in range(1, 8):
+                    c_tot = ws.cell(row=fila_actual, column=c_i)
+                    c_tot.font = Font(name="Calibri", size=11, bold=True, color="0F172A")
+                    c_tot.fill = fill_total
+                    c_tot.border = border_celda
+
+                anchos = {"A": 18, "B": 44, "C": 20, "D": 20, "E": 26, "F": 20, "G": 22}
+                for col_l, w_val in anchos.items():
+                    ws.column_dimensions[col_l].width = w_val
 
                 os.makedirs("reportes_recepcion", exist_ok=True)
-                codigo_po = _nombre_archivo_seguro_local(
-                    cabecera_asn_actual.get("numero_oc") or cabecera_asn_actual.get("codigo_asn") or "LIBRE"
-                )
+                codigo_po = _nombre_archivo_seguro_local(codigo_po_raw)
                 nombre_archivo = os.path.join(
                     "reportes_recepcion",
-                    f"Recepcion_OC_{codigo_po}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    f"Reporte_Recepcion_OC_{codigo_po}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 )
-
-                with pd.ExcelWriter(nombre_archivo, engine="openpyxl") as writer:
-                    pd.DataFrame(filas_lotes).to_excel(writer, sheet_name="1_Lotes_y_Vencimientos", index=False)
-                    if filas_detalle_lpn:
-                        pd.DataFrame(filas_detalle_lpn).to_excel(writer, sheet_name="2_Detalle_LPNs_RF", index=False)
-                    if filas_conc_sheet:
-                        pd.DataFrame(filas_conc_sheet).to_excel(writer, sheet_name="3_Conciliacion_OC", index=False)
-
-                descargar_archivo_web(nombre_archivo, f"Excel de Recepción - OC {codigo_po}")
+                wb.save(nombre_archivo)
+                descargar_archivo_web(nombre_archivo, f"Excel Oficial de Recepción - OC {codigo_po_raw}")
             except Exception as ex:
                 notificar(f"Error generando Excel: {ex}", "#B91C1C")
 
