@@ -145,13 +145,52 @@ def formatear_lote_con_qa(lote_limpio: str, estado_qa: str) -> str:
 # =====================================================================
 # 4. MOTOR DE REPORTES PDF (INDIVIDUAL Y MASIVO DE LPNs) Y EXCEL
 # =====================================================================
+def obtener_ahora_chile() -> datetime:
+    """Devuelve siempre la fecha y hora exacta de Chile (America/Santiago), incluso en servidores UTC como Render."""
+    from datetime import timezone, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Santiago"))
+    except Exception:
+        return datetime.now(timezone(timedelta(hours=-3)))
+
+
+def formatear_fecha_hora_chile(valor_raw=None) -> str:
+    """Convierte un timestamp ISO de Supabase a hora local de Chile o usa la hora actual de Chile."""
+    from datetime import timezone, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        tz_cl = ZoneInfo("America/Santiago")
+    except Exception:
+        tz_cl = timezone(timedelta(hours=-3))
+
+    if valor_raw and str(valor_raw).strip() not in ("None", "null", ""):
+        txt = str(valor_raw).strip()
+        try:
+            dt = datetime.fromisoformat(txt.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(tz_cl).strftime("%d-%m-%Y %H:%M")
+        except Exception:
+            pass
+    return obtener_ahora_chile().strftime("%d-%m-%Y %H:%M")
+
+
 def dibujar_pagina_lpn_15x10(pdf: FPDF, lpn: str, lineas_pallet: list):
-    """Dibuja una etiqueta 15x10 cm dentro de un objeto FPDF (lectura a distancia y QR compacto sin QA)."""
+    """Dibuja una etiqueta 15x10 cm con hora de Chile y recuadros de Lote y Fecha de Vencimiento (sin QA)."""
     import qrcode
     os.makedirs("temp_qrs", exist_ok=True)
-    qr_path = f"temp_qrs/{lpn}.png"
+    qr_path = f"temp_qrs/{_nombre_archivo_seguro(lpn)}.png"
     qr_img = qrcode.make(lpn)
     qr_img.save(qr_path)
+
+    primera = lineas_pallet[0] if lineas_pallet else {}
+    raw_fecha_rec = (
+        primera.get("fecha_recepcion")
+        or primera.get("created_at")
+        or primera.get("timestamp")
+    )
+    fecha_rec_cl = formatear_fecha_hora_chile(raw_fecha_rec)
 
     pdf.add_page()
     pdf.set_text_color(0, 0, 0)
@@ -161,66 +200,71 @@ def dibujar_pagina_lpn_15x10(pdf: FPDF, lpn: str, lineas_pallet: list):
     pdf.set_line_width(0.6)
     pdf.rect(1.5, 1.5, 147, 97)
 
-    # --- ENCABEZADO: N° LPN GIGANTE ARRIBA + QR PEQUEÑO EN ESQUINA SUPERIOR DERECHA ---
+    # --- ENCABEZADO: N° LPN GIGANTE ARRIBA + QR EN ESQUINA SUPERIOR DERECHA ---
     lpn_str = str(lpn or "S/LPN").strip().upper()
-    tam_fuente_lpn = 48 if len(lpn_str) <= 12 else (40 if len(lpn_str) <= 15 else 32)
+    tam_fuente_lpn = 46 if len(lpn_str) <= 12 else (38 if len(lpn_str) <= 15 else 30)
     pdf.set_font("Helvetica", "B", tam_fuente_lpn)
-    pdf.set_xy(3, 4)
-    pdf.cell(120, 18, txt=lpn_str, align="L")
+    pdf.set_xy(4, 3.5)
+    pdf.cell(118, 17, txt=lpn_str, align="L")
 
-    # Fecha de recepción compacta
+    # Fecha de recepción en hora oficial de Chile
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_xy(4, 21)
-    pdf.cell(116, 5, txt=f"FECHA RECP: {datetime.now().strftime('%d-%m-%Y %H:%M')}", align="L")
+    pdf.cell(116, 5, txt=f"FECHA RECP: {fecha_rec_cl}", align="L")
 
-    # QR pequeño en la esquina superior derecha (22x22 mm)
-    pdf.image(qr_path, x=124, y=4, w=22)
+    # QR en la esquina superior derecha (22x22 mm)
+    pdf.image(qr_path, x=124, y=3.5, w=22)
 
     # Línea divisoria superior
     pdf.set_line_width(0.5)
-    pdf.line(2, 28, 148, 28)
+    pdf.line(1.5, 27.5, 148.5, 27.5)
 
     if len(lineas_pallet) == 1:
-        # CASO 1: SKU ÚNICO Y LOTE ÚNICO (TODO GIGANTE)
+        # CASO 1: SKU ÚNICO Y LOTE ÚNICO (CON LOTE Y VENCIMIENTO VISIBLES)
         item = lineas_pallet[0]
         sku_str = str(item.get("sku", "")).strip().upper()
         cajas_val = item.get("cajas", 0)
         mult_val = item.get("multiplo_aplicado", 1)
-        sueltas_val = item.get("unidades_sueltas", 0)
         unid_totales = item.get("unidades_totales", 0)
         lote_val, _ = extraer_estado_qa(item.get("lote", "S/L"))
+        venc_val = str(item.get("fecha_vencimiento_cl") or "S/F").strip()
 
         # 1. SKU GIGANTE
-        tam_sku = 42 if len(sku_str) <= 12 else 32
+        tam_sku = 38 if len(sku_str) <= 12 else 30
         pdf.set_font("Helvetica", "B", tam_sku)
-        pdf.set_xy(3, 31)
-        pdf.cell(144, 16, txt=f"SKU: {sku_str}", align="C")
+        pdf.set_xy(3, 29)
+        pdf.cell(144, 13.5, txt=f"SKU: {sku_str}", align="C")
 
-        # 2. BLOQUES EXTRA GRANDES: CAJAS Y UNIDADES
+        # 2. BLOQUES GRANDES: CAJAS Y UNIDADES
         pdf.set_line_width(0.4)
         # Cajas
-        pdf.rect(4, 49, 69, 24)
-        pdf.set_font("Helvetica", "B", 12)
+        pdf.rect(4, 44, 69, 21)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_xy(4, 45)
+        pdf.cell(69, 4.5, txt="CAJAS", align="C")
+        pdf.set_font("Helvetica", "B", 36)
         pdf.set_xy(4, 50)
-        pdf.cell(69, 5, txt="CAJAS", align="C")
-        pdf.set_font("Helvetica", "B", 42)
-        pdf.set_xy(4, 56)
-        pdf.cell(69, 15, txt=f"{cajas_val}", align="C")
+        pdf.cell(69, 13.5, txt=f"{cajas_val}", align="C")
 
         # Unidades
-        pdf.rect(77, 49, 69, 24)
-        pdf.set_font("Helvetica", "B", 12)
+        pdf.rect(77, 44, 69, 21)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_xy(77, 45)
+        pdf.cell(69, 4.5, txt=f"TOTAL UNID (x{mult_val})", align="C")
+        pdf.set_font("Helvetica", "B", 36)
         pdf.set_xy(77, 50)
-        pdf.cell(69, 5, txt=f"TOTAL UNID (x{mult_val})", align="C")
-        pdf.set_font("Helvetica", "B", 42)
-        pdf.set_xy(77, 56)
-        pdf.cell(69, 15, txt=f"{unid_totales}", align="C")
+        pdf.cell(69, 13.5, txt=f"{unid_totales}", align="C")
 
-        # 3. LOTE GIGANTE
-        tam_lote = 38 if len(str(lote_val)) <= 12 else 28
+        # 3. RECUADRO LOTE
+        tam_lote = 28 if len(str(lote_val)) <= 14 else 22
         pdf.set_font("Helvetica", "B", tam_lote)
-        pdf.set_xy(4, 76)
-        pdf.cell(142, 19, txt=f"LOTE: {lote_val}", border=1, align="C")
+        pdf.set_xy(4, 67)
+        pdf.cell(142, 13.5, txt=f"LOTE: {lote_val}", border=1, align="C")
+
+        # 4. RECUADRO FECHA DE VENCIMIENTO (SIN QA)
+        pdf.set_font("Helvetica", "B", 24)
+        pdf.set_xy(4, 82.5)
+        pdf.cell(142, 13, txt=f"VENC: {venc_val}", border=1, align="C")
 
     else:
         # CASO 2: PALLET MIXTO (MULTI-LOTE O MULTI-SKU)
@@ -229,40 +273,38 @@ def dibujar_pagina_lpn_15x10(pdf: FPDF, lpn: str, lineas_pallet: list):
         total_un = sum(int(x.get("unidades_totales") or 0) for x in lineas_pallet)
 
         if len(skus_distintos) == 1:
-            # ES UN SOLO SKU, PERO MULTI-LOTE
             sku_unico = skus_distintos[0]
-            pdf.set_font("Helvetica", "B", 38)
-            pdf.set_xy(3, 30)
-            pdf.cell(144, 14, txt=f"SKU: {sku_unico}", align="C")
-            
-            pdf.set_font("Helvetica", "B", 16)
-            pdf.set_xy(3, 45)
+            pdf.set_font("Helvetica", "B", 36)
+            pdf.set_xy(3, 29.5)
+            pdf.cell(144, 13, txt=f"SKU: {sku_unico}", align="C")
+
+            pdf.set_font("Helvetica", "B", 15)
+            pdf.set_xy(3, 44)
             pdf.cell(144, 6, txt=f"PALLET MULTI-LOTE | TOTAL: {total_cj} CJ / {total_un} UN", align="C")
 
-            pdf.set_font("Helvetica", "B", 15)
-            pdf.set_xy(4, 53)
-            pdf.cell(52, 11, "LOTE", border=1, align="C")
-            pdf.cell(32, 11, "VENC.", border=1, align="C")
-            pdf.cell(26, 11, "CAJAS", border=1, align="C")
-            pdf.cell(32, 11, "UNIDADES", border=1, align="C")
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.set_xy(4, 52)
+            pdf.cell(52, 10, "LOTE", border=1, align="C")
+            pdf.cell(36, 10, "VENC.", border=1, align="C")
+            pdf.cell(24, 10, "CAJAS", border=1, align="C")
+            pdf.cell(30, 10, "UNIDADES", border=1, align="C")
 
-            y_offset = 64
-            pdf.set_font("Helvetica", "B", 15)
-            for item in lineas_pallet[:3]: # Máximo 3 lotes para fuente grande (H=11)
+            y_offset = 62
+            pdf.set_font("Helvetica", "B", 14)
+            for item in lineas_pallet[:3]:
                 lote_clean, _ = extraer_estado_qa(item.get("lote", "S/L"))
                 venc = str(item.get("fecha_vencimiento_cl") or "S/F")
                 pdf.set_xy(4, y_offset)
-                pdf.cell(52, 11, lote_clean[:14], border=1, align="C")
-                pdf.cell(32, 11, venc[:10], border=1, align="C")
-                pdf.cell(26, 11, str(item.get("cajas", 0)), border=1, align="C")
-                pdf.cell(32, 11, str(item.get("unidades_totales", 0)), border=1, align="C")
-                y_offset += 11
+                pdf.cell(52, 10.5, lote_clean[:14], border=1, align="C")
+                pdf.cell(36, 10.5, venc[:10], border=1, align="C")
+                pdf.cell(24, 10.5, str(item.get("cajas", 0)), border=1, align="C")
+                pdf.cell(30, 10.5, str(item.get("unidades_totales", 0)), border=1, align="C")
+                y_offset += 10.5
         else:
-            # SON DISTINTOS SKUs (PALLET MIXTO MULTI-SKU)
             pdf.set_font("Helvetica", "B", 20)
             pdf.set_xy(4, 30)
-            pdf.cell(142, 8, txt=f"PALLET MIXTO MULTI-SKU", align="C")
-            
+            pdf.cell(142, 8, txt="PALLET MIXTO MULTI-SKU", align="C")
+
             pdf.set_font("Helvetica", "B", 14)
             pdf.set_xy(4, 38)
             pdf.cell(142, 6, txt=f"TOTALES PALLET: {total_cj} CAJAS / {total_un} UNIDADES", align="C")

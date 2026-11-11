@@ -8,6 +8,10 @@ import flet as ft
 from dependencias import *
 from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion
 
+os.environ["TZ"] = "America/Santiago"
+if hasattr(time, "tzset"):
+    time.tzset()
+
 
 def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
     from PIL import Image, ImageDraw, ImageFilter
