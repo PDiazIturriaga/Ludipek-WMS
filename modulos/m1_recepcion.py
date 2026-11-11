@@ -1116,7 +1116,7 @@ class RecepcionModulo:
                 notificar(f"Error generando PDF: {ex}", "#B91C1C")
 
         def enviar_correo_acta_po(e=None):
-            """Genera el Acta PDF y abre directamente el correo (Outlook o cliente del sistema) sin usar AlertDialog ni launch_url."""
+            """Genera el Acta PDF, permite descargarlo en el navegador y enviarlo por correo desde cualquier PC en internet."""
             if not filas_conciliacion_export and not recepciones_asn_actual:
                 notificar("No hay datos de recepción activos para enviar por correo.", "#D97706")
                 return
@@ -1130,46 +1130,171 @@ class RecepcionModulo:
                 notificar(f"Error generando PDF para correo: {ex}", "#B91C1C")
                 return
 
+            # Publicar el PDF en /descargas/ para que esté disponible por URL en el navegador
+            nombre_orig = os.path.basename(ruta)
+            base_nom, ext_nom = os.path.splitext(nombre_orig)
+            nombre_seguro = f"{_nombre_archivo_seguro(base_nom)}{ext_nom.lower()}"
+            carpeta_rel = os.path.join("assets", "descargas")
+            os.makedirs(carpeta_rel, exist_ok=True)
+            shutil.copy2(ruta, os.path.join(carpeta_rel, nombre_seguro))
+            url_pdf_web = f"/descargas/{urllib.parse.quote(nombre_seguro)}"
+
             cod_po_str = obtener_nombre_po_cabecera(cabecera_asn_actual)
+            nota_asn = str(cabecera_asn_actual.get("codigo_asn") or "").strip()
             prov_str = str(cabecera_asn_actual.get("proveedor") or "PROVEEDOR").strip()
             cont_ref = str(cabecera_asn_actual.get("contenedor_referencia") or "").strip()
-            txt_cont = f"N° de Contenedor / Guía: {cont_ref}\n\n" if cont_ref else ""
 
-            asunto_str = f"Acta de Recepción - PO {cod_po_str} ({prov_str})"
-            cuerpo_str = (
+            tot_esp = sum(int(x.get("unidades_esperadas") or 0) for x in filas_conciliacion_export)
+            tot_rec = sum(int(x.get("unidades_recibidas") or 0) for x in filas_conciliacion_export)
+            dif_tot = tot_rec - tot_esp
+
+            resumen_skus = []
+            for f in filas_conciliacion_export[:20]:
+                resumen_skus.append(
+                    f"- {f.get('sku')}: PO {f.get('unidades_esperadas', 0)} UN | Recibido {f.get('unidades_recibidas', 0)} UN ({f.get('estado', '')})"
+                )
+
+            asunto_default = f"Acta de Recepción - OC {cod_po_str} ({prov_str}) | LUDIPEK WMS"
+            cuerpo_default = (
                 f"Estimado equipo,\n\n"
-                f"Se adjunta el Acta Oficial de Recepción para la PO {cod_po_str} ({prov_str}) "
-                f"procesada y validada exitosamente en el WMS.\n\n"
-                f"{txt_cont}"
-                f"Saludos cordiales,\nControl Tower WMS"
+                f"Se informa la recepción de la Orden de Compra N° {cod_po_str} ({nota_asn}) en LUDIPEK WMS:\n\n"
+                f"• Proveedor: {prov_str}\n"
+                + (f"• Contenedor / Guía: {cont_ref}\n" if cont_ref else "")
+                + f"• Total Unidades OC: {tot_esp} UN  |  Total Físico Recibido: {tot_rec} UN (Dif: {dif_tot:+d} UN)\n\n"
+                f"Resumen por SKU:\n" + "\n".join(resumen_skus) + "\n\n"
+                f"Saludos cordiales,\nTorre de Control LUDIPEK WMS"
             )
 
-            try:
-                import pythoncom
-                import win32com.client
-                pythoncom.CoInitialize()
-                outlook = win32com.client.Dispatch("outlook.application")
-                mail = outlook.CreateItem(0)
-                mail.To = "compras@ludipek.cl; logistica@ludipek.cl"
-                mail.Subject = asunto_str
-                mail.Body = cuerpo_str
-                mail.Attachments.Add(os.path.abspath(ruta))
-                mail.Display(True)
-                notificar(f"Borrador de Outlook abierto con el Acta de PO {cod_po_str} adjunta.", "#047857")
-            except Exception:
-                import urllib.parse
-                import webbrowser
-                asunto_q = urllib.parse.quote(asunto_str)
-                cuerpo_q = urllib.parse.quote(cuerpo_str)
-                mailto_link = f"mailto:compras@ludipek.cl;logistica@ludipek.cl?subject={asunto_q}&body={cuerpo_q}"
+            txt_para = texto_dark("Para (separar correos con coma)", width=580, value="compras@ludipek.cl, logistica@ludipek.cl")
+            txt_asunto = texto_dark("Asunto", width=580, value=asunto_default)
+            txt_mensaje = ft.TextField(
+                label="Cuerpo del Correo",
+                value=cuerpo_default,
+                multiline=True,
+                min_lines=6,
+                max_lines=9,
+                width=580,
+                text_style=ft.TextStyle(size=11, color=TEXT_WHITE),
+                bgcolor=BG_INPUT,
+                border_color=BORDER_COLOR,
+            )
+            lbl_info_envio = ft.Text(
+                f"PDF generado: {nombre_seguro}",
+                size=11,
+                color="#34D399",
+                weight=ft.FontWeight.BOLD,
+            )
+
+            mailto_inicial = (
+                f"mailto:compras@ludipek.cl,logistica@ludipek.cl"
+                f"?subject={urllib.parse.quote(asunto_default)}"
+                f"&body={urllib.parse.quote(cuerpo_default)}"
+            )
+
+            btn_abrir_cliente_pc = ft.Button(
+                content=ft.Text("2. ABRIR OUTLOOK / CORREO EN MI PC", size=11, weight=ft.FontWeight.BOLD),
+                icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
+                bgcolor=ACCENT_BLUE,
+                color=ft.Colors.WHITE,
+                url=mailto_inicial,
+                url_target=ft.UrlTarget.BLANK,
+            )
+
+            def actualizar_link_mailto(ev=None):
+                para_limpio = (txt_para.value or "").replace(";", ",").strip()
+                btn_abrir_cliente_pc.url = (
+                    f"mailto:{para_limpio}"
+                    f"?subject={urllib.parse.quote(txt_asunto.value or '')}"
+                    f"&body={urllib.parse.quote(txt_mensaje.value or '')}"
+                )
+                page.update()
+
+            txt_para.on_change = actualizar_link_mailto
+            txt_asunto.on_change = actualizar_link_mailto
+            txt_mensaje.on_change = actualizar_link_mailto
+
+            def enviar_directo_smtp(ev=None):
+                smtp_user = os.getenv("SMTP_USER", "").strip()
+                smtp_pass = os.getenv("SMTP_PASS", "").strip()
+                smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
+                smtp_port = int(os.getenv("SMTP_PORT", "587"))
+
+                if not smtp_user or not smtp_pass:
+                    lbl_info_envio.value = "Para envío automático sin Outlook, agregue SMTP_USER y SMTP_PASS en Render. Use los botones 1 y 2 para enviar desde su PC."
+                    lbl_info_envio.color = "#FBBF24"
+                    page.update()
+                    return
+
                 try:
-                    if os.name == "nt":
-                        os.startfile(mailto_link)
-                    else:
-                        webbrowser.open(mailto_link)
-                except Exception:
-                    pass
-                descargar_o_abrir_archivo(self.page, ruta)                
+                    import smtplib
+                    from email.message import EmailMessage
+
+                    msg = EmailMessage()
+                    msg["Subject"] = txt_asunto.value or asunto_default
+                    msg["From"] = smtp_user
+                    destinatarios = [x.strip() for x in (txt_para.value or "").replace(";", ",").split(",") if x.strip()]
+                    msg["To"] = ", ".join(destinatarios)
+                    msg.set_content(txt_mensaje.value or cuerpo_default)
+
+                    with open(ruta, "rb") as f_pdf:
+                        msg.add_attachment(
+                            f_pdf.read(),
+                            maintype="application",
+                            subtype="pdf",
+                            filename=nombre_seguro,
+                        )
+
+                    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+                        server.starttls()
+                        server.login(smtp_user, smtp_pass)
+                        server.send_message(msg)
+
+                    page.pop_dialog()
+                    notificar(f"Correo enviado con el PDF adjunto a {', '.join(destinatarios)}.", "#047857")
+                except Exception as ex_s:
+                    lbl_info_envio.value = f"Error SMTP: {ex_s}"
+                    lbl_info_envio.color = "#F87171"
+                    page.update()
+
+            dlg_mail = ft.AlertDialog(
+                modal=True,
+                bgcolor="#1E293B",
+                title=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.MARK_EMAIL_READ_ROUNDED, color=ACCENT_CYAN, size=22),
+                        ft.Text(f"Descargar Acta PDF y Enviar Correo (OC {cod_po_str})", size=15, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ],
+                    spacing=8,
+                ),
+                content=ft.Container(
+                    width=600,
+                    content=ft.Column(
+                        [
+                            lbl_info_envio,
+                            txt_para,
+                            txt_asunto,
+                            txt_mensaje,
+                        ],
+                        spacing=8,
+                        tight=True,
+                    ),
+                ),
+                actions=[
+                    ft.TextButton("CERRAR", on_click=lambda e: page.pop_dialog()),
+                    ft.Button(
+                        content=ft.Text("1. DESCARGAR ACTA PDF", size=11, weight=ft.FontWeight.BOLD),
+                        icon=ft.Icons.DOWNLOAD_ROUNDED,
+                        bgcolor=ACCENT_TEAL,
+                        color=ft.Colors.WHITE,
+                        url=url_pdf_web,
+                        url_target=ft.UrlTarget.BLANK,
+                    ),
+                    btn_abrir_cliente_pc,
+                    boton_primario("ENVIAR CON PDF (CLOUD SMTP)", ft.Icons.SEND_ROUNDED, enviar_directo_smtp, "#047857", height_val=34),
+                ],
+            )
+            page.show_dialog(dlg_mail)
+            page.update()                
 
 
         def click_exportar_excel_recepcion(e=None):
@@ -1889,7 +2014,12 @@ class RecepcionModulo:
                 notificar(f"Error eliminando LPN: {ex}", "#B91C1C")
 
         async def generar_json_con_gemini(archivo_remoto, prompt: str):
-            modelos_preferidos = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"]
+            modelos_preferidos = [
+                "gemini-2.5-flash",
+                "gemini-2.0-flash",
+                "gemini-1.5-flash",
+                "gemini-1.5-pro",
+            ]
             ultimo_error = None
             for nombre_mod in modelos_preferidos:
                 try:
@@ -1906,18 +2036,15 @@ class RecepcionModulo:
                     continue
             raise ultimo_error
 
-        async def seleccionar_y_procesar_packing_ia(e=None):
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            ruta_pdf = filedialog.askopenfilename(title="Seleccionar Packing List PDF", filetypes=[("Archivos PDF", "*.pdf")])
-            root.destroy()
-            if not ruta_pdf:
+        # --- MOTOR DE SUBIDA WEB DE ARCHIVOS PDF / COA (SIN TKINTER) ---
+        modo_carga_ia_actual = {"tipo": "PACKING", "ultimo_nombre": ""}
+
+        async def procesar_packing_ia_desde_ruta(ruta_pdf: str):
+            if not ruta_pdf or not os.path.exists(ruta_pdf):
+                notificar("No se encontró el archivo PDF subido en el servidor.", "#B91C1C")
                 return
             if not ai_client:
-                notificar("Cliente IA no configurado.", "#D97706")
+                notificar("Cliente IA no configurado. Verifique GEMINI_API_KEY en Render.", "#D97706")
                 return
 
             nombre_archivo = os.path.basename(ruta_pdf)
@@ -2016,12 +2143,14 @@ class RecepcionModulo:
                         upd_cab["contenedor_referencia"] = str(datos.get("contenedor_referencia")).strip().upper()
                     supabase.table("asn_cabecera").update(upd_cab).eq("id", asn_actual_id).execute()
 
-                    txt_estado_ia.value = f"Cruce 3-Way exitoso: {skus_actualizados} SKUs de la PO enriquecidos."
+                    txt_estado_ia.value = f"Cruce 3-Way exitoso: {skus_actualizados} SKUs de la OC enriquecidos."
+                    notificar(f"Packing List procesado: {skus_actualizados} SKUs actualizados.", "#047857")
                 else:
+                    orden_str = str(datos.get("orden") or datetime.now().strftime("%H%M%S")).strip()
                     cab = {
-                        "codigo_asn": f"PO-{datos.get('orden', datetime.now().strftime('%H%M%S'))}",
+                        "codigo_asn": f"OC-{orden_str}",
                         "proveedor": datos.get("proveedor", "PROVEEDOR"),
-                        "numero_oc": str(datos.get("orden", "")),
+                        "numero_oc": orden_str,
                         "contenedor_referencia": str(datos.get("contenedor_referencia") or (txt_contenedor.value or "")).strip().upper(),
                         "fecha_documento": datos.get("fecha_documento", ""),
                         "pallets_esperados": int(datos.get("pallets_esperados") or 1),
@@ -2052,13 +2181,15 @@ class RecepcionModulo:
                     if detalles:
                         supabase.table("asn_detalle").insert(detalles).execute()
 
-                    txt_estado_ia.value = f"PO creada desde Packing List: {len(detalles)} SKUs habilitados."
+                    txt_estado_ia.value = f"OC creada desde Packing List: {len(detalles)} SKUs habilitados."
+                    notificar(f"OC creada desde PDF con {len(detalles)} SKUs.", "#047857")
                     dd_asn.value = str(nuevo_id)
 
                 cargar_lista_asns()
                 auditar_asn_seleccionado()
             except Exception as ex:
                 txt_estado_ia.value = f"Error procesando Packing List: {ex}"
+                notificar(f"Error procesando PDF: {ex}", "#B91C1C")
             finally:
                 if archivo_remoto:
                     try:
@@ -2069,18 +2200,12 @@ class RecepcionModulo:
                         pass
                 self.page.update()
 
-        async def anexar_certificado_coa_ia(e=None):
-            if not ai_client:
-                notificar("Cliente IA no configurado.", "#D97706")
+        async def procesar_coa_ia_desde_ruta(ruta_pdf: str):
+            if not ruta_pdf or not os.path.exists(ruta_pdf):
+                notificar("No se encontró el Certificado CoA subido en el servidor.", "#B91C1C")
                 return
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            ruta_pdf = filedialog.askopenfilename(title="Seleccionar Certificado CoA", filetypes=[("Documentos", "*.pdf *.png *.jpg *.jpeg")])
-            root.destroy()
-            if not ruta_pdf:
+            if not ai_client:
+                notificar("Cliente IA no configurado. Verifique GEMINI_API_KEY en Render.", "#D97706")
                 return
 
             nombre_coa = os.path.basename(ruta_pdf)
@@ -2130,10 +2255,12 @@ class RecepcionModulo:
                     ).eq("asn_id", asn_actual_id).eq("sku", sku).execute()
                     actualizados += 1
 
-                txt_estado_ia.value = f"Certificado CoA procesado: {actualizados} SKUs actualizados en la PO."
+                txt_estado_ia.value = f"Certificado CoA procesado: {actualizados} SKUs actualizados en la OC."
+                notificar(f"Certificado CoA procesado ({actualizados} SKUs).", "#047857")
                 auditar_asn_seleccionado()
             except Exception as ex:
                 txt_estado_ia.value = f"Error leyendo Certificado CoA: {ex}"
+                notificar(f"Error leyendo CoA: {ex}", "#B91C1C")
             finally:
                 if archivo_remoto:
                     try:
@@ -2143,6 +2270,120 @@ class RecepcionModulo:
                     except Exception:
                         pass
                 self.page.update()
+
+        async def despachar_archivo_ia_listo(ruta_local: str):
+            if modo_carga_ia_actual.get("tipo") == "COA":
+                await procesar_coa_ia_desde_ruta(ruta_local)
+            else:
+                await procesar_packing_ia_desde_ruta(ruta_local)
+
+        def on_upload_ia_event(e):
+            err_up = getattr(e, "error", None)
+            if err_up:
+                txt_estado_ia.value = f"Error al subir PDF: {err_up}"
+                self.page.update()
+                return
+            prog = getattr(e, "progress", None)
+            if prog is not None and prog < 1.0:
+                txt_estado_ia.value = f"Subiendo archivo al servidor ({int(prog * 100)}%)..."
+                self.page.update()
+                return
+
+            nombre_f = getattr(e, "file_name", None) or modo_carga_ia_actual.get("ultimo_nombre", "")
+            ruta_subida = os.path.join("assets", "uploads", os.path.basename(nombre_f))
+            if os.path.exists(ruta_subida):
+                self.page.run_task(despachar_archivo_ia_listo, ruta_subida)
+
+        async def manejar_archivos_seleccionados_ia(archivos_lista):
+            if not archivos_lista:
+                txt_estado_ia.value = "Selección de archivo cancelada."
+                self.page.update()
+                return
+
+            f_obj = archivos_lista[0]
+            nombre_limpio = os.path.basename(getattr(f_obj, "name", "documento.pdf"))
+            modo_carga_ia_actual["ultimo_nombre"] = nombre_limpio
+            os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
+            ruta_destino = os.path.join("assets", "uploads", nombre_limpio)
+
+            # 1. Si el navegador entregó los bytes directos en memoria
+            datos_bytes = getattr(f_obj, "bytes", None)
+            if datos_bytes:
+                with open(ruta_destino, "wb") as f_out:
+                    f_out.write(bytes(datos_bytes))
+                await despachar_archivo_ia_listo(ruta_destino)
+                return
+
+            # 2. Si se ejecuta en PC local y existe la ruta física
+            ruta_local_pc = getattr(f_obj, "path", None)
+            if ruta_local_pc and os.path.exists(ruta_local_pc):
+                await despachar_archivo_ia_listo(ruta_local_pc)
+                return
+
+            # 3. Subida Web desde el navegador hacia assets/uploads en Render
+            txt_estado_ia.value = f"Subiendo '{nombre_limpio}' a la nube..."
+            self.page.update()
+            upload_url = self.page.get_upload_url(nombre_limpio, 600)
+            sig_up = inspect.signature(ft.FilePickerUploadFile.__init__).parameters
+            kwargs_up = {"upload_url": upload_url}
+            if "name" in sig_up:
+                kwargs_up["name"] = nombre_limpio
+            if "id" in sig_up and hasattr(f_obj, "id"):
+                kwargs_up["id"] = f_obj.id
+
+            arch_up = ft.FilePickerUploadFile(**kwargs_up)
+            res_u = selector_archivos_ia.upload([arch_up])
+            if inspect.iscoroutine(res_u):
+                await res_u
+
+        def on_result_ia_event(e):
+            archivos = getattr(e, "files", None)
+            self.page.run_task(manejar_archivos_seleccionados_ia, archivos)
+
+        sig_fp = inspect.signature(ft.FilePicker.__init__).parameters
+        kwargs_fp = {}
+        if "on_result" in sig_fp:
+            kwargs_fp["on_result"] = on_result_ia_event
+        if "on_upload" in sig_fp:
+            kwargs_fp["on_upload"] = on_upload_ia_event
+
+        selector_archivos_ia = ft.FilePicker(**kwargs_fp)
+        try:
+            if hasattr(ft, "Service") and isinstance(selector_archivos_ia, ft.Service) and hasattr(self.page, "services"):
+                self.page.services.append(selector_archivos_ia)
+            else:
+                self.page.overlay.append(selector_archivos_ia)
+        except Exception:
+            try:
+                self.page.overlay.append(selector_archivos_ia)
+            except Exception:
+                pass
+
+        async def abrir_selector_web_ia(tipo_doc: str, extensiones: list):
+            modo_carga_ia_actual["tipo"] = tipo_doc
+            txt_estado_ia.value = f"Seleccione el archivo ({', '.join(extensiones)}) en su navegador..."
+            self.page.update()
+
+            sig_pick = inspect.signature(selector_archivos_ia.pick_files).parameters
+            kwargs_pick = {
+                "allow_multiple": False,
+                "allowed_extensions": extensiones,
+            }
+            if "with_data" in sig_pick:
+                kwargs_pick["with_data"] = True
+
+            res_pick = selector_archivos_ia.pick_files(**kwargs_pick)
+            if inspect.iscoroutine(res_pick):
+                archivos_devueltos = await res_pick
+                if archivos_devueltos is not None:
+                    lista_f = getattr(archivos_devueltos, "files", archivos_devueltos)
+                    await manejar_archivos_seleccionados_ia(lista_f)
+
+        async def seleccionar_y_procesar_packing_ia(e=None):
+            await abrir_selector_web_ia("PACKING", ["pdf"])
+
+        async def anexar_certificado_coa_ia(e=None):
+            await abrir_selector_web_ia("COA", ["pdf", "png", "jpg", "jpeg"])
 
         async def ejecutar_accion_menu_po(e=None):
             accion = dd_accion_po.value
@@ -2229,6 +2470,13 @@ class RecepcionModulo:
                 icon_color=ACCENT_CYAN,
                 tooltip="Sincronizar recepción en vivo",
                 on_click=auditar_asn_seleccionado,
+            ),
+            boton_primario(
+                "CARGAR PACKING PDF",
+                ft.Icons.UPLOAD_FILE_ROUNDED,
+                seleccionar_y_procesar_packing_ia,
+                "#4F46E5",
+                height_val=34,
             ),
         ]
 
