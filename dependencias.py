@@ -359,26 +359,37 @@ def obtener_fecha_cierre_o_recepcion(cabecera_po: dict, recepciones_lpn: list) -
     return datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 
+def _texto_pdf_seguro(texto) -> str:
+    """Convierte cualquier texto a latin-1 seguro para que FPDF nunca falle por símbolos o tildes."""
+    s = str(texto or "").replace("•", "-").replace("—", "-").replace("–", "-")
+    return s.encode("latin-1", "replace").decode("latin-1")
+
+
+def _nombre_archivo_seguro(texto: str) -> str:
+    """Elimina barras, pipes (|) y espacios para nombres de archivo y URLs web seguras."""
+    limpio = "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in str(texto or ""))
+    while "__" in limpio:
+        limpio = limpio.replace("__", "_")
+    return limpio.strip("_")[:45] or "DOC"
+
+
 def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, recepciones_lpn: list) -> str:
     import os
     from fpdf import FPDF
     from datetime import datetime
 
     os.makedirs("reportes_recepcion", exist_ok=True)
-    
-    # Extraemos metadatos, incluyendo el nuevo CONTENEDOR
-    codigo_po = str(cabecera_po.get("codigo_asn", "S/PO"))
-    proveedor = str(cabecera_po.get("proveedor", "RECEPCION DIRECTA"))
+
+    codigo_po = str(cabecera_po.get("codigo_asn") or "S/PO").strip()
+    proveedor = str(cabecera_po.get("proveedor") or "RECEPCION DIRECTA").strip()
     oc_raw = str(cabecera_po.get("numero_oc") or "").strip()
     oc_num = codigo_po if oc_raw.upper() in ("", "S/OC", "S/N", "NONE") else oc_raw
-    estado_po = str(cabecera_po.get("estado", "EN_RECEPCION"))
-    contenedor_guia = str(cabecera_po.get("contenedor_referencia") or "N/A")
+    estado_po = str(cabecera_po.get("estado") or "EN_RECEPCION").strip()
+    contenedor_guia = str(cabecera_po.get("contenedor_referencia") or "N/A").strip()
 
-    # Fechas
     try:
-        from dependencias import obtener_fecha_cierre_o_recepcion
         fecha_cierre_str = obtener_fecha_cierre_o_recepcion(cabecera_po, recepciones_lpn)
-    except:
+    except Exception:
         fecha_cierre_str = datetime.now().strftime("%d-%m-%Y %H:%M")
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
@@ -389,12 +400,12 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
     pdf.set_fill_color(15, 23, 42)
     pdf.rect(0, 0, 210, 26, style="F")
 
-    try:
-        from dependencias import obtener_ruta_recurso
-        posibles_logos = [obtener_ruta_recurso("logo.png"), obtener_ruta_recurso(os.path.join("assets", "logo.png")), "logo.png", os.path.join("assets", "logo.png")]
-    except:
-        posibles_logos = ["logo.png", os.path.join("assets", "logo.png")]
-        
+    posibles_logos = [
+        obtener_ruta_recurso("logo.png"),
+        obtener_ruta_recurso(os.path.join("assets", "logo.png")),
+        "logo.png",
+        os.path.join("assets", "logo.png"),
+    ]
     ruta_logo = next((p for p in posibles_logos if os.path.exists(p)), None)
 
     x_texto_header = 10
@@ -402,12 +413,12 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
         try:
             pdf.image(ruta_logo, x=10, y=3, h=20)
             x_texto_header = 38
-        except Exception as err_img:
+        except Exception:
             pass
 
     fecha_llegada = "EN PROCESO / NO REGISTRADA"
     if recepciones_lpn:
-        primer_lpn = sorted(recepciones_lpn, key=lambda x: x.get("id", 0))[0]
+        primer_lpn = sorted(recepciones_lpn, key=lambda x: x.get("id") or 0)[0]
         val_r = primer_lpn.get("created_at") or primer_lpn.get("fecha_recepcion") or primer_lpn.get("timestamp")
         if val_r and str(val_r).strip() not in ("None", ""):
             try:
@@ -417,14 +428,14 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
                 fecha_llegada = str(val_r)[:16]
 
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_font("Helvetica", "B", 13)
     pdf.set_xy(x_texto_header, 5)
-    pdf.cell(200 - x_texto_header, 6, txt=f"LUDIPEK WMS - ACTA DE RECEPCION DE CARGA (PO: {codigo_po})", align="L")
+    pdf.cell(200 - x_texto_header, 6, txt=_texto_pdf_seguro(f"LUDIPEK WMS - ACTA DE RECEPCION (OC: {oc_num})"), align="L")
     pdf.set_font("Helvetica", "", 9)
     pdf.set_xy(x_texto_header, 13)
-    pdf.cell(200 - x_texto_header, 5, txt=f"Llegada a Centro de Distribución (Inicio Descarga): {fecha_llegada}", align="L")
+    pdf.cell(200 - x_texto_header, 5, txt=_texto_pdf_seguro(f"Llegada a Centro de Distribucion: {fecha_llegada}"), align="L")
     pdf.set_xy(x_texto_header, 18)
-    pdf.cell(200 - x_texto_header, 5, txt=f"Proceso y Cierre en Centro de Distribución: {fecha_cierre_str}", align="L")
+    pdf.cell(200 - x_texto_header, 5, txt=_texto_pdf_seguro(f"Proceso y Emision en WMS: {fecha_cierre_str}"), align="L")
     pdf.set_text_color(0, 0, 0)
 
     # --- DATOS DE CABECERA PO ---
@@ -433,32 +444,31 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
     pdf.rect(10, 32, 190, 22, style="F")
     pdf.set_font("Helvetica", "B", 9)
     pdf.set_xy(14, 35)
-    pdf.cell(85, 6, txt=f"PO: {codigo_po}")
-    pdf.cell(85, 6, txt=f"ORDEN DE COMPRA ERP: {oc_num}")
+    pdf.cell(90, 6, txt=_texto_pdf_seguro(f"ORDEN DE COMPRA ERP: {oc_num}"[:42]))
+    pdf.cell(90, 6, txt=_texto_pdf_seguro(f"REFERENCIA / NOTA PO: {codigo_po}"[:42]))
     pdf.set_xy(14, 43)
-    pdf.cell(85, 6, txt=f"PROVEEDOR: {proveedor[:30]}")
-    
-    # MOSTRAR CONTENEDOR EN EL ACTA
-    str_cont = f" | CONTENEDOR: {contenedor_guia}" if contenedor_guia != "N/A" else ""
-    pdf.cell(85, 6, txt=f"ESTADO: {estado_po}{str_cont}")
+    pdf.cell(90, 6, txt=_texto_pdf_seguro(f"PROVEEDOR: {proveedor[:34]}"))
+
+    str_cont = f" | CONTENEDOR: {contenedor_guia}" if contenedor_guia not in ("N/A", "", "None") else ""
+    pdf.cell(90, 6, txt=_texto_pdf_seguro(f"ESTADO: {estado_po}{str_cont}"[:45]))
 
     # --- 1. TABLA DE CONCILIACION VERTICAL POR SKU Y LOTE ---
     pdf.set_xy(10, 60)
     pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(190, 7, txt="1. TABLA DE CONCILIACION POR LOTE Y SKU (PO / PACKING LIST VS RECEPCION FISICA)", ln=True)
+    pdf.cell(190, 7, txt="1. TABLA DE CONCILIACION POR LOTE Y SKU (OC VS RECEPCION FISICA)", ln=True)
 
     lotes_agrupados = {}
     skus_con_recepcion = set()
-    
+
     for r in recepciones_lpn:
         s_r = str(r.get("sku", "")).strip().upper()
-        if not s_r: continue
+        if not s_r:
+            continue
         try:
-            from dependencias import extraer_estado_qa
             lote_limpio, _ = extraer_estado_qa(r.get("lote", "S/L"))
-        except:
+        except Exception:
             lote_limpio = str(r.get("lote", "S/L")).split(" ")[0]
-            
+
         venc_r = str(r.get("fecha_vencimiento_cl") or "S/F").strip()
         unid_r = int(r.get("unidades_totales", 0) or 0)
 
@@ -472,8 +482,6 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
 
     filas_verticales_pdf = []
     for (sku_k, lote_k), info_lote in sorted(lotes_agrupados.items(), key=lambda x: (x[0][0], x[0][1])):
-        
-        # Rescatamos la descripción desde el diccionario original de filas_conciliacion
         desc_rescate = "Ingreso Directo"
         unid_po = 0
         for f in filas_conciliacion:
@@ -481,7 +489,7 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
                 desc_rescate = str(f.get("descripcion", ""))
                 unid_po = int(f.get("unidades_esperadas", 0) or 0)
                 break
-                
+
         filas_verticales_pdf.append({
             "sku": sku_k,
             "descripcion": desc_rescate,
@@ -516,10 +524,10 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
     for fv in filas_verticales_pdf:
         cant_l = fv["cantidad_lote"]
         total_general_unidades += cant_l
-        pdf.cell(28, 6, str(fv["sku"])[:15], border=1)
-        pdf.cell(74, 6, str(fv["descripcion"])[:40], border=1)
-        pdf.cell(36, 6, str(fv["lote"])[:18], border=1, align="C")
-        pdf.cell(26, 6, str(fv["vencimiento"])[:12], border=1, align="C")
+        pdf.cell(28, 6, _texto_pdf_seguro(fv["sku"])[:15], border=1)
+        pdf.cell(74, 6, _texto_pdf_seguro(fv["descripcion"])[:40], border=1)
+        pdf.cell(36, 6, _texto_pdf_seguro(fv["lote"])[:18], border=1, align="C")
+        pdf.cell(26, 6, _texto_pdf_seguro(fv["vencimiento"])[:12], border=1, align="C")
         pdf.cell(26, 6, str(cant_l), border=1, align="C", ln=True)
 
     pdf.set_font("Helvetica", "B", 8)
@@ -527,7 +535,7 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
     pdf.cell(164, 6, "TOTAL UNIDADES FISICAS RECIBIDAS (SUMA POR LOTES)", border=1, align="R", fill=True)
     pdf.cell(26, 6, str(total_general_unidades), border=1, align="C", fill=True, ln=True)
 
-    # --- FIRMAS AL FINAL (OMITIMOS LA TABLA DE LPNs) ---
+    # --- FIRMAS AL FINAL ---
     pdf.ln(16)
     y_firma = pdf.get_y()
     if y_firma > 250:
@@ -541,20 +549,14 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
     pdf.set_xy(125, y_firma + 17)
     pdf.cell(65, 5, "ASEGURAMIENTO DE CALIDAD (QA)", align="C")
 
-    codigo_po_limpio = codigo_po.replace("/", "-").replace(":", "").replace("\\", "").replace(" ", "_")
-    proveedor_limpio = "".join(c for c in proveedor if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')[:30]
-    
+    oc_limpio = _nombre_archivo_seguro(oc_num)
+    prov_limpio = _nombre_archivo_seguro(proveedor)[:25]
+
     archivo_salida = os.path.join(
         "reportes_recepcion",
-        f"Acta_Recepcion_{codigo_po_limpio}_{proveedor_limpio}_{datetime.now().strftime('%d%m%Y_%H%M')}.pdf",
+        f"Acta_OC_{oc_limpio}_{prov_limpio}_{datetime.now().strftime('%d%m%Y_%H%M%S')}.pdf",
     )
     pdf.output(archivo_salida)
-    
-    if os.name == "nt":
-        try:
-            os.startfile(archivo_salida)
-        except Exception:
-            pass
     return archivo_salida
 
 def generar_pdf_totem_rack(pasillo: str, columna: str, niveles: int = 5):
@@ -953,53 +955,63 @@ def verificar_password_seguro(password_ingresada: str, password_guardada: str) -
 
 
 def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):
-    """Abre el archivo en PC y publica un enlace de descarga directa en el navegador sin usar page.launch_url."""
+    """Publica el archivo en assets/descargas/ y permite descargarlo desde cualquier navegador en internet."""
     if not ruta_archivo or not os.path.exists(ruta_archivo):
+        if page is not None:
+            notificar_global(page, "No se encontró el archivo generado para descargar.", "#B91C1C")
         return
     try:
-        carpeta_pub = os.path.join("assets", "descargas")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        carpeta_pub = os.path.join(base_dir, "assets", "descargas")
         os.makedirs(carpeta_pub, exist_ok=True)
-        nombre_limpio = os.path.basename(ruta_archivo)
-        destino_pub = os.path.join(carpeta_pub, nombre_limpio)
+
+        nombre_orig = os.path.basename(ruta_archivo)
+        base_nom, ext_nom = os.path.splitext(nombre_orig)
+        nombre_seguro = f"{_nombre_archivo_seguro(base_nom)}{ext_nom.lower()}"
+        destino_pub = os.path.join(carpeta_pub, nombre_seguro)
+
         if os.path.abspath(ruta_archivo) != os.path.abspath(destino_pub):
             shutil.copy2(ruta_archivo, destino_pub)
 
-        # 1. En Windows (PC Torre de Control), abrir el PDF/Excel de inmediato
-        if os.name == "nt":
-            try:
-                os.startfile(os.path.abspath(ruta_archivo))
-            except Exception:
-                pass
+        # También copiar a carpeta relativa assets/descargas por si el servidor se inició desde otro directorio
+        carpeta_rel = os.path.join("assets", "descargas")
+        os.makedirs(carpeta_rel, exist_ok=True)
+        destino_rel = os.path.join(carpeta_rel, nombre_seguro)
+        if os.path.abspath(destino_pub) != os.path.abspath(destino_rel):
+            shutil.copy2(ruta_archivo, destino_rel)
 
-        # 2. En navegador Web, mostrar botón con atributo nativo url= (compatible con Flet 0.80+)
+        url_descarga = f"/descargas/{urllib.parse.quote(nombre_seguro)}"
+
         if page is not None:
-            url_rel = f"/descargas/{urllib.parse.quote(nombre_limpio)}"
-            page.show_dialog(
-                ft.SnackBar(
-                    bgcolor="#047857",
-                    content=ft.Row(
-                        [
-                            ft.Text(
-                                f"Archivo listo: {nombre_limpio}",
-                                color=ft.Colors.WHITE,
-                                weight=ft.FontWeight.BOLD,
-                                size=12,
-                                expand=True,
-                            ),
-                            ft.TextButton(
-                                content=ft.Text(
-                                    "📥 ABRIR / DESCARGAR PDF",
-                                    color="#FEF08A",
-                                    weight=ft.FontWeight.W_900,
-                                    size=12,
-                                ),
-                                url=url_rel,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                )
+            try:
+                page.launch_url(url_descarga, web_popup_window_name="_blank")
+            except Exception:
+                try:
+                    page.launch_url(url_descarga)
+                except Exception:
+                    pass
+
+            # Mostrar barra con botón HTML directo (nunca es bloqueado por el navegador)
+            snack_dl = ft.SnackBar(
+                bgcolor="#0F172A",
+                duration=8000,
+                content=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.CLOUD_DONE_ROUNDED, color="#34D399", size=20),
+                        ft.Text(f"Listo: {nombre_seguro}", color=ft.Colors.WHITE, size=12, weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Button(
+                            content=ft.Text("DESCARGAR AQUÍ", size=11, weight=ft.FontWeight.BOLD),
+                            icon=ft.Icons.DOWNLOAD_ROUNDED,
+                            bgcolor="#047857",
+                            color=ft.Colors.WHITE,
+                            url=url_descarga,
+                            url_target=ft.UrlTarget.BLANK,
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
             )
+            page.show_dialog(snack_dl)
             page.update()
     except Exception as ex_dl:
-        print(f"[WARN] Error preparando archivo: {ex_dl}")
+        print(f"[WARN] Error enviando archivo al navegador: {ex_dl}")

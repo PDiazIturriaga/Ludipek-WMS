@@ -2013,63 +2013,127 @@ class RecepcionModulo:
             except Exception as ex:
                 notificar(f"Error eliminando LPN: {ex}", "#B91C1C")
 
-        async def generar_json_con_gemini(archivo_remoto, prompt: str):
-            modelos_preferidos = [
+        async def generar_json_con_gemini(ruta_archivo: str, prompt: str):
+            import mimetypes
+            from google import genai as genai_sdk
+
+            with open(ruta_archivo, "rb") as f_bin:
+                bytes_doc = f_bin.read()
+
+            mime_t, _ = mimetypes.guess_type(ruta_archivo)
+            if not mime_t:
+                mime_t = "application/pdf" if ruta_archivo.lower().endswith(".pdf") else "image/jpeg"
+
+            parte_doc = types.Part.from_bytes(data=bytes_doc, mime_type=mime_t)
+
+            # Crear cliente en v1beta para soportar JSON estructurado y PDFs inline sin restricción de versión v1
+            api_key_val = (
+                os.getenv("GEMINI_API_KEY")
+                or os.getenv("GOOGLE_API_KEY")
+                or globals().get("GEMINI_API_KEY", "")
+            )
+            clientes_ia = []
+            if api_key_val:
+                try:
+                    clientes_ia.append(genai_sdk.Client(api_key=api_key_val, http_options={"api_version": "v1beta"}))
+                except Exception:
+                    pass
+                try:
+                    clientes_ia.append(genai_sdk.Client(api_key=api_key_val))
+                except Exception:
+                    pass
+            if ai_client and ai_client not in clientes_ia:
+                clientes_ia.append(ai_client)
+
+            # Solo modelos vigentes (sin gemini-1.5-pro ni 1.5-flash)
+            modelos_vigentes = [
                 "gemini-2.5-flash",
                 "gemini-2.0-flash",
-                "gemini-1.5-flash",
-                "gemini-1.5-pro",
+                "gemini-2.5-pro",
+                "gemini-3.8-flash",
             ]
-            ultimo_error = None
-            for nombre_mod in modelos_preferidos:
-                try:
-                    resultado = ai_client.models.generate_content(
-                        model=nombre_mod,
-                        contents=[archivo_remoto, prompt],
-                        config=types.GenerateContentConfig(response_mime_type="application/json"),
-                    )
-                    if inspect.iscoroutine(resultado):
-                        resultado = await resultado
-                    return resultado
-                except Exception as err:
-                    ultimo_error = err
-                    continue
-            raise ultimo_error
 
-        # --- MOTOR DE SUBIDA WEB DE ARCHIVOS PDF / COA (SIN TKINTER) ---
+            errores_intentos = []
+            for cli in clientes_ia:
+                for nombre_mod in modelos_vigentes:
+                    # Intento A: Con response_mime_type JSON
+                    try:
+                        res = cli.models.generate_content(
+                            model=nombre_mod,
+                            contents=[parte_doc, prompt],
+                            config=types.GenerateContentConfig(response_mime_type="application/json"),
+                        )
+                        if inspect.iscoroutine(res):
+                            res = await res
+                        if res and getattr(res, "text", None):
+                            return res
+                    except Exception as err_a:
+                        # Intento B: Sin config (compatible con API v1 estricta)
+                        try:
+                            res_b = cli.models.generate_content(
+                                model=nombre_mod,
+                                contents=[parte_doc, prompt],
+                            )
+                            if inspect.iscoroutine(res_b):
+                                res_b = await res_b
+                            if res_b and getattr(res_b, "text", None):
+                                return res_b
+                        except Exception as err_b:
+                            errores_intentos.append(f"{nombre_mod}: {err_b}")
+                            continue
+
+            raise RuntimeError(errores_intentos[0] if errores_intentos else "No se pudo conectar con Gemini API.")
+
+        def _extraer_json_limpio_ia(texto_resp: str):
+            import re
+            s = (texto_resp or "").strip()
+            s = s.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            try:
+                return json.loads(s)
+            except Exception:
+                m = re.search(r"(\{.*\}|\[.*\])", s, re.DOTALL)
+                if m:
+                    return json.loads(m.group(1))
+                raise
+
+        # --- MOTOR DE SUBIDA WEB DE ARCHIVOS PDF / CAN CODE LIST / COA ---
         modo_carga_ia_actual = {"tipo": "PACKING", "ultimo_nombre": ""}
 
         async def procesar_packing_ia_desde_ruta(ruta_pdf: str):
             if not ruta_pdf or not os.path.exists(ruta_pdf):
                 notificar("No se encontró el archivo PDF subido en el servidor.", "#B91C1C")
                 return
-            if not ai_client:
+            if not ai_client and not os.getenv("GEMINI_API_KEY"):
                 notificar("Cliente IA no configurado. Verifique GEMINI_API_KEY en Render.", "#D97706")
                 return
 
             nombre_archivo = os.path.basename(ruta_pdf)
-            txt_estado_ia.value = f"Procesando Packing List '{nombre_archivo}' con IA..."
+            txt_estado_ia.value = f"Procesando '{nombre_archivo}' (Packing / Can Code List) con IA..."
             self.page.update()
 
-            archivo_remoto = None
             try:
-                archivo_remoto = ai_client.files.upload(file=ruta_pdf)
-                if inspect.iscoroutine(archivo_remoto):
-                    archivo_remoto = await archivo_remoto
+                # Pasar los SKUs actuales de la OC activa para que la IA cruce el CAN CODE LIST con precisión
+                skus_contexto = ""
+                if lineas_asn_actual:
+                    lista_ctx = [f"{l.get('sku')} ({l.get('descripcion_proveedor', '')[:30]})" for l in lineas_asn_actual]
+                    skus_contexto = (
+                        "La Orden de Compra activa tiene estos SKUs registrados: "
+                        + ", ".join(lista_ctx)
+                        + ". Usa exactamente estos códigos SKU cuando coincidan con el código o descripción del documento. "
+                    )
 
                 prompt = (
                     "Actúa como un especialista en comercio exterior y WMS. "
-                    "Extrae los datos del Packing List adjunto en un JSON estricto. "
-                    "Si NO hay código SKU explícito, CREA un código SKU identificatorio basado en la descripción del producto. "
-                    "Si un SKU tiene múltiples lotes o fechas de vencimiento, únelos separados por coma en la misma línea. "
-                    '{"proveedor": "Nombre proveedor", "orden": "Numero orden", "contenedor_referencia": "Codigo", "fecha_documento": "YYYY-MM-DD", "pallets_esperados": 1, "lineas": [{"sku": "SKU", "descripcion": "Nombre", "cajas_esperadas": 10, "multiplo_empaque": 12, "unidades_esperadas": 120, "lote_sugerido": "S/L", "vencimiento_sugerido_cl": "YYYY-MM-DD"}]}'
+                    "Extrae los datos del Packing List o CAN CODE LIST adjunto y devuelve ÚNICAMENTE un JSON válido. "
+                    + skus_contexto +
+                    "REGLAS IMPORTANTES: "
+                    "1. Si el documento es un CAN CODE LIST (como los de Thai Inaba), extrae la columna 'CAN CODE' o 'LOT NO' como 'lote_sugerido' y la fecha de expiración ('EXPIRY DATE' / 'BBD' / 'EXP') como 'vencimiento_sugerido_cl' en formato YYYY-MM-DD. "
+                    "2. Si un mismo SKU aparece en varias filas con distintos lotes (Can Codes) o fechas de vencimiento, suma sus cajas/unidades y une todos sus lotes y fechas separados por coma. "
+                    'Formato estricto: {"proveedor": "Nombre proveedor", "orden": "Numero orden", "contenedor_referencia": "Codigo", "fecha_documento": "YYYY-MM-DD", "pallets_esperados": 1, "lineas": [{"sku": "USA603", "descripcion": "Nombre", "cajas_esperadas": 10, "multiplo_empaque": 48, "unidades_esperadas": 480, "lote_sugerido": "LOTE1, LOTE2", "vencimiento_sugerido_cl": "YYYY-MM-DD"}]}'
                 )
-                resp = await generar_json_con_gemini(archivo_remoto, prompt)
-                if inspect.iscoroutine(resp):
-                    resp = await resp
 
-                texto_limpio = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-                datos_brutos = json.loads(texto_limpio)
+                resp = await generar_json_con_gemini(ruta_pdf, prompt)
+                datos_brutos = _extraer_json_limpio_ia(resp.text)
                 datos = datos_brutos[0] if isinstance(datos_brutos, list) and datos_brutos else (datos_brutos if isinstance(datos_brutos, dict) else {})
 
                 mapa_skus = {}
@@ -2078,9 +2142,9 @@ class RecepcionModulo:
                     if not sku_limpio:
                         continue
 
-                    cajas = max(1, int(l.get("cajas_esperadas") or 1))
-                    unid = max(cajas, int(l.get("unidades_esperadas") or cajas))
-                    mult = int(l.get("multiplo_empaque") or max(1, unid // cajas))
+                    cajas = max(0, int(float(l.get("cajas_esperadas") or 0)))
+                    unid = max(cajas, int(float(l.get("unidades_esperadas") or cajas)))
+                    mult = max(1, int(float(l.get("multiplo_empaque") or (unid // cajas if cajas > 0 else 1))))
                     lote_sug = str(l.get("lote_sugerido") or "S/L").strip().upper()
                     venc_sug = str(l.get("vencimiento_sugerido_cl") or "").strip()
 
@@ -2098,53 +2162,52 @@ class RecepcionModulo:
                     mapa_skus[sku_limpio]["unidades"] += unid
 
                     for lt in lote_sug.split(","):
-                        if lt.strip() and lt.strip() != "S/L":
+                        if lt.strip() and lt.strip() not in ("S/L", "NONE", "NULL"):
                             mapa_skus[sku_limpio]["lotes"].add(lt.strip())
                     for v in venc_sug.split(","):
-                        if v.strip() and v.strip() not in ("NONE", "NULL"):
-                            mapa_skus[sku_limpio]["vencimientos"].add(v.strip())
-
-                    existe_sku = supabase.table("maestra_sku").select("sku").eq("sku", sku_limpio).execute()
-                    if not existe_sku.data:
-                        supabase.table("maestra_sku").insert(
-                            {
-                                "sku": sku_limpio,
-                                "codigo_barras": sku_limpio,
-                                "descripcion": l.get("descripcion", "SKU Inbound"),
-                                "marca": str(datos.get("proveedor", "IMPORTADO")).upper()[:20],
-                                "multiplo": mult,
-                            }
-                        ).execute()
+                        v_norm = normalizar_fecha_sql(v.strip()) or v.strip()
+                        if v_norm and v_norm.upper() not in ("NONE", "NULL", "S/F", ""):
+                            mapa_skus[sku_limpio]["vencimientos"].add(v_norm)
 
                 if asn_actual_id is not None and dd_asn.value != "LIBRES":
+                    # Indexar SKUs actuales de la OC sin guiones ni espacios para emparejar ej. 'USA-603' con 'USA603'
+                    mapa_sku_real_oc = {
+                        str(lin.get("sku") or "").strip().upper().replace("-", "").replace(" ", ""): str(lin.get("sku") or "").strip()
+                        for lin in lineas_asn_actual
+                    }
+
                     skus_actualizados = 0
-                    for sku, info in mapa_skus.items():
+                    for sku_ia, info in mapa_skus.items():
+                        clave_norm = sku_ia.replace("-", "").replace(" ", "")
+                        sku_target = mapa_sku_real_oc.get(clave_norm, sku_ia)
+
                         lotes_finales = ", ".join(sorted(info["lotes"])) if info["lotes"] else "S/L"
                         venc_finales = ", ".join(sorted(info["vencimientos"])) if info["vencimientos"] else None
 
+                        payload_upd = {
+                            "lote_sugerido": lotes_finales,
+                            "vencimiento_sugerido_cl": venc_finales,
+                        }
+                        if info["cajas"] > 0:
+                            payload_upd["cajas_esperadas"] = info["cajas"]
+
                         res_upd = (
                             supabase.table("asn_detalle")
-                            .update(
-                                {
-                                    "cajas_esperadas": info["cajas"],
-                                    "lote_sugerido": lotes_finales,
-                                    "vencimiento_sugerido_cl": venc_finales,
-                                }
-                            )
+                            .update(payload_upd)
                             .eq("asn_id", asn_actual_id)
-                            .eq("sku", sku)
+                            .eq("sku", sku_target)
                             .execute()
                         )
                         if res_upd.data:
                             skus_actualizados += 1
 
-                    upd_cab = {"archivo_origen": f"PO_NETSUITE + {nombre_archivo}"}
-                    if datos.get("contenedor_referencia"):
+                    upd_cab = {"archivo_origen": f"OC_NETSUITE + {nombre_archivo}"}
+                    if datos.get("contenedor_referencia") and str(datos.get("contenedor_referencia")).upper() not in ("NONE", "NULL", "CODIGO", ""):
                         upd_cab["contenedor_referencia"] = str(datos.get("contenedor_referencia")).strip().upper()
                     supabase.table("asn_cabecera").update(upd_cab).eq("id", asn_actual_id).execute()
 
-                    txt_estado_ia.value = f"Cruce 3-Way exitoso: {skus_actualizados} SKUs de la OC enriquecidos."
-                    notificar(f"Packing List procesado: {skus_actualizados} SKUs actualizados.", "#047857")
+                    txt_estado_ia.value = f"CAN CODE / Packing List procesado: {skus_actualizados} SKUs enriquecidos con Lote y Vencimiento."
+                    notificar(f"Documento procesado: {skus_actualizados} SKUs actualizados en la OC.", "#047857")
                 else:
                     orden_str = str(datos.get("orden") or datetime.now().strftime("%H%M%S")).strip()
                     cab = {
@@ -2171,8 +2234,8 @@ class RecepcionModulo:
                                 "sku": sku,
                                 "descripcion_proveedor": info["descripcion"],
                                 "multiplo_empaque": info["multiplo"],
-                                "cajas_esperadas": info["cajas"],
-                                "unidades_esperadas": info["unidades"],
+                                "cajas_esperadas": max(1, info["cajas"]),
+                                "unidades_esperadas": max(1, info["unidades"]),
                                 "lote_sugerido": lotes_finales,
                                 "vencimiento_sugerido_cl": venc_finales,
                             }
@@ -2181,7 +2244,7 @@ class RecepcionModulo:
                     if detalles:
                         supabase.table("asn_detalle").insert(detalles).execute()
 
-                    txt_estado_ia.value = f"OC creada desde Packing List: {len(detalles)} SKUs habilitados."
+                    txt_estado_ia.value = f"OC creada desde PDF: {len(detalles)} SKUs habilitados."
                     notificar(f"OC creada desde PDF con {len(detalles)} SKUs.", "#047857")
                     dd_asn.value = str(nuevo_id)
 
@@ -2191,22 +2254,13 @@ class RecepcionModulo:
                 txt_estado_ia.value = f"Error procesando Packing List: {ex}"
                 notificar(f"Error procesando PDF: {ex}", "#B91C1C")
             finally:
-                if archivo_remoto:
-                    try:
-                        borrado = ai_client.files.delete(name=archivo_remoto.name)
-                        if inspect.iscoroutine(borrado):
-                            await borrado
-                    except Exception:
-                        pass
                 self.page.update()
 
         async def procesar_coa_ia_desde_ruta(ruta_pdf: str):
             if not ruta_pdf or not os.path.exists(ruta_pdf):
-                notificar("No se encontró el Certificado CoA subido en el servidor.", "#B91C1C")
+                notificar("No se encontró el Certificado CoA / Can Code List en el servidor.", "#B91C1C")
                 return
-            if not ai_client:
-                notificar("Cliente IA no configurado. Verifique GEMINI_API_KEY en Render.", "#D97706")
-                return
+            await procesar_packing_ia_desde_ruta(ruta_pdf)
 
             nombre_coa = os.path.basename(ruta_pdf)
             txt_estado_ia.value = f"Extrayendo Lotes y Vencimientos desde '{nombre_coa}'..."
