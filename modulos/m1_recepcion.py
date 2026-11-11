@@ -63,7 +63,7 @@ class RecepcionModulo:
             return next((p for p in posibles if p and os.path.exists(p)), None)
 
         def descargar_archivo_web(ruta_archivo: str, titulo_doc: str = "Documento Generado"):
-            """Publica el PDF o Excel en /descargas/, lanza descarga automática y abre botón directo con UrlTarget.BLANK."""
+            """Publica el PDF o Excel en /descargas/, lanza descarga automática y abre botón directo."""
             if not ruta_archivo or not os.path.exists(ruta_archivo):
                 notificar("No se encontró el archivo generado en el servidor.", "#B91C1C")
                 return
@@ -143,7 +143,6 @@ class RecepcionModulo:
                             bgcolor="#047857",
                             color=ft.Colors.WHITE,
                             url=url_descarga,
-                            
                         ),
                     ],
                 )
@@ -177,7 +176,6 @@ class RecepcionModulo:
             x_texto = 10
             if ruta_logo:
                 try:
-                    # Cuadro blanco de 24x24 mm con margen superior e inferior exacto de 3 mm dentro de la barra de 30 mm
                     pdf.set_fill_color(255, 255, 255)
                     pdf.rect(10, 3, 24, 24, style="F")
                     pdf.image(ruta_logo, x=11, y=4, w=22, h=22)
@@ -257,7 +255,6 @@ class RecepcionModulo:
                 desc_k = str(info_c.get("descripcion") or "Ingreso Recepcion")
                 est_sku = str(info_c.get("estado") or "VALIDADA")
                 dif_cajas_sku = int(info_c.get("dif_cajas") or 0)
-                dif_unid_sku = int(info_c.get("diferencia") or 0)
 
                 if est_sku == "SKU FUERA DE OC":
                     txt_est_pdf = "FUERA DE OC"
@@ -271,7 +268,6 @@ class RecepcionModulo:
                 tot_cajas_acta += inf_l["cajas"]
                 tot_unid_acta += inf_l["unidades"]
 
-                # Resaltar fila suave si es SOBRANTE o FUERA DE OC
                 es_alerta = est_sku in ("SKU FUERA DE OC", "SOBRANTE")
                 if es_alerta:
                     pdf.set_fill_color(254, 226, 226)
@@ -308,7 +304,6 @@ class RecepcionModulo:
             pdf.cell(16, 6.5, str(tot_unid_acta), border=1, align="C", fill=True)
             pdf.cell(26, 6.5, "", border=1, align="C", fill=True, ln=True)
 
-            # --- BLOQUE DE OBSERVACIONES DE DISCREPANCIAS (SOBRANTES / FUERA DE OC / FALTANTES) ---
             for f in filas_conc:
                 est_f = str(f.get("estado") or "")
                 if est_f in ("SKU FUERA DE OC", "SOBRANTE", "PARCIAL"):
@@ -392,7 +387,7 @@ class RecepcionModulo:
                 border_color=BORDER_COLOR,
                 focused_border_color=ACCENT_CYAN,
                 label_style=ft.TextStyle(size=11, color=TEXT_MUTED),
-                content_padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                content_padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                 keyboard_type=keyboard_type,
                 on_change=on_change,
                 border_radius=6,
@@ -428,7 +423,7 @@ class RecepcionModulo:
                 focused_border_color=ACCENT_CYAN,
                 text_style=ft.TextStyle(size=12, color=TEXT_WHITE),
                 label_style=ft.TextStyle(size=11, color=TEXT_MUTED),
-                content_padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                content_padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                 border_radius=6,
             )
 
@@ -540,33 +535,49 @@ class RecepcionModulo:
             ],
         )
 
-        dd_edit_sku_asn = dropdown_dark(label="Seleccionar SKU de la OC", width=210)
+        # --- Controles 4.1 (Modificación Documental de Líneas de la OC) ---
+        dd_edit_sku_asn = dropdown_dark(label="Seleccionar SKU de la OC", width=220)
         txt_nuevo_sku_po = texto_dark(label="O escribir SKU (Nuevo/Editar)", width=155)
-        txt_edit_desc_po = texto_dark(label="Descripción Producto", width=210)
+        txt_edit_desc_po = texto_dark(label="Descripción Producto", width=220)
         txt_edit_cajas_esp = texto_dark(label="Cajas OC", width=90, keyboard_type=ft.KeyboardType.NUMBER)
         txt_edit_mult_esp = texto_dark(label="Múltiplo", width=85, keyboard_type=ft.KeyboardType.NUMBER)
         txt_edit_unid_esp = texto_dark(label="Unidades OC", width=105, keyboard_type=ft.KeyboardType.NUMBER)
         txt_edit_lote_sug = texto_dark(label="Lote / Can Code", width=130)
         txt_edit_venc_sug = texto_dark(label="Vencimiento (DD-MM-YYYY)", width=155)
 
+        # --- Controles 4.2 (Filtro por SKU/LPN + Editor Unitario + Tabla de LPNs) ---
         dd_filtro_sku_mod_lpn = dropdown_dark(
-            label="1. Filtrar LPNs por SKU",
-            width=230,
+            label="1. Elegir SKU (Filtra Tabla y LPNs)",
+            width=265,
             value="TODOS",
             options=[opt_w("TODOS", "TODOS LOS SKUs")],
         )
-        dd_edit_lpn_id = dropdown_dark(label="2. Seleccionar Registro LPN a Modificar", width=340)
-        txt_mod_lpn_cod = texto_dark(label="Código LPN", width=155)
-        txt_mod_lpn_sku = texto_dark(label="SKU", width=135)
+        dd_edit_lpn_id = dropdown_dark(
+            label="2. Elegir LPN Unitario a Modificar",
+            width=340,
+        )
+        txt_buscar_lpn_mod = texto_dark(
+            label="3. Buscar LPN, SKU o Lote...",
+            width=200,
+        )
+
+        lbl_lpn_unitario_activo = ft.Text(
+            "LPN Unitario Seleccionado: Ninguno",
+            size=12,
+            weight=ft.FontWeight.W_900,
+            color=ACCENT_CYAN,
+        )
+        txt_mod_lpn_cod = texto_dark(label="Código LPN", width=150)
+        txt_mod_lpn_sku = texto_dark(label="SKU", width=120)
         txt_mod_lpn_cajas = texto_dark(label="Cajas", width=85, keyboard_type=ft.KeyboardType.NUMBER)
         txt_mod_lpn_mult = texto_dark(label="Múltiplo", width=85, keyboard_type=ft.KeyboardType.NUMBER)
         txt_mod_lpn_sueltas = texto_dark(label="Sueltas", width=85, keyboard_type=ft.KeyboardType.NUMBER)
         txt_mod_lpn_totales = texto_dark(label="Unid. Totales", width=105, keyboard_type=ft.KeyboardType.NUMBER)
         txt_mod_lpn_lote = texto_dark(label="Lote Físico", width=130)
-        txt_mod_lpn_venc = texto_dark(label="Vencimiento (DD-MM-YYYY)", width=155)
+        txt_mod_lpn_venc = texto_dark(label="Vencimiento (DD-MM-YYYY)", width=150)
         dd_mod_lpn_qa = dropdown_dark(
             label="Estado QA",
-            width=165,
+            width=155,
             value="APROBADO",
             options=[
                 opt_w("APROBADO", "APROBADO"),
@@ -575,13 +586,44 @@ class RecepcionModulo:
             ],
         )
 
+        lbl_resumen_lista_lpns = ft.Text(
+            "Seleccione un SKU o un LPN arriba para ver todos sus pallets en la tabla y modificar cualquier LPN unitario.",
+            size=11,
+            weight=ft.FontWeight.BOLD,
+            color="#34D399",
+        )
+
+        tabla_mod_lpns = ft.DataTable(
+            heading_row_color="#181E20",
+            heading_row_height=34,
+            data_row_min_height=32,
+            data_row_max_height=38,
+            column_spacing=14,
+            data_text_style=ft.TextStyle(color=TEXT_WHITE),
+            columns=[
+                ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
+                ft.DataColumn(ft.Text("LPN PALLET", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("SKU", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("CAJAS", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                ft.DataColumn(ft.Text("MÚLTIPLO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
+                ft.DataColumn(ft.Text("SUELTAS", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
+                ft.DataColumn(ft.Text("UNID. TOTALES", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("LOTE FÍSICO", weight=ft.FontWeight.BOLD, size=11, color="#FBBF24")),
+                ft.DataColumn(ft.Text("VENCIMIENTO", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("CALIDAD (QA)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("ACCIÓN UNITARIA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+            ],
+            rows=[],
+        )
+        cont_tabla_mod_lpns = envolver_tabla_scroll(tabla_mod_lpns, 275)
+
         sw_auto_sync_rf = ft.Switch(
             label="Auto-Sync RF",
             value=False,
             active_color="#10B981",
         )
 
-        # TABLAS
+        # TABLAS PRINCIPALES
         tabla_cruce_inbound = ft.DataTable(
             heading_row_color="#181E20",
             heading_row_height=34,
@@ -697,11 +739,31 @@ class RecepcionModulo:
                     continue
             return texto.replace("/", "-").replace(".", "-")
 
+        def _extraer_sku_limpio_dropdown(val_raw: str) -> str:
+            """Extrae siempre la clave limpia del SKU aunque el Dropdown entregue el texto descriptivo."""
+            s = str(val_raw or "").strip().upper()
+            if not s or s.startswith("TODOS"):
+                return "TODOS"
+            if " (" in s:
+                s = s.split(" (", 1)[0].strip()
+            if " - " in s:
+                s = s.split(" - ", 1)[0].strip()
+            return s
+
+        def _extraer_id_lpn_limpio_dropdown(val_raw: str) -> str:
+            """Extrae siempre el ID numérico del registro LPN aunque el Dropdown entregue el texto completo."""
+            s = str(val_raw or "").strip()
+            if not s:
+                return ""
+            if "|" in s:
+                s = s.split("|", 1)[0].strip()
+            return s.replace("#", "").strip()
+
         def recalcular_mod_lpn_totales(e=None):
             try:
-                c = max(0, int(txt_mod_lpn_cajas.value.strip() or "0"))
-                m = max(1, int(txt_mod_lpn_mult.value.strip() or "1"))
-                s = max(0, int(txt_mod_lpn_sueltas.value.strip() or "0"))
+                c = max(0, int((txt_mod_lpn_cajas.value or "0").strip()))
+                m = max(1, int((txt_mod_lpn_mult.value or "1").strip()))
+                s = max(0, int((txt_mod_lpn_sueltas.value or "0").strip()))
                 txt_mod_lpn_totales.value = str((c * m) + s)
                 page.update()
             except Exception:
@@ -709,33 +771,38 @@ class RecepcionModulo:
 
         def recalcular_mod_po_unidades(e=None):
             try:
-                c = max(1, int(txt_edit_cajas_esp.value.strip() or "1"))
-                m = max(1, int(txt_edit_mult_esp.value.strip() or "1"))
+                c = max(1, int((txt_edit_cajas_esp.value or "1").strip()))
+                m = max(1, int((txt_edit_mult_esp.value or "1").strip()))
                 txt_edit_unid_esp.value = str(c * m)
                 page.update()
             except Exception:
                 pass
 
-        def prellenar_edicion_linea_asn(e=None):
-            sku_sel = dd_edit_sku_asn.value
-            linea = next((l for l in lineas_asn_actual if l["sku"] == sku_sel), None)
-            if linea:
-                txt_nuevo_sku_po.value = str(linea.get("sku") or "")
-                txt_edit_desc_po.value = str(linea.get("descripcion_proveedor") or "")
-                txt_edit_cajas_esp.value = str(linea.get("cajas_esperadas") or 1)
-                txt_edit_mult_esp.value = str(linea.get("multiplo_empaque") or 1)
-                txt_edit_unid_esp.value = str(linea.get("unidades_esperadas") or 1)
-                txt_edit_lote_sug.value = str(linea.get("lote_sugerido") or "S/L")
-                txt_edit_venc_sug.value = str(linea.get("vencimiento_sugerido_cl") or "")
+        # =====================================================================
+        # LÓGICA SECCIÓN 4.2: FILTRO SKU/LPN + EDITOR UNITARIO + TABLA DE LPNs
+        # =====================================================================
+        def cargar_lpn_en_editor_unitario(id_registro_str: str, refrescar_tabla: bool = True):
+            id_limpio = _extraer_id_lpn_limpio_dropdown(id_registro_str)
+            if not id_limpio:
+                lbl_lpn_unitario_activo.value = "LPN Unitario Seleccionado: Ninguno"
+                txt_mod_lpn_cod.value = ""
+                txt_mod_lpn_sku.value = ""
+                txt_mod_lpn_cajas.value = "0"
+                txt_mod_lpn_mult.value = "1"
+                txt_mod_lpn_sueltas.value = "0"
+                txt_mod_lpn_totales.value = "0"
+                txt_mod_lpn_lote.value = ""
+                txt_mod_lpn_venc.value = ""
                 page.update()
-
-        def prellenar_edicion_lpn_fisico(e=None):
-            id_sel = dd_edit_lpn_id.value
-            if not id_sel:
                 return
-            reg = next((r for r in recepciones_asn_actual if str(r.get("id")) == str(id_sel)), None)
+
+            reg = next((r for r in recepciones_asn_actual if str(r.get("id")) == id_limpio), None)
             if reg:
+                dd_edit_lpn_id.value = id_limpio
                 lote_limpio, qa_actual = extraer_estado_qa(reg.get("lote", "S/L"))
+                lbl_lpn_unitario_activo.value = (
+                    f"EDITANDO LPN UNITARIO: #{reg.get('id')}  •  {reg.get('lpn')}  •  SKU: {reg.get('sku')}"
+                )
                 txt_mod_lpn_cod.value = str(reg.get("lpn") or "")
                 txt_mod_lpn_sku.value = str(reg.get("sku") or "")
                 txt_mod_lpn_cajas.value = str(reg.get("cajas") or 0)
@@ -744,19 +811,47 @@ class RecepcionModulo:
                 txt_mod_lpn_totales.value = str(reg.get("unidades_totales") or 0)
                 txt_mod_lpn_lote.value = lote_limpio
                 txt_mod_lpn_venc.value = str(reg.get("fecha_vencimiento_cl") or "")
-                dd_mod_lpn_qa.value = qa_actual
-                page.update()
+                dd_mod_lpn_qa.value = qa_actual if qa_actual in ("APROBADO", "CUARENTENA", "RECHAZADO") else "APROBADO"
+                if refrescar_tabla:
+                    actualizar_tabla_y_selector_lpns(mantener_lpn_actual=True)
+                else:
+                    page.update()
 
-        def filtrar_lpns_por_sku_mod(e=None):
-            sku_f = (dd_filtro_sku_mod_lpn.value or "TODOS").strip().upper()
-            if sku_f == "TODOS" or not sku_f:
-                lista_filtrada = list(recepciones_asn_actual)
+        def evento_seleccionar_lpn_dropdown(e=None):
+            val_raw = ""
+            if e is not None:
+                ctrl_ev = getattr(e, "control", None)
+                val_raw = getattr(e, "data", None) or getattr(ctrl_ev, "value", None) or dd_edit_lpn_id.value
             else:
-                lista_filtrada = [
-                    r for r in recepciones_asn_actual
-                    if str(r.get("sku") or "").strip().upper() == sku_f
-                ]
+                val_raw = dd_edit_lpn_id.value
+            cargar_lpn_en_editor_unitario(str(val_raw or ""), refrescar_tabla=True)
 
+        def actualizar_tabla_y_selector_lpns(e=None, mantener_lpn_actual: bool = False):
+            if e is not None:
+                ctrl_ev = getattr(e, "control", None)
+                if ctrl_ev == dd_filtro_sku_mod_lpn:
+                    val_ev = getattr(e, "data", None) or getattr(ctrl_ev, "value", None)
+                    if val_ev:
+                        dd_filtro_sku_mod_lpn.value = _extraer_sku_limpio_dropdown(val_ev)
+
+            sku_sel = _extraer_sku_limpio_dropdown(dd_filtro_sku_mod_lpn.value)
+            dd_filtro_sku_mod_lpn.value = sku_sel
+            busqueda_txt = (txt_buscar_lpn_mod.value or "").strip().upper()
+
+            lista_filtrada = []
+            for r in recepciones_asn_actual:
+                s_r = str(r.get("sku") or "").strip().upper()
+                lpn_r = str(r.get("lpn") or "").strip().upper()
+                lote_r, _ = extraer_estado_qa(r.get("lote", "S/L"))
+                id_r = str(r.get("id") or "")
+
+                if sku_sel != "TODOS" and s_r != sku_sel:
+                    continue
+                if busqueda_txt and not any(busqueda_txt in c for c in (s_r, lpn_r, lote_r.upper(), id_r)):
+                    continue
+                lista_filtrada.append(r)
+
+            # 1. Actualizar opciones del Dropdown de LPN Unitario (2. Elegir LPN Unitario)
             dd_edit_lpn_id.options = [
                 opt_w(
                     str(r["id"]),
@@ -765,20 +860,170 @@ class RecepcionModulo:
                 for r in lista_filtrada
             ]
 
+            id_activo = _extraer_id_lpn_limpio_dropdown(dd_edit_lpn_id.value)
+            ids_disp = [str(r["id"]) for r in lista_filtrada]
+
             if lista_filtrada:
-                ids_validos = [str(r["id"]) for r in lista_filtrada]
-                if not dd_edit_lpn_id.value or str(dd_edit_lpn_id.value) not in ids_validos:
-                    dd_edit_lpn_id.value = ids_validos[0]
-                prellenar_edicion_lpn_fisico()
+                if not mantener_lpn_actual or id_activo not in ids_disp:
+                    id_activo = ids_disp[0]
+                    cargar_lpn_en_editor_unitario(id_activo, refrescar_tabla=False)
             else:
-                dd_edit_lpn_id.value = None
-                txt_mod_lpn_cod.value = ""
-                txt_mod_lpn_sku.value = ""
-                txt_mod_lpn_cajas.value = "0"
-                txt_mod_lpn_sueltas.value = "0"
-                txt_mod_lpn_totales.value = "0"
-                txt_mod_lpn_lote.value = ""
-                txt_mod_lpn_venc.value = ""
+                id_activo = ""
+                cargar_lpn_en_editor_unitario("", refrescar_tabla=False)
+
+            # 2. Poblar la Tabla Interactiva de LPNs (tabla_mod_lpns)
+            tabla_mod_lpns.rows.clear()
+            tot_cajas_f = sum(int(x.get("cajas") or 0) for x in lista_filtrada)
+            tot_unid_f = sum(int(x.get("unidades_totales") or 0) for x in lista_filtrada)
+            etiqueta_sku = f"SKU {sku_sel}" if sku_sel != "TODOS" else "TODOS LOS SKUs"
+            lbl_resumen_lista_lpns.value = (
+                f"Tabla de Pallets ({etiqueta_sku}): {len(lista_filtrada)} LPN(s) encontrados   |   Total: {tot_cajas_f} Cajas ({tot_unid_f} Unidades)"
+            )
+
+            for r in lista_filtrada:
+                id_str = str(r.get("id"))
+                lpn_cod = str(r.get("lpn") or "-")
+                sku_r = str(r.get("sku") or "-")
+                lote_c, qa_c = extraer_estado_qa(r.get("lote", "S/L"))
+                es_fila_activa = (id_str == id_activo)
+
+                badge_qa = (
+                    crear_badge_estado("APROBADO", "#065F46", "#D1FAE5")
+                    if qa_c == "APROBADO"
+                    else (
+                        crear_badge_estado("CUARENTENA", "#92400E", "#FEF3C7")
+                        if qa_c == "CUARENTENA"
+                        else crear_badge_estado("RECHAZADO", "#991B1B", "#FEE2E2")
+                    )
+                )
+
+                tabla_mod_lpns.rows.append(
+                    ft.DataRow(
+                        color="#1E3A5F" if es_fila_activa else None,
+                        cells=[
+                            ft.DataCell(
+                                ft.Text(
+                                    f"#{id_str}",
+                                    weight=ft.FontWeight.BOLD,
+                                    size=11,
+                                    color=ACCENT_CYAN if es_fila_activa else TEXT_MUTED,
+                                )
+                            ),
+                            ft.DataCell(ft.Text(lpn_cod, weight=ft.FontWeight.W_900, size=11, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(sku_r, weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(f"{r.get('cajas', 0)} Cj", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                            ft.DataCell(ft.Text(f"x{r.get('multiplo_aplicado', 1)}", size=11, color=TEXT_MUTED)),
+                            ft.DataCell(ft.Text(str(r.get("unidades_sueltas", 0)), size=11, color=TEXT_MUTED)),
+                            ft.DataCell(ft.Text(f"{r.get('unidades_totales', 0)} UN", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(lote_c, weight=ft.FontWeight.BOLD, size=11, color="#FBBF24")),
+                            ft.DataCell(ft.Text(str(r.get("fecha_vencimiento_cl") or "S/F"), size=11, color=TEXT_WHITE)),
+                            ft.DataCell(badge_qa),
+                            ft.DataCell(
+                                ft.Row(
+                                    [
+                                        boton_primario(
+                                            "EDITANDO" if es_fila_activa else "EDITAR",
+                                            ft.Icons.EDIT_NOTE_ROUNDED,
+                                            lambda ev, id_sel=id_str: cargar_lpn_en_editor_unitario(id_sel, refrescar_tabla=True),
+                                            "#0284C7" if not es_fila_activa else "#047857",
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
+                                            "15x10",
+                                            ft.Icons.PRINT_OUTLINED,
+                                            lambda ev, cod=lpn_cod: reimprimir_desde_fila(cod),
+                                            ACCENT_TEAL,
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
+                                            "BORRAR",
+                                            ft.Icons.DELETE_OUTLINE,
+                                            lambda ev, id_del=id_str, cod_del=lpn_cod: eliminar_lpn_por_id(id_del, cod_del),
+                                            "#B91C1C",
+                                            height_val=26,
+                                        ),
+                                    ],
+                                    spacing=4,
+                                )
+                            ),
+                        ],
+                    )
+                )
+            page.update()
+
+        def guardar_modificacion_lpn_fisico(e=None):
+            id_sel = _extraer_id_lpn_limpio_dropdown(dd_edit_lpn_id.value)
+            if not id_sel:
+                notificar("Seleccione primero un LPN en el selector o en la tabla inferior.", "#D97706")
+                return
+            try:
+                cajas_n = max(0, int((txt_mod_lpn_cajas.value or "0").strip()))
+                mult_n = max(1, int((txt_mod_lpn_mult.value or "1").strip()))
+                sueltas_n = max(0, int((txt_mod_lpn_sueltas.value or "0").strip()))
+                unid_calc = (cajas_n * mult_n) + sueltas_n
+                unid_n = max(1, int((txt_mod_lpn_totales.value or str(unid_calc)).strip()))
+
+                lpn_n = (txt_mod_lpn_cod.value or "").strip().upper()
+                sku_n = (txt_mod_lpn_sku.value or "").strip().upper()
+                lote_n = formatear_lote_con_qa((txt_mod_lpn_lote.value or "S/L").strip().upper(), dd_mod_lpn_qa.value or "APROBADO")
+                venc_n = normalizar_fecha_sql(txt_mod_lpn_venc.value)
+
+                supabase.table("registro_recepcion").update(
+                    {
+                        "lpn": lpn_n,
+                        "sku": sku_n,
+                        "cajas": cajas_n,
+                        "multiplo_aplicado": mult_n,
+                        "unidades_sueltas": sueltas_n,
+                        "unidades_totales": unid_n,
+                        "lote": lote_n,
+                        "fecha_vencimiento_cl": venc_n,
+                    }
+                ).eq("id", int(id_sel)).execute()
+
+                notificar(f"LPN {lpn_n} (#{id_sel}) modificado exitosamente.", "#047857")
+                auditar_asn_seleccionado()
+            except Exception as ex:
+                notificar(f"Error modificando LPN: {ex}", "#B91C1C")
+
+        def eliminar_lpn_por_id(id_str: str, cod_lpn: str = ""):
+            id_limpio = _extraer_id_lpn_limpio_dropdown(id_str)
+            if not id_limpio:
+                return
+            try:
+                supabase.table("registro_recepcion").delete().eq("id", int(id_limpio)).execute()
+                notificar(f"Registro LPN {cod_lpn} (#{id_limpio}) eliminado.", "#047857")
+                if _extraer_id_lpn_limpio_dropdown(dd_edit_lpn_id.value) == id_limpio:
+                    dd_edit_lpn_id.value = None
+                auditar_asn_seleccionado()
+            except Exception as ex:
+                notificar(f"Error eliminando LPN: {ex}", "#B91C1C")
+
+        def eliminar_lpn_fisico(e=None):
+            id_sel = _extraer_id_lpn_limpio_dropdown(dd_edit_lpn_id.value)
+            if not id_sel:
+                notificar("Seleccione un LPN para eliminar.", "#D97706")
+                return
+            eliminar_lpn_por_id(id_sel, txt_mod_lpn_cod.value or "")
+
+        def prellenar_edicion_linea_asn(e=None):
+            if e is not None:
+                ctrl_ev = getattr(e, "control", None)
+                if ctrl_ev == dd_edit_sku_asn:
+                    val_ev = getattr(e, "data", None) or getattr(ctrl_ev, "value", None)
+                    if val_ev:
+                        dd_edit_sku_asn.value = _extraer_sku_limpio_dropdown(val_ev)
+
+            sku_sel = _extraer_sku_limpio_dropdown(dd_edit_sku_asn.value)
+            linea = next((l for l in lineas_asn_actual if str(l.get("sku") or "").strip().upper() == sku_sel), None)
+            if linea:
+                txt_nuevo_sku_po.value = str(linea.get("sku") or "")
+                txt_edit_desc_po.value = str(linea.get("descripcion_proveedor") or "")
+                txt_edit_cajas_esp.value = str(linea.get("cajas_esperadas") or 1)
+                txt_edit_mult_esp.value = str(linea.get("multiplo_empaque") or 1)
+                txt_edit_unid_esp.value = str(linea.get("unidades_esperadas") or 1)
+                txt_edit_lote_sug.value = str(linea.get("lote_sugerido") or "S/L")
+                txt_edit_venc_sug.value = str(linea.get("vencimiento_sugerido_cl") or "")
                 page.update()
 
         def actualizar_reloj_descarga(recepciones: list):
@@ -876,9 +1121,17 @@ class RecepcionModulo:
 
         def auditar_asn_seleccionado(e=None):
             nonlocal asn_actual_id, cabecera_asn_actual, lineas_asn_actual, recepciones_asn_actual, filas_conciliacion_export
+            if e is not None:
+                ctrl_ev = getattr(e, "control", None)
+                if ctrl_ev == dd_asn:
+                    val_ev = getattr(e, "data", None) or getattr(ctrl_ev, "value", None)
+                    if val_ev:
+                        dd_asn.value = str(val_ev)
+
             if not dd_asn.value:
                 return
             dd_qa_po_base.value = dd_asn.value
+            dd_mod_po_base.value = dd_asn.value
 
             try:
                 res_maestra = supabase.table("maestra_sku").select("sku, descripcion").execute()
@@ -910,11 +1163,37 @@ class RecepcionModulo:
                     lineas_asn_actual = supabase.table("asn_detalle").select("*").eq("asn_id", asn_actual_id).order("sku").execute().data
                     recepciones_asn_actual = supabase.table("registro_recepcion").select("*").eq("asn_id", asn_actual_id).order("id", desc=True).execute().data
 
+                # Limpieza automática de fechas antiguas en lote_sugerido
+                reg_fecha_antigua = re.compile(r"^\d{1,4}[\-\/\.]\d{1,2}[\-\/\.]\d{1,4}$")
+                for lin_oc in lineas_asn_actual:
+                    l_sug_raw = str(lin_oc.get("lote_sugerido") or "").strip()
+                    if l_sug_raw and l_sug_raw != "S/L":
+                        partes_l = [p.strip() for p in l_sug_raw.split(",") if p.strip()]
+                        lotes_reales_ia = [p for p in partes_l if not reg_fecha_antigua.match(p)]
+                        fechas_en_lote = [normalizar_fecha_sql(p) for p in partes_l if reg_fecha_antigua.match(p)]
+                        if len(lotes_reales_ia) != len(partes_l):
+                            nuevo_lote_s = ", ".join(lotes_reales_ia) if lotes_reales_ia else "S/L"
+                            venc_actual = str(lin_oc.get("vencimiento_sugerido_cl") or "").strip()
+                            if (not venc_actual or venc_actual == "S/F") and fechas_en_lote:
+                                venc_actual = ", ".join([f for f in fechas_en_lote if f])
+                            else:
+                                venc_actual = normalizar_fecha_sql(venc_actual) or venc_actual
+                            lin_oc["lote_sugerido"] = nuevo_lote_s
+                            lin_oc["vencimiento_sugerido_cl"] = venc_actual
+                            if lin_oc.get("id"):
+                                try:
+                                    supabase.table("asn_detalle").update({
+                                        "lote_sugerido": nuevo_lote_s,
+                                        "vencimiento_sugerido_cl": venc_actual,
+                                    }).eq("id", lin_oc["id"]).execute()
+                                except Exception:
+                                    pass
+
                 actualizar_reloj_descarga(recepciones_asn_actual)
                 txt_contenedor.value = str(cabecera_asn_actual.get("contenedor_referencia") or "")
 
                 dd_edit_sku_asn.options = [opt_w(l["sku"], f"{l['sku']} - {str(l.get('descripcion_proveedor',''))[:30]}") for l in lineas_asn_actual]
-                if lineas_asn_actual and not dd_edit_sku_asn.value:
+                if lineas_asn_actual and (not dd_edit_sku_asn.value or _extraer_sku_limpio_dropdown(dd_edit_sku_asn.value) not in [str(l["sku"]).upper() for l in lineas_asn_actual]):
                     dd_edit_sku_asn.value = lineas_asn_actual[0]["sku"]
                     prellenar_edicion_linea_asn()
 
@@ -923,26 +1202,32 @@ class RecepcionModulo:
                 if lpns_lista and (not dd_qa_lpn.value or dd_qa_lpn.value not in lpns_lista):
                     dd_qa_lpn.value = lpns_lista[0]
 
+                # Poblar selector 1. Elegir SKU en sección 4.2
                 resumen_sku_lpns = {}
                 for r in recepciones_asn_actual:
                     s_r = str(r.get("sku") or "").strip().upper()
                     if not s_r:
                         continue
                     if s_r not in resumen_sku_lpns:
-                        resumen_sku_lpns[s_r] = {"lpns": 0, "cajas": 0}
+                        resumen_sku_lpns[s_r] = {"lpns": 0, "cajas": 0, "unid": 0}
                     resumen_sku_lpns[s_r]["lpns"] += 1
                     resumen_sku_lpns[s_r]["cajas"] += int(r.get("cajas") or 0)
+                    resumen_sku_lpns[s_r]["unid"] += int(r.get("unidades_totales") or 0)
 
                 opts_sku_mod = [opt_w("TODOS", f"TODOS LOS SKUs ({len(recepciones_asn_actual)} LPNs)")]
                 for s_k, inf_s in sorted(resumen_sku_lpns.items()):
                     opts_sku_mod.append(
-                        opt_w(s_k, f"{s_k} ({inf_s['lpns']} LPNs | {inf_s['cajas']} Cj)")
+                        opt_w(s_k, f"{s_k} ({inf_s['lpns']} LPNs | {inf_s['cajas']} Cj | {inf_s['unid']} UN)")
                     )
                 dd_filtro_sku_mod_lpn.options = opts_sku_mod
-                if not dd_filtro_sku_mod_lpn.value or dd_filtro_sku_mod_lpn.value not in (["TODOS"] + list(resumen_sku_lpns.keys())):
+                sku_f_actual = _extraer_sku_limpio_dropdown(dd_filtro_sku_mod_lpn.value)
+                claves_validas_sku = ["TODOS"] + list(resumen_sku_lpns.keys())
+                if sku_f_actual not in claves_validas_sku:
                     dd_filtro_sku_mod_lpn.value = "TODOS"
+                else:
+                    dd_filtro_sku_mod_lpn.value = sku_f_actual
 
-                filtrar_lpns_por_sku_mod()
+                actualizar_tabla_y_selector_lpns(mantener_lpn_actual=True)
 
                 mapa_rec_sku = {}
                 for r in recepciones_asn_actual:
@@ -975,7 +1260,6 @@ class RecepcionModulo:
                 fuente_lineas = [dict(x, fuera_de_oc=False) for x in lineas_asn_actual]
                 skus_en_fuente = {str(x.get("sku") or "").strip().upper() for x in fuente_lineas}
 
-                # Detectar cualquier SKU escaneado en RF que NO pertenece a la Orden de Compra
                 for k_rec, v_rec in sorted(mapa_rec_sku.items()):
                     if k_rec not in skus_en_fuente:
                         fuente_lineas.append(
@@ -1710,7 +1994,6 @@ class RecepcionModulo:
                 bgcolor=ACCENT_BLUE,
                 color=ft.Colors.WHITE,
                 url=mailto_inicial,
-                
             )
 
             def actualizar_link_mailto(ev=None):
@@ -1800,7 +2083,6 @@ class RecepcionModulo:
                         bgcolor=ACCENT_TEAL,
                         color=ft.Colors.WHITE,
                         url=url_pdf_web,
-                        
                     ),
                     btn_abrir_cliente_pc,
                     boton_primario("ENVIAR CON PDF (CLOUD SMTP)", ft.Icons.SEND_ROUNDED, enviar_directo_smtp, "#047857", height_val=34),
@@ -1921,7 +2203,6 @@ class RecepcionModulo:
                 ws = wb.active
                 ws.title = "Acta_Recepcion"
 
-                # --- ENCABEZADO CORPORATIVO E INSERCIÓN SEGURA DE LOGO LUDIPEK ---
                 ruta_logo = _buscar_ruta_logo_ludipek()
                 logo_insertado = False
                 if ruta_logo:
@@ -2016,7 +2297,6 @@ class RecepcionModulo:
                             celda.alignment = Alignment(horizontal="left", vertical="center")
                     fila_actual += 1
 
-                # Fila de Totales
                 ws.row_dimensions[fila_actual].height = 22
                 ws.cell(row=fila_actual, column=1, value="TOTAL").alignment = Alignment(horizontal="center", vertical="center")
                 ws.cell(row=fila_actual, column=2, value="TOTAL FÍSICO RECIBIDO").alignment = Alignment(horizontal="right", vertical="center")
@@ -2037,7 +2317,6 @@ class RecepcionModulo:
                 for col_l, w_val in anchos.items():
                     ws.column_dimensions[col_l].width = w_val
 
-                # Guardado blindado: si el stream de imagen falla en openpyxl, guarda sin imagen
                 try:
                     wb.save(nombre_archivo)
                 except Exception:
@@ -2606,8 +2885,8 @@ class RecepcionModulo:
                 notificar(f"Error al cerrar OC: {ex}", "#B91C1C")
 
         def guardar_ajuste_linea_asn(e=None):
-            sku_objetivo = (txt_nuevo_sku_po.value or dd_edit_sku_asn.value or "").strip().upper()
-            if not asn_actual_id or not sku_objetivo:
+            sku_objetivo = (txt_nuevo_sku_po.value or _extraer_sku_limpio_dropdown(dd_edit_sku_asn.value) or "").strip().upper()
+            if not asn_actual_id or not sku_objetivo or sku_objetivo == "TODOS":
                 notificar("Seleccione una OC activa e indique el SKU.", "#D97706")
                 return
             try:
@@ -2635,49 +2914,15 @@ class RecepcionModulo:
                 notificar(f"Error guardando línea: {ex}", "#B91C1C")
 
         def eliminar_linea_po_seleccionada(e=None):
-            if not asn_actual_id or not dd_edit_sku_asn.value:
+            sku_del = _extraer_sku_limpio_dropdown(dd_edit_sku_asn.value)
+            if not asn_actual_id or not sku_del or sku_del == "TODOS":
                 return
             try:
-                supabase.table("asn_detalle").delete().eq("asn_id", asn_actual_id).eq("sku", dd_edit_sku_asn.value).execute()
-                notificar("SKU eliminado de la OC.", "#047857")
+                supabase.table("asn_detalle").delete().eq("asn_id", asn_actual_id).eq("sku", sku_del).execute()
+                notificar(f"SKU {sku_del} eliminado de la OC.", "#047857")
                 auditar_asn_seleccionado()
             except Exception as ex:
                 notificar(f"Error eliminando SKU: {ex}", "#B91C1C")
-
-        def guardar_modificacion_lpn_fisico(e=None):
-            if not dd_edit_lpn_id.value:
-                return
-            try:
-                cajas_n = max(0, int(txt_mod_lpn_cajas.value.strip() or "0"))
-                mult_n = max(1, int(txt_mod_lpn_mult.value.strip() or "1"))
-                sueltas_n = max(0, int(txt_mod_lpn_sueltas.value.strip() or "0"))
-                supabase.table("registro_recepcion").update(
-                    {
-                        "lpn": (txt_mod_lpn_cod.value or "").strip().upper(),
-                        "sku": (txt_mod_lpn_sku.value or "").strip().upper(),
-                        "cajas": cajas_n,
-                        "multiplo_aplicado": mult_n,
-                        "unidades_sueltas": sueltas_n,
-                        "unidades_totales": max(1, int(txt_mod_lpn_totales.value.strip() or str((cajas_n * mult_n) + sueltas_n))),
-                        "lote": formatear_lote_con_qa((txt_mod_lpn_lote.value or "S/L").strip().upper(), dd_mod_lpn_qa.value or "APROBADO"),
-                        "fecha_vencimiento_cl": normalizar_fecha_sql(txt_mod_lpn_venc.value),
-                    }
-                ).eq("id", int(dd_edit_lpn_id.value)).execute()
-                notificar("LPN modificado exitosamente.", "#047857")
-                auditar_asn_seleccionado()
-            except Exception as ex:
-                notificar(f"Error modificando LPN: {ex}", "#B91C1C")
-
-        def eliminar_lpn_fisico(e=None):
-            if not dd_edit_lpn_id.value:
-                return
-            try:
-                supabase.table("registro_recepcion").delete().eq("id", int(dd_edit_lpn_id.value)).execute()
-                notificar("Registro LPN eliminado.", "#047857")
-                dd_edit_lpn_id.value = None
-                auditar_asn_seleccionado()
-            except Exception as ex:
-                notificar(f"Error eliminando LPN: {ex}", "#B91C1C")
 
         # =====================================================================
         # MOTOR IA PROFESIONAL (REST v1beta DIRECTO + GEMINI 3.8 FLASH)
@@ -3122,18 +3367,50 @@ class RecepcionModulo:
             else:
                 notificar("Auto-Sync en vivo pausado.", "#475569")
 
+        def cambiar_oc_desde_selector_secundario(e, ctrl_dd):
+            val_sel = getattr(e, "data", None) or getattr(ctrl_dd, "value", None)
+            if val_sel:
+                # Si viene el texto descriptivo ("OC 2044..."), buscar la key correspondiente
+                str_v = str(val_sel)
+                for op in (ctrl_dd.options or []):
+                    if str(op.key) == str_v or str(op.text) == str_v:
+                        str_v = str(op.key)
+                        break
+                if str_v != str(dd_asn.value):
+                    dd_asn.value = str_v
+                    auditar_asn_seleccionado()
+
         # --- 5. VINCULACIÓN DE EVENTOS A CONTROLES ---
         txt_mod_lpn_cajas.on_change = recalcular_mod_lpn_totales
         txt_mod_lpn_mult.on_change = recalcular_mod_lpn_totales
         txt_mod_lpn_sueltas.on_change = recalcular_mod_lpn_totales
+
         txt_edit_cajas_esp.on_change = recalcular_mod_po_unidades
         txt_edit_mult_esp.on_change = recalcular_mod_po_unidades
+
         dd_edit_sku_asn.on_select = prellenar_edicion_linea_asn
-        dd_edit_lpn_id.on_select = prellenar_edicion_lpn_fisico
-        dd_qa_po_base.on_select = lambda e: (setattr(dd_asn, "value", dd_qa_po_base.value), auditar_asn_seleccionado()) if dd_qa_po_base.value and dd_qa_po_base.value != dd_asn.value else None
-        dd_mod_po_base.on_select = lambda e: (setattr(dd_asn, "value", dd_mod_po_base.value), auditar_asn_seleccionado()) if dd_mod_po_base.value and dd_mod_po_base.value != dd_asn.value else None
+        dd_edit_sku_asn.on_change = prellenar_edicion_linea_asn
+
+        dd_filtro_sku_mod_lpn.on_select = actualizar_tabla_y_selector_lpns
+        dd_filtro_sku_mod_lpn.on_change = actualizar_tabla_y_selector_lpns
+
+        dd_edit_lpn_id.on_select = evento_seleccionar_lpn_dropdown
+        dd_edit_lpn_id.on_change = evento_seleccionar_lpn_dropdown
+
+        txt_buscar_lpn_mod.on_change = lambda e: actualizar_tabla_y_selector_lpns(mantener_lpn_actual=True)
+        txt_buscar_lpn_mod.on_submit = lambda e: actualizar_tabla_y_selector_lpns(mantener_lpn_actual=True)
+
+        dd_qa_po_base.on_select = lambda e: cambiar_oc_desde_selector_secundario(e, dd_qa_po_base)
+        dd_qa_po_base.on_change = lambda e: cambiar_oc_desde_selector_secundario(e, dd_qa_po_base)
+
+        dd_mod_po_base.on_select = lambda e: cambiar_oc_desde_selector_secundario(e, dd_mod_po_base)
+        dd_mod_po_base.on_change = lambda e: cambiar_oc_desde_selector_secundario(e, dd_mod_po_base)
+
         dd_asn.on_select = auditar_asn_seleccionado
+        dd_asn.on_change = auditar_asn_seleccionado
+
         dd_fecha_hist_rec.on_select = cargar_historico_recepciones
+        dd_fecha_hist_rec.on_change = cargar_historico_recepciones
         txt_buscar_hist_rec.on_change = cargar_historico_recepciones
         txt_fecha_hist_rec.on_change = cargar_historico_recepciones
         btn_guardar_contenedor.on_click = guardar_contenedor_db
@@ -3402,15 +3679,22 @@ class RecepcionModulo:
             )
         )
 
-        # PANEL 4: Modificación de OC y LPNs
+        # PANEL 4: 4.1 Modificación de Líneas OC (Arriba) + 4.2 Modificación de Pallets Físicos con Tabla y Editor Unitario (Abajo)
         subvista_inb_modificacion = ft.Column(
             [
+                # 4.1 PRIMERO: MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA
                 tarjeta_dark(
                     ft.Column(
                         [
                             ft.Row(
                                 [
-                                    ft.Text("4.1 MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA (OC)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                                    ft.Row(
+                                        [
+                                            ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color=ACCENT_CYAN, size=20),
+                                            ft.Text("4.1 MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA (OC)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                                        ],
+                                        spacing=8,
+                                    ),
                                     dd_mod_po_base,
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -3437,41 +3721,117 @@ class RecepcionModulo:
                         spacing=8,
                     )
                 ),
+
+                # 4.2 ABAJO: MODIFICACIÓN DE PALLETS FÍSICOS (ELEGIR ENTRE SKU O LPN + EDITOR UNITARIO + TABLA DE LPNs)
                 tarjeta_dark(
                     ft.Column(
                         [
-                            ft.Text("4.2 MODIFICACIÓN DE PALLETS FÍSICOS (LPNs) INGRESADOS", size=13, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
-                            ft.Divider(color=BORDER_COLOR, height=1),
-                            ft.Row(
-                                [dd_edit_lpn_id, txt_mod_lpn_cod, txt_mod_lpn_sku, txt_mod_lpn_cajas, txt_mod_lpn_mult, txt_mod_lpn_sueltas, txt_mod_lpn_totales],
-                                wrap=True,
-                                spacing=8,
-                            ),
                             ft.Row(
                                 [
-                                    dd_filtro_sku_mod_lpn,
-                                    dd_edit_lpn_id,
-                                    txt_mod_lpn_cod,
-                                    txt_mod_lpn_sku,
-                                    txt_mod_lpn_cajas,
-                                    txt_mod_lpn_mult,
-                                    txt_mod_lpn_sueltas,
-                                    txt_mod_lpn_totales,
+                                    ft.Column(
+                                        [
+                                            ft.Row(
+                                                [
+                                                    ft.Icon(ft.Icons.PALLET, color=ACCENT_CYAN, size=20),
+                                                    ft.Text("4.2 MODIFICACIÓN DE PALLETS FÍSICOS (LPNs) INGRESADOS", size=13, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
+                                                ],
+                                                spacing=8,
+                                            ),
+                                            lbl_resumen_lista_lpns,
+                                        ],
+                                        spacing=2,
+                                    ),
+                                    ft.Row(
+                                        [
+                                            dd_filtro_sku_mod_lpn,
+                                            dd_edit_lpn_id,
+                                            txt_buscar_lpn_mod,
+                                            boton_primario(
+                                                "LLAMAR LPNs",
+                                                ft.Icons.SEARCH_ROUNDED,
+                                                lambda ev: actualizar_tabla_y_selector_lpns(mantener_lpn_actual=False),
+                                                ACCENT_BLUE,
+                                                height_val=34,
+                                            ),
+                                            boton_primario(
+                                                "VER TODOS",
+                                                ft.Icons.LIST_ALT_ROUNDED,
+                                                lambda ev: (
+                                                    setattr(dd_filtro_sku_mod_lpn, "value", "TODOS"),
+                                                    setattr(txt_buscar_lpn_mod, "value", ""),
+                                                    actualizar_tabla_y_selector_lpns(mantener_lpn_actual=False),
+                                                ),
+                                                "#475569",
+                                                height_val=34,
+                                            ),
+                                        ],
+                                        spacing=8,
+                                        wrap=True,
+                                    ),
                                 ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                 wrap=True,
-                                spacing=8,
                             ),
-                            ft.Row(
-                                [
-                                    txt_mod_lpn_lote,
-                                    txt_mod_lpn_venc,
-                                    dd_mod_lpn_qa,
-                                    boton_primario("GUARDAR CAMBIOS EN LPN", ft.Icons.SAVE_AS_OUTLINED, guardar_modificacion_lpn_fisico, "#047857"),
-                                    boton_primario("ELIMINAR LPN", ft.Icons.DELETE_FOREVER_OUTLINED, eliminar_lpn_fisico, "#B91C1C"),
-                                ],
-                                wrap=True,
-                                spacing=8,
+                            ft.Divider(color=BORDER_COLOR, height=4),
+
+                            # BLOQUE DE EDICIÓN DE LPN UNITARIO
+                            ft.Container(
+                                padding=12,
+                                bgcolor="#181E20",
+                                border_radius=8,
+                                border=ft.Border.all(1.2, ACCENT_CYAN),
+                                content=ft.Column(
+                                    [
+                                        lbl_lpn_unitario_activo,
+                                        ft.Row(
+                                            [
+                                                txt_mod_lpn_cod,
+                                                txt_mod_lpn_sku,
+                                                txt_mod_lpn_cajas,
+                                                txt_mod_lpn_mult,
+                                                txt_mod_lpn_sueltas,
+                                                txt_mod_lpn_totales,
+                                                txt_mod_lpn_lote,
+                                                txt_mod_lpn_venc,
+                                                dd_mod_lpn_qa,
+                                                boton_primario(
+                                                    "GUARDAR CAMBIOS EN LPN",
+                                                    ft.Icons.SAVE_AS_OUTLINED,
+                                                    guardar_modificacion_lpn_fisico,
+                                                    "#047857",
+                                                    height_val=34,
+                                                ),
+                                                boton_primario(
+                                                    "IMPRIMIR 15x10",
+                                                    ft.Icons.PRINT_OUTLINED,
+                                                    lambda ev: reimprimir_desde_fila((txt_mod_lpn_cod.value or "").strip()),
+                                                    ACCENT_TEAL,
+                                                    height_val=34,
+                                                ),
+                                                boton_primario(
+                                                    "ELIMINAR LPN",
+                                                    ft.Icons.DELETE_FOREVER_OUTLINED,
+                                                    eliminar_lpn_fisico,
+                                                    "#B91C1C",
+                                                    height_val=34,
+                                                ),
+                                            ],
+                                            wrap=True,
+                                            spacing=8,
+                                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                        ),
+                                    ],
+                                    spacing=8,
+                                ),
                             ),
+
+                            ft.Text(
+                                "TABLA DE PALLETS (LPNs) DEL SKU SELECCIONADO (Haga clic en 'EDITAR' en cualquier fila para cargarla arriba):",
+                                size=11,
+                                weight=ft.FontWeight.BOLD,
+                                color=TEXT_MUTED,
+                            ),
+                            cont_tabla_mod_lpns,
                         ],
                         spacing=8,
                     )
