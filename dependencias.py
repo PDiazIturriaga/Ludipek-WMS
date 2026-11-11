@@ -1005,7 +1005,7 @@ def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):
                             bgcolor="#047857",
                             color=ft.Colors.WHITE,
                             url=url_descarga,
-                            url_target=ft.UrlTarget.BLANK,
+                            
                         ),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,

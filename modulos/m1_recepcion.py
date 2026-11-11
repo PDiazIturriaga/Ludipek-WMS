@@ -143,7 +143,7 @@ class RecepcionModulo:
                             bgcolor="#047857",
                             color=ft.Colors.WHITE,
                             url=url_descarga,
-                            url_target=ft.UrlTarget.BLANK,
+                            
                         ),
                     ],
                 )
@@ -515,7 +515,7 @@ class RecepcionModulo:
         lbl_dig_dias = ft.Text("00", size=26, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
         lbl_dig_horas = ft.Text("00", size=26, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
         lbl_dig_min = ft.Text("00", size=26, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
-        lbl_inb_cajas = ft.Text("0/0", size=17, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
+        lbl_inb_cajas = ft.Text("0/0", size=13, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
         lbl_inb_unidades = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color=TEXT_WHITE, font_family="Consolas")
         lbl_inb_pallets = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#FBBF24", font_family="Consolas")
         lbl_inb_avance = ft.Text("0%", size=18, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
@@ -1657,7 +1657,7 @@ class RecepcionModulo:
                 bgcolor=ACCENT_BLUE,
                 color=ft.Colors.WHITE,
                 url=mailto_inicial,
-                url_target=ft.UrlTarget.BLANK,
+                
             )
 
             def actualizar_link_mailto(ev=None):
@@ -1747,7 +1747,7 @@ class RecepcionModulo:
                         bgcolor=ACCENT_TEAL,
                         color=ft.Colors.WHITE,
                         url=url_pdf_web,
-                        url_target=ft.UrlTarget.BLANK,
+                        
                     ),
                     btn_abrir_cliente_pc,
                     boton_primario("ENVIAR CON PDF (CLOUD SMTP)", ft.Icons.SEND_ROUNDED, enviar_directo_smtp, "#047857", height_val=34),
