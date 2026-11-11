@@ -549,7 +549,13 @@ class RecepcionModulo:
         txt_edit_lote_sug = texto_dark(label="Lote / Can Code", width=130)
         txt_edit_venc_sug = texto_dark(label="Vencimiento (DD-MM-YYYY)", width=155)
 
-        dd_edit_lpn_id = dropdown_dark(label="Seleccionar Registro LPN a Modificar", width=300)
+        dd_filtro_sku_mod_lpn = dropdown_dark(
+            label="1. Filtrar LPNs por SKU",
+            width=230,
+            value="TODOS",
+            options=[opt_w("TODOS", "TODOS LOS SKUs")],
+        )
+        dd_edit_lpn_id = dropdown_dark(label="2. Seleccionar Registro LPN a Modificar", width=340)
         txt_mod_lpn_cod = texto_dark(label="Código LPN", width=155)
         txt_mod_lpn_sku = texto_dark(label="SKU", width=135)
         txt_mod_lpn_cajas = texto_dark(label="Cajas", width=85, keyboard_type=ft.KeyboardType.NUMBER)
@@ -741,6 +747,40 @@ class RecepcionModulo:
                 dd_mod_lpn_qa.value = qa_actual
                 page.update()
 
+        def filtrar_lpns_por_sku_mod(e=None):
+            sku_f = (dd_filtro_sku_mod_lpn.value or "TODOS").strip().upper()
+            if sku_f == "TODOS" or not sku_f:
+                lista_filtrada = list(recepciones_asn_actual)
+            else:
+                lista_filtrada = [
+                    r for r in recepciones_asn_actual
+                    if str(r.get("sku") or "").strip().upper() == sku_f
+                ]
+
+            dd_edit_lpn_id.options = [
+                opt_w(
+                    str(r["id"]),
+                    f"#{r['id']} | {r.get('lpn')} | SKU: {r.get('sku')} | {r.get('cajas', 0)} Cj ({r.get('unidades_totales', 0)} UN) | Lote: {extraer_estado_qa(r.get('lote', 'S/L'))[0]}",
+                )
+                for r in lista_filtrada
+            ]
+
+            if lista_filtrada:
+                ids_validos = [str(r["id"]) for r in lista_filtrada]
+                if not dd_edit_lpn_id.value or str(dd_edit_lpn_id.value) not in ids_validos:
+                    dd_edit_lpn_id.value = ids_validos[0]
+                prellenar_edicion_lpn_fisico()
+            else:
+                dd_edit_lpn_id.value = None
+                txt_mod_lpn_cod.value = ""
+                txt_mod_lpn_sku.value = ""
+                txt_mod_lpn_cajas.value = "0"
+                txt_mod_lpn_sueltas.value = "0"
+                txt_mod_lpn_totales.value = "0"
+                txt_mod_lpn_lote.value = ""
+                txt_mod_lpn_venc.value = ""
+                page.update()
+
         def actualizar_reloj_descarga(recepciones: list):
             if not recepciones:
                 lbl_dig_dias.value = "00"
@@ -883,13 +923,26 @@ class RecepcionModulo:
                 if lpns_lista and (not dd_qa_lpn.value or dd_qa_lpn.value not in lpns_lista):
                     dd_qa_lpn.value = lpns_lista[0]
 
-                dd_edit_lpn_id.options = [
-                    opt_w(str(r["id"]), f"#{r['id']} | {r.get('lpn')} | SKU: {r.get('sku')} | {r.get('unidades_totales', 0)} UN")
-                    for r in recepciones_asn_actual
-                ]
-                if recepciones_asn_actual and not dd_edit_lpn_id.value:
-                    dd_edit_lpn_id.value = str(recepciones_asn_actual[0]["id"])
-                    prellenar_edicion_lpn_fisico()
+                resumen_sku_lpns = {}
+                for r in recepciones_asn_actual:
+                    s_r = str(r.get("sku") or "").strip().upper()
+                    if not s_r:
+                        continue
+                    if s_r not in resumen_sku_lpns:
+                        resumen_sku_lpns[s_r] = {"lpns": 0, "cajas": 0}
+                    resumen_sku_lpns[s_r]["lpns"] += 1
+                    resumen_sku_lpns[s_r]["cajas"] += int(r.get("cajas") or 0)
+
+                opts_sku_mod = [opt_w("TODOS", f"TODOS LOS SKUs ({len(recepciones_asn_actual)} LPNs)")]
+                for s_k, inf_s in sorted(resumen_sku_lpns.items()):
+                    opts_sku_mod.append(
+                        opt_w(s_k, f"{s_k} ({inf_s['lpns']} LPNs | {inf_s['cajas']} Cj)")
+                    )
+                dd_filtro_sku_mod_lpn.options = opts_sku_mod
+                if not dd_filtro_sku_mod_lpn.value or dd_filtro_sku_mod_lpn.value not in (["TODOS"] + list(resumen_sku_lpns.keys())):
+                    dd_filtro_sku_mod_lpn.value = "TODOS"
+
+                filtrar_lpns_por_sku_mod()
 
                 mapa_rec_sku = {}
                 for r in recepciones_asn_actual:
@@ -3391,6 +3444,20 @@ class RecepcionModulo:
                             ft.Divider(color=BORDER_COLOR, height=1),
                             ft.Row(
                                 [dd_edit_lpn_id, txt_mod_lpn_cod, txt_mod_lpn_sku, txt_mod_lpn_cajas, txt_mod_lpn_mult, txt_mod_lpn_sueltas, txt_mod_lpn_totales],
+                                wrap=True,
+                                spacing=8,
+                            ),
+                            ft.Row(
+                                [
+                                    dd_filtro_sku_mod_lpn,
+                                    dd_edit_lpn_id,
+                                    txt_mod_lpn_cod,
+                                    txt_mod_lpn_sku,
+                                    txt_mod_lpn_cajas,
+                                    txt_mod_lpn_mult,
+                                    txt_mod_lpn_sueltas,
+                                    txt_mod_lpn_totales,
+                                ],
                                 wrap=True,
                                 spacing=8,
                             ),
