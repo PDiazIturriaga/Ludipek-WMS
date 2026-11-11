@@ -1,11 +1,17 @@
 import os
+import re
 import json
+import base64
+import shutil
 import inspect
 import asyncio
+import urllib.parse
 from datetime import datetime
+import requests
 import pandas as pd
 import flet as ft
 from dependencias import *
+
 
 class RecepcionModulo:
     def __init__(self, page: ft.Page, tarjetas_adaptables: list, kpis_adaptables: list, get_indice_activo):
@@ -37,6 +43,12 @@ class RecepcionModulo:
         def mostrar_aviso_ingreso_modal(lpn_str, sku_str, unid_str, lote_str, qa_str):
             from dependencias import mostrar_aviso_ingreso_modal_global
             mostrar_aviso_ingreso_modal_global(self.page, lpn_str, sku_str, unid_str, lote_str, qa_str)
+
+        def _nombre_archivo_seguro_local(texto: str) -> str:
+            limpio = "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in str(texto or ""))
+            while "__" in limpio:
+                limpio = limpio.replace("__", "_")
+            return limpio.strip("_")[:45] or "DOC"
 
         def tarjeta_dark(contenido, padding=14, expand_val=None, height_val=None, width_val=None):
             return ft.Container(
@@ -130,6 +142,9 @@ class RecepcionModulo:
         recepciones_asn_actual = []
         filas_conciliacion_export = []
         auto_sync_inbound_activo = False
+        historico_filtrado_actual = []
+        checks_hist_seleccionados = {}
+        ultimos_filtrados_hist = []
 
         # --- 3. DEFINICIÓN DE TODOS LOS CONTROLES VISUALES BASE ---
         dd_asn = dropdown_dark(label="Orden de Compra Activa (N° OC | Nota PO)", expand=True)
@@ -143,43 +158,43 @@ class RecepcionModulo:
         )
 
         dd_accion_po = dropdown_dark(
-            label="Operaciones de Recepción (PO) - Clic para ejecutar",
+            label="Operaciones de Recepción (OC/PO) - Clic para ejecutar",
             width=310,
             value=None,
             options=[
                 opt_w("SINCRONIZAR", "1. Sincronizar Recepción de Andén (RF)"),
-                opt_w("DESCARGAR_PO", "2. Descargar PO desde NetSuite (ERP)"),
-                opt_w("PACKING", "3. Cargar Packing List PDF"),
-                opt_w("COA", "4. Anexar Certificado CoA PDF"),
-                opt_w("IMPRIMIR_TODOS_LPN", "5. Imprimir TODOS los LPNs de la PO (15x10)"),
-                opt_w("ACTA_PDF", "6. Exportar Acta Oficial de PO (PDF)"),
+                opt_w("DESCARGAR_PO", "2. Descargar OC desde NetSuite (ERP)"),
+                opt_w("PACKING", "3. Cargar Packing List / CAN CODE PDF (IA)"),
+                opt_w("COA", "4. Anexar Certificado CoA PDF (IA)"),
+                opt_w("IMPRIMIR_TODOS_LPN", "5. Imprimir TODOS los LPNs de la OC (15x10)"),
+                opt_w("ACTA_PDF", "6. Exportar Acta Oficial de OC (PDF)"),
                 opt_w("EXCEL", "7. Exportar Conciliación a Excel (.XLSX)"),
                 opt_w("CSV_NETSUITE", "8. Generar CSV Item Receipt (NetSuite)"),
-                opt_w("CERRAR_PO", "9. Cerrar PO + Emitir CSV NetSuite"),
+                opt_w("CERRAR_PO", "9. Cerrar OC + Emitir CSV NetSuite"),
             ],
         )
 
         txt_estado_ia = ft.Text(
-            "Monitor en línea. Seleccione una PO o ejecute una acción.",
+            "Monitor en línea. Seleccione una OC o ejecute una acción.",
             size=11,
             color=ACCENT_CYAN,
         )
         txt_buscar_hist_rec = texto_dark(
-            label="Buscar por N° PO Real, Proveedor, LPN, SKU o Lote...",
-            width=290,
+            label="Buscar por N° OC/PO, Proveedor, LPN, SKU o Lote...",
+            width=270,
         )
         dd_fecha_hist_rec = dropdown_dark(
             label="📅 Día de Recepción",
-            width=255,
+            width=245,
             value="TODAS",
             options=[opt_w("TODAS", "TODAS LAS FECHAS (POR DÍA)")],
         )
         txt_fecha_hist_rec = texto_dark(
             label="Día exacto (DD-MM-YYYY)",
-            width=165,
+            width=160,
         )
         fila_resumen_dias_hist = ft.Row(spacing=8, wrap=True)
-        dd_mod_po_base = dropdown_dark(label="Orden de Compra (PO) Activa a Modificar", width=360)
+        dd_mod_po_base = dropdown_dark(label="Orden de Compra (OC) Activa a Modificar", width=360)
 
         lbl_dig_dias = ft.Text("00", size=26, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
         lbl_dig_horas = ft.Text("00", size=26, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
@@ -196,7 +211,7 @@ class RecepcionModulo:
             scroll=ft.ScrollMode.AUTO,
         )
 
-        dd_qa_po_base = dropdown_dark(label="1. Orden de Compra (PO) Base para QA", width=330)
+        dd_qa_po_base = dropdown_dark(label="1. Orden de Compra (OC) Base para QA", width=330)
         dd_qa_lpn = dropdown_dark(label="2. LPN a Bloquear / Desbloquear", width=210)
         dd_qa_estado = dropdown_dark(
             label="3. Dictamen de Calidad (QA)",
@@ -209,13 +224,13 @@ class RecepcionModulo:
             ],
         )
 
-        dd_edit_sku_asn = dropdown_dark(label="Seleccionar SKU de la PO", width=210)
+        dd_edit_sku_asn = dropdown_dark(label="Seleccionar SKU de la OC", width=210)
         txt_nuevo_sku_po = texto_dark(label="O escribir SKU (Nuevo/Editar)", width=155)
         txt_edit_desc_po = texto_dark(label="Descripción Producto", width=210)
-        txt_edit_cajas_esp = texto_dark(label="Cajas PO", width=90, keyboard_type=ft.KeyboardType.NUMBER)
+        txt_edit_cajas_esp = texto_dark(label="Cajas OC", width=90, keyboard_type=ft.KeyboardType.NUMBER)
         txt_edit_mult_esp = texto_dark(label="Múltiplo", width=85, keyboard_type=ft.KeyboardType.NUMBER)
-        txt_edit_unid_esp = texto_dark(label="Unidades PO", width=105, keyboard_type=ft.KeyboardType.NUMBER)
-        txt_edit_lote_sug = texto_dark(label="Lote Oficial", width=130)
+        txt_edit_unid_esp = texto_dark(label="Unidades OC", width=105, keyboard_type=ft.KeyboardType.NUMBER)
+        txt_edit_lote_sug = texto_dark(label="Lote / Can Code", width=130)
         txt_edit_venc_sug = texto_dark(label="Vencimiento (YYYY-MM-DD)", width=155)
 
         dd_edit_lpn_id = dropdown_dark(label="Seleccionar Registro LPN a Modificar", width=300)
@@ -255,8 +270,8 @@ class RecepcionModulo:
             columns=[
                 ft.DataColumn(ft.Text("PARTIDA / SKU", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("DESCRIPCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("EMPAQUE PO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("UNID. PO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("EMPAQUE OC", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
+                ft.DataColumn(ft.Text("UNID. OC", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("LOTE / VENC. (IA)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
                 ft.DataColumn(ft.Text("CAJAS REC.", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("UNID. REC. (RF)", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
@@ -314,11 +329,12 @@ class RecepcionModulo:
             heading_row_height=34,
             data_row_min_height=32,
             data_row_max_height=38,
-            column_spacing=14,
+            column_spacing=12,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
+                ft.DataColumn(ft.Text("SEL.", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("FECHA RECEPCIÓN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
-                ft.DataColumn(ft.Text("N° PO", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("N° OC / PO", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("PROVEEDOR / REF.", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("LPN", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("SKU", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
@@ -343,7 +359,7 @@ class RecepcionModulo:
             texto = (fecha_texto or "").strip()
             if not texto:
                 return None
-            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d.%m.%Y", "%Y.%m.%d"):
                 try:
                     return datetime.strptime(texto, fmt).strftime("%Y-%m-%d")
                 except ValueError:
@@ -472,20 +488,20 @@ class RecepcionModulo:
             lpn_sel = dd_qa_lpn.value
             nuevo_qa = dd_qa_estado.value or "APROBADO"
             if not lpn_sel:
-                notificar("Seleccione un LPN de la PO para aplicar el dictamen de Calidad.", "#D97706")
+                notificar("Seleccione un LPN de la OC para aplicar el dictamen de Calidad.", "#D97706")
                 return
             cambiar_qa_rapido_lpn(lpn_sel, nuevo_qa)
 
         def aplicar_qa_masivo_toda_la_po(e=None):
             nuevo_qa = dd_qa_estado.value or "APROBADO"
             if not recepciones_asn_actual:
-                notificar("No hay pallets registrados en esta PO.", "#D97706")
+                notificar("No hay pallets registrados en esta OC.", "#D97706")
                 return
             try:
                 for fila in recepciones_asn_actual:
                     lote_base, _ = extraer_estado_qa(fila.get("lote", "S/L"))
                     supabase.table("registro_recepcion").update({"lote": formatear_lote_con_qa(lote_base, nuevo_qa)}).eq("id", fila["id"]).execute()
-                notificar(f"Dictamen QA masivo [{nuevo_qa}] aplicado a los {len(recepciones_asn_actual)} registros de la PO.", "#047857")
+                notificar(f"Dictamen QA masivo [{nuevo_qa}] aplicado a los {len(recepciones_asn_actual)} registros de la OC.", "#047857")
                 auditar_asn_seleccionado()
             except Exception as ex:
                 notificar(f"Error en liberación masiva QA: {ex}", "#B91C1C")
@@ -503,8 +519,8 @@ class RecepcionModulo:
                 if dd_asn.value == "LIBRES":
                     asn_actual_id = None
                     cabecera_asn_actual = {
-                        "codigo_asn": "PO-LIBRE",
-                        "proveedor": "RECEPCION DIRECTA SIN PO",
+                        "codigo_asn": "OC-LIBRE",
+                        "proveedor": "RECEPCION DIRECTA SIN OC",
                         "numero_oc": "S/OC",
                         "estado": "ACTIVO",
                         "contenedor_referencia": "",
@@ -648,7 +664,7 @@ class RecepcionModulo:
                                 ft.DataCell(ft.Text(desc_completa[:28], size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(f"{cajas_esp} Cj x {mult_emp}", size=11, color=TEXT_MUTED)),
                                 ft.DataCell(ft.Text(f"{unid_esp} UN", size=11, color=TEXT_WHITE)),
-                                ft.DataCell(ft.Text(f"{str(l.get('lote_sugerido') or 'S/L')} | {str(l.get('vencimiento_sugerido_cl') or 'S/F')}", size=11, color=TEXT_MUTED)),
+                                ft.DataCell(ft.Text(f"{str(l.get('lote_sugerido') or 'S/L')} | {str(l.get('vencimiento_sugerido_cl') or 'S/F')}", size=11, color="#FBBF24" if l.get("lote_sugerido") and l.get("lote_sugerido") != "S/L" else TEXT_MUTED)),
                                 ft.DataCell(ft.Text(f"{cajas_rec} Cj", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(f"{unid_rec} UN", weight=ft.FontWeight.BOLD, color=ACCENT_CYAN, size=11)),
                                 ft.DataCell(ft.Text(f"{lotes_reales} | {venc_reales}", size=11, color=TEXT_WHITE)),
@@ -720,7 +736,7 @@ class RecepcionModulo:
                 lbl_inb_avance.value = f"{pct_global}%"
                 page.update()
             except Exception as ex:
-                notificar(f"Error auditando PO: {ex}", "#B91C1C")
+                notificar(f"Error auditando OC: {ex}", "#B91C1C")
 
         def guardar_contenedor_db(e=None):
             if asn_actual_id:
@@ -732,7 +748,7 @@ class RecepcionModulo:
                 except Exception as ex:
                     notificar(f"Error al guardar el contenedor: {ex}", "#B91C1C")
             else:
-                notificar("Seleccione una PO activa primero.", "#D97706")
+                notificar("Seleccione una OC activa primero.", "#D97706")
 
         def cargar_lista_asns(e=None):
             try:
@@ -769,7 +785,6 @@ class RecepcionModulo:
                 notificar(f"Error al cargar OCs: {ex}", "#B91C1C")
 
         def extraer_dia_y_hora_recepcion(fila_rec: dict) -> tuple:
-            """Devuelve (fecha_iso_yyyy_mm_dd, fecha_cl_dd_mm_yyyy, hora_hh_mm) de la recepción física del LPN."""
             for col_f in ("fecha_recepcion", "created_at", "timestamp", "fecha"):
                 raw_v = str(fila_rec.get(col_f) or "").strip()
                 if raw_v and raw_v.upper() not in ("NONE", "NULL", ""):
@@ -797,10 +812,7 @@ class RecepcionModulo:
             dd_fecha_hist_rec.value = "TODAS"
             cargar_historico_recepciones()
 
-        historico_filtrado_actual = []
-
         def descargar_pdf_historico_grupo(items_grupo: list, dia_cl: str, po_real_str: str):
-            """Genera y descarga directamente el PDF de recepción de un Día y PO específicos sin pedir correo."""
             if not items_grupo:
                 notificar("No hay registros en este grupo para generar el PDF.", "#D97706")
                 return
@@ -814,11 +826,12 @@ class RecepcionModulo:
             except Exception:
                 mapa_desc = {}
 
-            recepciones_raw = [x["raw"] for x in items_grupo]
-            primera = items_grupo[0]
+            recepciones_raw = [x["raw"] if isinstance(x, dict) and "raw" in x else x for x in items_grupo]
+            primera = items_grupo[0] if isinstance(items_grupo[0], dict) else {}
             prov_str = primera.get("proveedor") or "RECEPCIÓN HISTÓRICA"
-            cont_str = str(primera["raw"].get("contenedor") or primera.get("contenedor") or "N/A").strip()
-            po_limpia = po_real_str.replace("PO ", "").strip()
+            raw_p = primera.get("raw") if "raw" in primera else primera
+            cont_str = str(raw_p.get("contenedor") or primera.get("contenedor") or "N/A").strip()
+            po_limpia = po_real_str.replace("PO ", "").replace("OC ", "").strip()
 
             cabecera_hist = {
                 "codigo_asn": f"{po_real_str} (Recepción {dia_cl})",
@@ -853,16 +866,70 @@ class RecepcionModulo:
             except Exception as ex:
                 notificar(f"Error generando PDF histórico: {ex}", "#B91C1C")
 
-        def descargar_pdf_historico_filtrado(e=None):
-            """Descarga el PDF de recepción con todos los registros actualmente filtrados en el Consultor Histórico."""
-            if not historico_filtrado_actual:
-                notificar("No hay recepciones en la vista actual para descargar en PDF.", "#D97706")
+        def obtener_registros_seleccionados_hist() -> list:
+            seleccionados = [reg for chk, reg in checks_hist_seleccionados.values() if chk.value]
+            return seleccionados if seleccionados else list(ultimos_filtrados_hist)
+
+        def marcar_desmarcar_hist(estado_bool: bool):
+            for chk, _ in checks_hist_seleccionados.values():
+                chk.value = estado_bool
+            page.update()
+
+        def filtrar_solo_sin_po_hist(e=None):
+            txt_buscar_hist_rec.value = "SIN PO"
+            cargar_historico_recepciones()
+
+        def imprimir_lpns_seleccionados_hist(e=None):
+            regs = obtener_registros_seleccionados_hist()
+            if not regs:
+                notificar("No hay artículos seleccionados o filtrados para imprimir.", "#D97706")
                 return
-            primera = historico_filtrado_actual[0]
-            dia_lbl = dd_fecha_hist_rec.value if (dd_fecha_hist_rec.value and dd_fecha_hist_rec.value != "TODAS") else primera["dia_cl"]
-            po_unicas = sorted({x["po_real"] for x in historico_filtrado_actual})
-            po_lbl = po_unicas[0] if len(po_unicas) == 1 else f"{len(po_unicas)} POs"
-            descargar_pdf_historico_grupo(historico_filtrado_actual, dia_lbl, po_lbl)
+            try:
+                etiqueta_f = dd_fecha_hist_rec.value if dd_fecha_hist_rec.value != "TODAS" else "FILTRADOS"
+                ruta = generar_pdf_masivo_lpns_po(f"SIN_PO_{etiqueta_f}", regs)
+                descargar_o_abrir_archivo(self.page, ruta)
+                notificar(f"PDF generado con {len(regs)} etiquetas LPN seleccionadas.", "#047857")
+            except Exception as ex:
+                notificar(f"Error al generar LPNs seleccionados: {ex}", "#B91C1C")
+
+        def exportar_excel_seleccionados_hist(e=None):
+            regs = obtener_registros_seleccionados_hist()
+            if not regs:
+                notificar("No hay artículos seleccionados para bajar a Excel.", "#D97706")
+                return
+            try:
+                os.makedirs("reportes_recepcion", exist_ok=True)
+                filas_x = []
+                for r in regs:
+                    d_iso, d_cl, h_str = extraer_dia_y_hora_recepcion(r)
+                    lote_c, qa_c = extraer_estado_qa(r.get("lote", "S/L"))
+                    filas_x.append({
+                        "Fecha_Recepcion": f"{d_cl} {h_str}".strip(),
+                        "Contenedor_o_OC": r.get("contenedor") or (f"OC-{r.get('asn_id')}" if r.get("asn_id") else "SIN PO"),
+                        "LPN": r.get("lpn"),
+                        "SKU": r.get("sku"),
+                        "Cajas": int(r.get("cajas") or 0),
+                        "Multiplo": int(r.get("multiplo_aplicado") or 1),
+                        "Unidades_Totales": int(r.get("unidades_totales") or 0),
+                        "Lote": lote_c,
+                        "Vencimiento": r.get("fecha_vencimiento_cl") or "S/F",
+                        "Estado_QA": qa_c,
+                    })
+                df_h = pd.DataFrame(filas_x)
+                ruta_x = os.path.join("reportes_recepcion", f"Recepciones_Filtradas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+                df_h.to_excel(ruta_x, index=False)
+                descargar_o_abrir_archivo(self.page, ruta_x)
+                notificar(f"Excel descargado con {len(filas_x)} registros.", "#047857")
+            except Exception as ex:
+                notificar(f"Error exportando Excel: {ex}", "#B91C1C")
+
+        def descargar_pdf_historico_filtrado(e=None):
+            regs_sel = obtener_registros_seleccionados_hist()
+            if not regs_sel:
+                notificar("No hay recepciones seleccionadas para descargar en PDF.", "#D97706")
+                return
+            dia_lbl = dd_fecha_hist_rec.value if (dd_fecha_hist_rec.value and dd_fecha_hist_rec.value != "TODAS") else datetime.now().strftime("%d-%m-%Y")
+            descargar_pdf_historico_grupo(regs_sel, dia_lbl, "SELECCION")
 
         def cargar_historico_recepciones(e=None):
             nonlocal historico_filtrado_actual
@@ -880,7 +947,6 @@ class RecepcionModulo:
                         continue
 
             try:
-                # 1. Cargar mapa de POs reales desde asn_cabecera (activas y cerradas)
                 mapa_po_real = {}
                 try:
                     res_cabs = supabase.table("asn_cabecera").select("id, numero_oc, codigo_asn, proveedor, estado, contenedor_referencia").limit(1000).execute()
@@ -888,7 +954,7 @@ class RecepcionModulo:
                         cid = str(c.get("id"))
                         num_po_limpio = obtener_nombre_po_cabecera(c)
                         mapa_po_real[cid] = {
-                            "po_display": f"PO {num_po_limpio}" if num_po_limpio != "LIBRE" else "SIN PO",
+                            "po_display": f"OC {num_po_limpio}" if num_po_limpio != "LIBRE" else "SIN PO",
                             "po_num": num_po_limpio,
                             "proveedor": str(c.get("proveedor") or "SIN PROVEEDOR").strip(),
                             "estado": str(c.get("estado") or "ACTIVO").strip().upper(),
@@ -897,7 +963,6 @@ class RecepcionModulo:
                 except Exception:
                     pass
 
-                # 2. Cargar recepciones físicas y enriquecer cada una con su Día de Recepción y N° PO Real
                 res_h = supabase.table("registro_recepcion").select("*").order("id", desc=True).limit(600).execute()
                 registros_enriquecidos = []
                 resumen_por_dia = {}
@@ -914,12 +979,12 @@ class RecepcionModulo:
                         po_real_str = info_po["po_display"]
                         prov_str = info_po["proveedor"]
                         cont_cab = info_po["contenedor"]
-                    elif cont_rec and not cont_rec.startswith("PO-"):
+                    elif cont_rec and not cont_rec.startswith("PO-") and not cont_rec.startswith("OC-"):
                         po_real_str = "SIN PO (LIBRE)"
                         prov_str = f"CONT: {cont_rec}"
                         cont_cab = cont_rec
                     else:
-                        po_real_str = f"PO {formatear_nombre_po(cont_rec)}" if cont_rec else "SIN PO"
+                        po_real_str = f"OC {formatear_nombre_po(cont_rec)}" if cont_rec else "SIN PO"
                         prov_str = "RECEPCIÓN DIRECTA"
 
                     lpn_h = str(r.get("lpn") or "-").strip()
@@ -953,7 +1018,6 @@ class RecepcionModulo:
                         "qa": qa_c,
                     })
 
-                # 3. Poblar Dropdown de Días de Recepción disponibles
                 opciones_dias = [opt_w("TODAS", "TODAS LAS FECHAS (SEPARADO POR DÍA)")]
                 for d_iso in sorted(resumen_por_dia.keys(), reverse=True):
                     inf_d = resumen_por_dia[d_iso]
@@ -966,7 +1030,6 @@ class RecepcionModulo:
                     dia_dropdown = "TODAS"
                     dd_fecha_hist_rec.value = "TODAS"
 
-                # 4. Construir chips rápidos de Recepción por Día y PO
                 fila_resumen_dias_hist.controls.clear()
                 for (d_iso, po_s), inf_dp in sorted(resumen_dia_y_po.items(), key=lambda x: (x[0][0], x[0][1]), reverse=True)[:10]:
                     es_dia_sel = (dia_dropdown == d_iso)
@@ -993,7 +1056,6 @@ class RecepcionModulo:
                         )
                     )
 
-                # 5. Filtrar y ordenar por (dia_iso DESC, po_real ASC, id DESC)
                 filtrados = []
                 for item in registros_enriquecidos:
                     if dia_dropdown != "TODAS" and item["dia_iso"] != dia_dropdown:
@@ -1011,9 +1073,10 @@ class RecepcionModulo:
 
                 filtrados.sort(key=lambda x: (x["dia_iso"], x["po_real"], int(x["raw"].get("id") or 0)), reverse=True)
                 historico_filtrado_actual = filtrados
+                ultimos_filtrados_hist[:] = [x["raw"] for x in filtrados[:250]]
 
-                # 6. Llenar tabla con botón "PDF RECEPCIÓN" en cada separador de (Día + PO)
                 tabla_historico_recepciones.rows.clear()
+                checks_hist_seleccionados.clear()
                 grupo_actual = None
 
                 for item in filtrados[:250]:
@@ -1030,6 +1093,7 @@ class RecepcionModulo:
                             ft.DataRow(
                                 color="#1E293B",
                                 cells=[
+                                    ft.DataCell(ft.Icon(ft.Icons.CALENDAR_TODAY_ROUNDED, color="#34D399", size=14)),
                                     ft.DataCell(ft.Text(f"📅 DÍA: {item['dia_cl']}", weight=ft.FontWeight.W_900, size=11, color="#34D399")),
                                     ft.DataCell(ft.Text(item["po_real"], weight=ft.FontWeight.W_900, size=11, color="#FBBF24")),
                                     ft.DataCell(ft.Text(item["proveedor"][:24], weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
@@ -1056,6 +1120,10 @@ class RecepcionModulo:
 
                     lpn_h = item["lpn"]
                     qa_c = item["qa"]
+                    id_reg = r.get("id") or f"{lpn_h}_{item['sku']}"
+                    chk_fila = ft.Checkbox(value=True, active_color=ACCENT_CYAN)
+                    checks_hist_seleccionados[id_reg] = (chk_fila, r)
+
                     badge_qa = (
                         crear_badge_estado("APROBADO", "#065F46", "#D1FAE5")
                         if qa_c == "APROBADO"
@@ -1070,6 +1138,7 @@ class RecepcionModulo:
                     tabla_historico_recepciones.rows.append(
                         ft.DataRow(
                             cells=[
+                                ft.DataCell(chk_fila),
                                 ft.DataCell(ft.Text(fecha_hora_mostrar, weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
                                 ft.DataCell(ft.Text(item["po_real"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                                 ft.DataCell(ft.Text(item["proveedor"][:22], size=11, color=TEXT_WHITE)),
@@ -1091,7 +1160,7 @@ class RecepcionModulo:
 
         def imprimir_todos_los_lpns_po_activa(e=None):
             if not recepciones_asn_actual:
-                notificar("No hay pallets registrados en esta PO para imprimir.", "#D97706")
+                notificar("No hay pallets registrados en esta OC para imprimir.", "#D97706")
                 return
             try:
                 cod_po = obtener_nombre_po_cabecera(cabecera_asn_actual)
@@ -1101,7 +1170,6 @@ class RecepcionModulo:
                 notificar(f"Error al imprimir lote de LPNs: {ex}", "#B91C1C")
 
         def click_exportar_pdf_recepcion(e=None):
-            """Genera y descarga directamente el Acta PDF de la PO activa sin pedir correo ni abrir AlertDialog."""
             if not filas_conciliacion_export and not recepciones_asn_actual:
                 notificar("No hay datos de recepción activos para exportar a PDF.", "#D97706")
                 return
@@ -1116,7 +1184,6 @@ class RecepcionModulo:
                 notificar(f"Error generando PDF: {ex}", "#B91C1C")
 
         def enviar_correo_acta_po(e=None):
-            """Genera el Acta PDF, permite descargarlo en el navegador y enviarlo por correo desde cualquier PC en internet."""
             if not filas_conciliacion_export and not recepciones_asn_actual:
                 notificar("No hay datos de recepción activos para enviar por correo.", "#D97706")
                 return
@@ -1130,10 +1197,9 @@ class RecepcionModulo:
                 notificar(f"Error generando PDF para correo: {ex}", "#B91C1C")
                 return
 
-            # Publicar el PDF en /descargas/ para que esté disponible por URL en el navegador
             nombre_orig = os.path.basename(ruta)
             base_nom, ext_nom = os.path.splitext(nombre_orig)
-            nombre_seguro = f"{_nombre_archivo_seguro(base_nom)}{ext_nom.lower()}"
+            nombre_seguro = f"{_nombre_archivo_seguro_local(base_nom)}{ext_nom.lower()}"
             carpeta_rel = os.path.join("assets", "descargas")
             os.makedirs(carpeta_rel, exist_ok=True)
             shutil.copy2(ruta, os.path.join(carpeta_rel, nombre_seguro))
@@ -1151,7 +1217,7 @@ class RecepcionModulo:
             resumen_skus = []
             for f in filas_conciliacion_export[:20]:
                 resumen_skus.append(
-                    f"- {f.get('sku')}: PO {f.get('unidades_esperadas', 0)} UN | Recibido {f.get('unidades_recibidas', 0)} UN ({f.get('estado', '')})"
+                    f"- {f.get('sku')}: OC {f.get('unidades_esperadas', 0)} UN | Recibido {f.get('unidades_recibidas', 0)} UN ({f.get('estado', '')})"
                 )
 
             asunto_default = f"Acta de Recepción - OC {cod_po_str} ({prov_str}) | LUDIPEK WMS"
@@ -1179,7 +1245,7 @@ class RecepcionModulo:
                 border_color=BORDER_COLOR,
             )
             lbl_info_envio = ft.Text(
-                f"PDF generado: {nombre_seguro}",
+                f"PDF generado y listo: {nombre_seguro}",
                 size=11,
                 color="#34D399",
                 weight=ft.FontWeight.BOLD,
@@ -1294,8 +1360,7 @@ class RecepcionModulo:
                 ],
             )
             page.show_dialog(dlg_mail)
-            page.update()                
-
+            page.update()
 
         def click_exportar_excel_recepcion(e=None):
             if not filas_conciliacion_export and not recepciones_asn_actual:
@@ -1370,11 +1435,11 @@ class RecepcionModulo:
 
                 df_final = pd.DataFrame(filas_excel, columns=["SKU", "Descripcion", "Cantidad (Pack)", "Lote", "LOTE FECHA", "Fecha", "Cantidad (Unidades)"])
                 os.makedirs("reportes_recepcion", exist_ok=True)
-                codigo_po = formatear_nombre_po(cabecera_asn_actual.get("numero_oc") or cabecera_asn_actual.get("codigo_asn") or "LIBRE")
-                nombre_archivo = os.path.join("reportes_recepcion", f"PO_{codigo_po}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+                codigo_po = _nombre_archivo_seguro_local(cabecera_asn_actual.get("numero_oc") or cabecera_asn_actual.get("codigo_asn") or "LIBRE")
+                nombre_archivo = os.path.join("reportes_recepcion", f"OC_{codigo_po}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
                 df_final.to_excel(nombre_archivo, index=False)
                 descargar_o_abrir_archivo(self.page, nombre_archivo)
-                notificar(f"Reporte Excel PO {codigo_po} generado.", "#047857")
+                notificar(f"Reporte Excel OC {codigo_po} generado.", "#047857")
             except Exception as ex:
                 notificar(f"Error generando Excel: {ex}", "#B91C1C")
 
@@ -1384,9 +1449,9 @@ class RecepcionModulo:
                 return ""
             os.makedirs("reportes_recepcion", exist_ok=True)
             oc_actual = str(cabecera_asn_actual.get("numero_oc") or "").strip()
-            cod_po = formatear_nombre_po(cabecera_asn_actual.get("codigo_asn", "SIN-PO"))
+            cod_po = _nombre_archivo_seguro_local(cabecera_asn_actual.get("codigo_asn", "SIN-OC"))
             if not oc_actual or oc_actual == "S/OC":
-                oc_actual = cod_po.removeprefix("PO-").removeprefix("ASN-").strip()
+                oc_actual = cod_po.removeprefix("PO-").removeprefix("OC-").removeprefix("ASN-").strip()
 
             recibido_por_sku = {}
             for r in recepciones_asn_actual:
@@ -1399,7 +1464,7 @@ class RecepcionModulo:
                 notificar("0 unidades físicas recibidas.", "#D97706")
                 return ""
 
-            oc_limpia = formatear_nombre_po(oc_actual)
+            oc_limpia = _nombre_archivo_seguro_local(oc_actual)
             ruta_meta_ns = os.path.join("reportes_recepcion", f"ns_meta_{oc_limpia}.json")
             if not os.path.exists(ruta_meta_ns):
                 ruta_meta_ns = os.path.join("reportes_recepcion", f"ns_meta_PO-{oc_limpia}.json")
@@ -1472,7 +1537,6 @@ class RecepcionModulo:
                 notificar("Ingrese el N° de Orden de Compra (Ej: 2043) para consultar en NetSuite.", "#D97706")
                 return
 
-            # Limpiar prefijos por si el usuario escribió "OC-2043" o "2043"
             oc_num_limpio = oc_input.replace("OC-", "").replace("PO-", "").replace("OC", "").strip()
 
             if not NETSUITE_CONECTADO:
@@ -1481,7 +1545,6 @@ class RecepcionModulo:
 
             notificar(f"Consultando Orden de Compra N° {oc_num_limpio} en NetSuite...", ACCENT_CYAN)
 
-            # Consulta por N° de Orden de Compra (t.tranid) extrayendo t.memo como Nota/PO asociada
             q_po = f"""
                 SELECT
                     t.id AS po_internal_id,
@@ -1523,7 +1586,6 @@ class RecepcionModulo:
             fecha_oc_str = str(primera_fila.get("fecha_oc") or datetime.now().strftime("%Y-%m-%d")).strip()
             estado_ns_str = str(primera_fila.get("estado_ns") or "ABIERTA").strip()
 
-            # Cargar múltiplos desde maestra_sku para calcular cajas esperadas
             mapa_multiplos = {}
             mapa_desc_maestra = {}
             try:
@@ -1606,7 +1668,6 @@ class RecepcionModulo:
             def confirmar_uso_po(ev):
                 cerrar_modal_po()
                 try:
-                    # Todo se rige por numero_oc (Ej: 2043), guardando la Nota (Ej: Inaba PO173) asociada en codigo_asn
                     cod_asn = f"OC-{num_oc_real} | {nota_po_str}" if nota_po_str else f"OC-{num_oc_real}"
                     bodega_usr = getattr(page, "bodega_actual", "Bodega Santiago")
 
@@ -1753,7 +1814,6 @@ class RecepcionModulo:
             page.update()
 
         def abrir_gestor_limpieza_ocs_admin(e=None):
-            """Exclusivo para ADMIN: permite cerrar o eliminar definitivamente OCs/POs del panel y Supabase."""
             rol_usr = str(getattr(self.page, "rol_actual", "")).upper()
             if "ADMIN" not in rol_usr:
                 notificar("Acción restringida: solo un usuario Administrador puede cerrar o eliminar OCs.", "#B91C1C")
@@ -1843,7 +1903,6 @@ class RecepcionModulo:
                     return
                 try:
                     for id_k in ids_sel:
-                        # Desvincular o limpiar registros asociados para respetar llaves foráneas
                         try:
                             supabase.table("registro_recepcion").update({"asn_id": None}).eq("asn_id", id_k).execute()
                         except Exception:
@@ -1942,7 +2001,7 @@ class RecepcionModulo:
         def guardar_ajuste_linea_asn(e=None):
             sku_objetivo = (txt_nuevo_sku_po.value or dd_edit_sku_asn.value or "").strip().upper()
             if not asn_actual_id or not sku_objetivo:
-                notificar("Seleccione una PO activa e indique el SKU.", "#D97706")
+                notificar("Seleccione una OC activa e indique el SKU.", "#D97706")
                 return
             try:
                 cajas_n = max(1, int(txt_edit_cajas_esp.value.strip() or "1"))
@@ -1951,7 +2010,7 @@ class RecepcionModulo:
                 datos_linea = {
                     "asn_id": asn_actual_id,
                     "sku": sku_objetivo,
-                    "descripcion_proveedor": (txt_edit_desc_po.value or "Artículo PO").strip(),
+                    "descripcion_proveedor": (txt_edit_desc_po.value or "Artículo OC").strip(),
                     "cajas_esperadas": cajas_n,
                     "multiplo_empaque": mult_n,
                     "unidades_esperadas": max(1, int(txt_edit_unid_esp.value.strip() or str(cajas_n * mult_n))),
@@ -1963,7 +2022,7 @@ class RecepcionModulo:
                     notificar(f"Línea {sku_objetivo} actualizada.", "#047857")
                 else:
                     supabase.table("asn_detalle").insert(datos_linea).execute()
-                    notificar(f"SKU {sku_objetivo} agregado a la PO.", "#047857")
+                    notificar(f"SKU {sku_objetivo} agregado a la OC.", "#047857")
                 auditar_asn_seleccionado()
             except Exception as ex:
                 notificar(f"Error guardando línea: {ex}", "#B91C1C")
@@ -1973,7 +2032,7 @@ class RecepcionModulo:
                 return
             try:
                 supabase.table("asn_detalle").delete().eq("asn_id", asn_actual_id).eq("sku", dd_edit_sku_asn.value).execute()
-                notificar("SKU eliminado de la PO.", "#047857")
+                notificar("SKU eliminado de la OC.", "#047857")
                 auditar_asn_seleccionado()
             except Exception as ex:
                 notificar(f"Error eliminando SKU: {ex}", "#B91C1C")
@@ -2013,79 +2072,107 @@ class RecepcionModulo:
             except Exception as ex:
                 notificar(f"Error eliminando LPN: {ex}", "#B91C1C")
 
-        async def generar_json_con_gemini(ruta_archivo: str, prompt: str):
+        # =====================================================================
+        # MOTOR IA PROFESIONAL (REST v1beta DIRECTO + AUTO-DISCOVERY DE MODELOS)
+        # =====================================================================
+        def _obtener_gemini_api_key() -> str:
+            k = (
+                os.getenv("GEMINI_API_KEY")
+                or os.getenv("GOOGLE_API_KEY")
+                or globals().get("GEMINI_API_KEY")
+                or ""
+            ).strip()
+            if not k and ai_client is not None:
+                k = str(
+                    getattr(ai_client, "_api_key", "")
+                    or getattr(getattr(ai_client, "_api_client", None), "api_key", "")
+                    or ""
+                ).strip()
+            return k.strip('"').strip("'")
+
+        def _llamar_gemini_rest_sincrono(ruta_archivo: str, prompt: str) -> str:
             import mimetypes
-            from google import genai as genai_sdk
+
+            api_key = _obtener_gemini_api_key()
+            if not api_key:
+                raise RuntimeError("No se encontró GEMINI_API_KEY en las variables de entorno de Render.")
 
             with open(ruta_archivo, "rb") as f_bin:
-                bytes_doc = f_bin.read()
+                b64_doc = base64.b64encode(f_bin.read()).decode("utf-8")
 
             mime_t, _ = mimetypes.guess_type(ruta_archivo)
             if not mime_t:
                 mime_t = "application/pdf" if ruta_archivo.lower().endswith(".pdf") else "image/jpeg"
 
-            parte_doc = types.Part.from_bytes(data=bytes_doc, mime_type=mime_t)
-
-            # Crear cliente en v1beta para soportar JSON estructurado y PDFs inline sin restricción de versión v1
-            api_key_val = (
-                os.getenv("GEMINI_API_KEY")
-                or os.getenv("GOOGLE_API_KEY")
-                or globals().get("GEMINI_API_KEY", "")
-            )
-            clientes_ia = []
-            if api_key_val:
-                try:
-                    clientes_ia.append(genai_sdk.Client(api_key=api_key_val, http_options={"api_version": "v1beta"}))
-                except Exception:
-                    pass
-                try:
-                    clientes_ia.append(genai_sdk.Client(api_key=api_key_val))
-                except Exception:
-                    pass
-            if ai_client and ai_client not in clientes_ia:
-                clientes_ia.append(ai_client)
-
-            # Solo modelos vigentes (sin gemini-1.5-pro ni 1.5-flash)
-            modelos_vigentes = [
+            # 1. Consultar ModelService.ListModels en v1beta para usar exactamente los modelos activos en la cuenta
+            modelos_candidatos = [
                 "gemini-2.5-flash",
                 "gemini-2.0-flash",
+                "gemini-flash-latest",
                 "gemini-2.5-pro",
-                "gemini-3.8-flash",
             ]
+            try:
+                r_list = requests.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                    timeout=10,
+                )
+                if r_list.status_code == 200:
+                    disponibles = []
+                    for m in r_list.json().get("models", []):
+                        metodos = m.get("supportedGenerationMethods") or []
+                        nombre_m = str(m.get("name") or "").replace("models/", "")
+                        if "generateContent" in metodos and "gemini" in nombre_m and "embedding" not in nombre_m and "vision" not in nombre_m:
+                            disponibles.append(nombre_m)
+                    if disponibles:
+                        # Ordenar priorizando 2.5-flash y 2.0-flash
+                        priorizados = [c for c in modelos_candidatos if c in disponibles]
+                        otros_flash = [d for d in disponibles if "flash" in d and d not in priorizados]
+                        otros_pro = [d for d in disponibles if d not in priorizados and d not in otros_flash]
+                        modelos_candidatos = priorizados + otros_flash + otros_pro
+            except Exception:
+                pass
 
-            errores_intentos = []
-            for cli in clientes_ia:
-                for nombre_mod in modelos_vigentes:
-                    # Intento A: Con response_mime_type JSON
-                    try:
-                        res = cli.models.generate_content(
-                            model=nombre_mod,
-                            contents=[parte_doc, prompt],
-                            config=types.GenerateContentConfig(response_mime_type="application/json"),
-                        )
-                        if inspect.iscoroutine(res):
-                            res = await res
-                        if res and getattr(res, "text", None):
-                            return res
-                    except Exception as err_a:
-                        # Intento B: Sin config (compatible con API v1 estricta)
-                        try:
-                            res_b = cli.models.generate_content(
-                                model=nombre_mod,
-                                contents=[parte_doc, prompt],
-                            )
-                            if inspect.iscoroutine(res_b):
-                                res_b = await res_b
-                            if res_b and getattr(res_b, "text", None):
-                                return res_b
-                        except Exception as err_b:
-                            errores_intentos.append(f"{nombre_mod}: {err_b}")
-                            continue
+            payload_json = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"inline_data": {"mime_type": mime_t, "data": b64_doc}},
+                            {"text": prompt},
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "responseMimeType": "application/json",
+                },
+            }
 
-            raise RuntimeError(errores_intentos[0] if errores_intentos else "No se pudo conectar con Gemini API.")
+            errores = []
+            for mod_name in modelos_candidatos[:5]:
+                url_gen = f"https://generativelanguage.googleapis.com/v1beta/models/{mod_name}:generateContent?key={api_key}"
+                try:
+                    resp = requests.post(
+                        url_gen,
+                        headers={"Content-Type": "application/json"},
+                        json=payload_json,
+                        timeout=90,
+                    )
+                    if resp.status_code == 200:
+                        data_r = resp.json()
+                        cands = data_r.get("candidates") or []
+                        if cands:
+                            parts = (cands[0].get("content") or {}).get("parts") or []
+                            for p in parts:
+                                if p.get("text"):
+                                    return p["text"]
+                    else:
+                        errores.append(f"{mod_name} ({resp.status_code}): {resp.text[:140]}")
+                except Exception as ex_req:
+                    errores.append(f"{mod_name}: {ex_req}")
+
+            raise RuntimeError(" | ".join(errores[:2]) if errores else "Sin respuesta de Gemini API v1beta.")
 
         def _extraer_json_limpio_ia(texto_resp: str):
-            import re
             s = (texto_resp or "").strip()
             s = s.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             try:
@@ -2096,23 +2183,18 @@ class RecepcionModulo:
                     return json.loads(m.group(1))
                 raise
 
-        # --- MOTOR DE SUBIDA WEB DE ARCHIVOS PDF / CAN CODE LIST / COA ---
         modo_carga_ia_actual = {"tipo": "PACKING", "ultimo_nombre": ""}
 
         async def procesar_packing_ia_desde_ruta(ruta_pdf: str):
             if not ruta_pdf or not os.path.exists(ruta_pdf):
                 notificar("No se encontró el archivo PDF subido en el servidor.", "#B91C1C")
                 return
-            if not ai_client and not os.getenv("GEMINI_API_KEY"):
-                notificar("Cliente IA no configurado. Verifique GEMINI_API_KEY en Render.", "#D97706")
-                return
 
             nombre_archivo = os.path.basename(ruta_pdf)
-            txt_estado_ia.value = f"Procesando '{nombre_archivo}' (Packing / Can Code List) con IA..."
+            txt_estado_ia.value = f"Analizando '{nombre_archivo}' (Packing / CAN CODE LIST) con Gemini IA..."
             self.page.update()
 
             try:
-                # Pasar los SKUs actuales de la OC activa para que la IA cruce el CAN CODE LIST con precisión
                 skus_contexto = ""
                 if lineas_asn_actual:
                     lista_ctx = [f"{l.get('sku')} ({l.get('descripcion_proveedor', '')[:30]})" for l in lineas_asn_actual]
@@ -2124,16 +2206,16 @@ class RecepcionModulo:
 
                 prompt = (
                     "Actúa como un especialista en comercio exterior y WMS. "
-                    "Extrae los datos del Packing List o CAN CODE LIST adjunto y devuelve ÚNICAMENTE un JSON válido. "
-                    + skus_contexto +
-                    "REGLAS IMPORTANTES: "
-                    "1. Si el documento es un CAN CODE LIST (como los de Thai Inaba), extrae la columna 'CAN CODE' o 'LOT NO' como 'lote_sugerido' y la fecha de expiración ('EXPIRY DATE' / 'BBD' / 'EXP') como 'vencimiento_sugerido_cl' en formato YYYY-MM-DD. "
-                    "2. Si un mismo SKU aparece en varias filas con distintos lotes (Can Codes) o fechas de vencimiento, suma sus cajas/unidades y une todos sus lotes y fechas separados por coma. "
+                    "Extrae los datos del Packing List, CAN CODE LIST o Certificado CoA adjunto y devuelve ÚNICAMENTE un JSON válido. "
+                    + skus_contexto
+                    + "REGLAS IMPORTANTES: "
+                    "1. Si el documento es un CAN CODE LIST (como los de Thai Inaba), extrae el código de lote ('CAN CODE' / 'LOT NO' / 'BATCH') como 'lote_sugerido' y la fecha de expiración ('EXPIRY DATE' / 'BBD' / 'EXP' / 'BEST BEFORE') como 'vencimiento_sugerido_cl' en formato YYYY-MM-DD. "
+                    "2. Si un mismo SKU tiene múltiples filas con distintos lotes o fechas de vencimiento, suma sus cajas/unidades y une todos sus lotes y fechas separados por coma en la misma línea. "
                     'Formato estricto: {"proveedor": "Nombre proveedor", "orden": "Numero orden", "contenedor_referencia": "Codigo", "fecha_documento": "YYYY-MM-DD", "pallets_esperados": 1, "lineas": [{"sku": "USA603", "descripcion": "Nombre", "cajas_esperadas": 10, "multiplo_empaque": 48, "unidades_esperadas": 480, "lote_sugerido": "LOTE1, LOTE2", "vencimiento_sugerido_cl": "YYYY-MM-DD"}]}'
                 )
 
-                resp = await generar_json_con_gemini(ruta_pdf, prompt)
-                datos_brutos = _extraer_json_limpio_ia(resp.text)
+                texto_ia = await asyncio.to_thread(_llamar_gemini_rest_sincrono, ruta_pdf, prompt)
+                datos_brutos = _extraer_json_limpio_ia(texto_ia)
                 datos = datos_brutos[0] if isinstance(datos_brutos, list) and datos_brutos else (datos_brutos if isinstance(datos_brutos, dict) else {})
 
                 mapa_skus = {}
@@ -2170,7 +2252,6 @@ class RecepcionModulo:
                             mapa_skus[sku_limpio]["vencimientos"].add(v_norm)
 
                 if asn_actual_id is not None and dd_asn.value != "LIBRES":
-                    # Indexar SKUs actuales de la OC sin guiones ni espacios para emparejar ej. 'USA-603' con 'USA603'
                     mapa_sku_real_oc = {
                         str(lin.get("sku") or "").strip().upper().replace("-", "").replace(" ", ""): str(lin.get("sku") or "").strip()
                         for lin in lineas_asn_actual
@@ -2204,10 +2285,13 @@ class RecepcionModulo:
                     upd_cab = {"archivo_origen": f"OC_NETSUITE + {nombre_archivo}"}
                     if datos.get("contenedor_referencia") and str(datos.get("contenedor_referencia")).upper() not in ("NONE", "NULL", "CODIGO", ""):
                         upd_cab["contenedor_referencia"] = str(datos.get("contenedor_referencia")).strip().upper()
-                    supabase.table("asn_cabecera").update(upd_cab).eq("id", asn_actual_id).execute()
+                    try:
+                        supabase.table("asn_cabecera").update(upd_cab).eq("id", asn_actual_id).execute()
+                    except Exception:
+                        pass
 
-                    txt_estado_ia.value = f"CAN CODE / Packing List procesado: {skus_actualizados} SKUs enriquecidos con Lote y Vencimiento."
-                    notificar(f"Documento procesado: {skus_actualizados} SKUs actualizados en la OC.", "#047857")
+                    txt_estado_ia.value = f"Documento procesado: {skus_actualizados} SKUs enriquecidos con Lote y Vencimiento."
+                    notificar(f"¡Éxito! {skus_actualizados} SKUs actualizados con sus Lotes / Can Codes y Vencimientos.", "#047857")
                 else:
                     orden_str = str(datos.get("orden") or datetime.now().strftime("%H%M%S")).strip()
                     cab = {
@@ -2215,9 +2299,6 @@ class RecepcionModulo:
                         "proveedor": datos.get("proveedor", "PROVEEDOR"),
                         "numero_oc": orden_str,
                         "contenedor_referencia": str(datos.get("contenedor_referencia") or (txt_contenedor.value or "")).strip().upper(),
-                        "fecha_documento": datos.get("fecha_documento", ""),
-                        "pallets_esperados": int(datos.get("pallets_esperados") or 1),
-                        "archivo_origen": nombre_archivo,
                         "estado": "EN_RECEPCION",
                     }
                     res_cab = supabase.table("asn_cabecera").upsert(cab, on_conflict="codigo_asn").execute()
@@ -2251,79 +2332,13 @@ class RecepcionModulo:
                 cargar_lista_asns()
                 auditar_asn_seleccionado()
             except Exception as ex:
-                txt_estado_ia.value = f"Error procesando Packing List: {ex}"
+                txt_estado_ia.value = f"Error procesando PDF: {ex}"
                 notificar(f"Error procesando PDF: {ex}", "#B91C1C")
             finally:
                 self.page.update()
 
         async def procesar_coa_ia_desde_ruta(ruta_pdf: str):
-            if not ruta_pdf or not os.path.exists(ruta_pdf):
-                notificar("No se encontró el Certificado CoA / Can Code List en el servidor.", "#B91C1C")
-                return
             await procesar_packing_ia_desde_ruta(ruta_pdf)
-
-            nombre_coa = os.path.basename(ruta_pdf)
-            txt_estado_ia.value = f"Extrayendo Lotes y Vencimientos desde '{nombre_coa}'..."
-            self.page.update()
-
-            archivo_remoto = None
-            try:
-                archivo_remoto = ai_client.files.upload(file=ruta_pdf)
-                if inspect.iscoroutine(archivo_remoto):
-                    archivo_remoto = await archivo_remoto
-
-                prompt = (
-                    "Extrae todos los SKUs con sus numeros de Lote y Fechas de Vencimiento. "
-                    "Devuelve la información en formato JSON estricto: "
-                    '{"lotes_vencimientos": [{"sku": "SKU", "lote": "LOTE1, LOTE2", "vencimiento_cl": "YYYY-MM-DD, YYYY-MM-DD"}]}'
-                )
-                resp = await generar_json_con_gemini(archivo_remoto, prompt)
-                if inspect.iscoroutine(resp):
-                    resp = await resp
-
-                texto_limpio = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-                datos = json.loads(texto_limpio)
-
-                mapa_skus = {}
-                for item in datos.get("lotes_vencimientos", []):
-                    sku_doc = str(item.get("sku", "")).strip().upper()
-                    if not sku_doc:
-                        continue
-                    lote_doc = str(item.get("lote") or "S/L").strip().upper()
-                    venc_doc = str(item.get("vencimiento_cl") or "").strip()
-                    if sku_doc not in mapa_skus:
-                        mapa_skus[sku_doc] = {"lotes": set(), "vencimientos": set()}
-                    for l in lote_doc.split(","):
-                        if l.strip() and l.strip() != "S/L":
-                            mapa_skus[sku_doc]["lotes"].add(l.strip())
-                    for v in venc_doc.split(","):
-                        if v.strip() and v.strip() not in ("NONE", "NULL"):
-                            mapa_skus[sku_doc]["vencimientos"].add(v.strip())
-
-                actualizados = 0
-                for sku, info in mapa_skus.items():
-                    lotes_finales = ", ".join(sorted(info["lotes"])) if info["lotes"] else "S/L"
-                    venc_finales = ", ".join(sorted(info["vencimientos"])) if info["vencimientos"] else None
-                    supabase.table("asn_detalle").update(
-                        {"lote_sugerido": lotes_finales, "vencimiento_sugerido_cl": venc_finales}
-                    ).eq("asn_id", asn_actual_id).eq("sku", sku).execute()
-                    actualizados += 1
-
-                txt_estado_ia.value = f"Certificado CoA procesado: {actualizados} SKUs actualizados en la OC."
-                notificar(f"Certificado CoA procesado ({actualizados} SKUs).", "#047857")
-                auditar_asn_seleccionado()
-            except Exception as ex:
-                txt_estado_ia.value = f"Error leyendo Certificado CoA: {ex}"
-                notificar(f"Error leyendo CoA: {ex}", "#B91C1C")
-            finally:
-                if archivo_remoto:
-                    try:
-                        borrado = ai_client.files.delete(name=archivo_remoto.name)
-                        if inspect.iscoroutine(borrado):
-                            await borrado
-                    except Exception:
-                        pass
-                self.page.update()
 
         async def despachar_archivo_ia_listo(ruta_local: str):
             if modo_carga_ia_actual.get("tipo") == "COA":
@@ -2360,7 +2375,6 @@ class RecepcionModulo:
             os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
             ruta_destino = os.path.join("assets", "uploads", nombre_limpio)
 
-            # 1. Si el navegador entregó los bytes directos en memoria
             datos_bytes = getattr(f_obj, "bytes", None)
             if datos_bytes:
                 with open(ruta_destino, "wb") as f_out:
@@ -2368,13 +2382,11 @@ class RecepcionModulo:
                 await despachar_archivo_ia_listo(ruta_destino)
                 return
 
-            # 2. Si se ejecuta en PC local y existe la ruta física
             ruta_local_pc = getattr(f_obj, "path", None)
             if ruta_local_pc and os.path.exists(ruta_local_pc):
                 await despachar_archivo_ia_listo(ruta_local_pc)
                 return
 
-            # 3. Subida Web desde el navegador hacia assets/uploads en Render
             txt_estado_ia.value = f"Subiendo '{nombre_limpio}' a la nube..."
             self.page.update()
             upload_url = self.page.get_upload_url(nombre_limpio, 600)
@@ -2467,7 +2479,6 @@ class RecepcionModulo:
             dd_accion_po.value = None
             page.update()
 
-        # Conectar el dropdown afuera de la función para que se ejecute al seleccionar una opción
         dd_accion_po.on_change = ejecutar_accion_menu_po
         dd_accion_po.on_select = ejecutar_accion_menu_po
 
@@ -2534,7 +2545,6 @@ class RecepcionModulo:
             ),
         ]
 
-        # Si el usuario logueado es ADMIN, se agrega el botón rojo para cerrar/eliminar OCs
         if es_admin_usuario:
             controles_superiores_po.append(
                 boton_primario(
@@ -2594,13 +2604,13 @@ class RecepcionModulo:
                         alignment=ft.MainAxisAlignment.SPACE_AROUND,
                     ),
                     ft.Divider(color=BORDER_COLOR, height=10),
-                    ft.Text("Indicadores físicos de conciliación por partida (PO)", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ft.Text("Indicadores físicos de conciliación por partida (OC)", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                     ft.Row(
                         [
-                            crear_caja_digital(lbl_inb_cajas, "Cajas (Fís/PO)", ACCENT_TEAL, 86),
+                            crear_caja_digital(lbl_inb_cajas, "Cajas (Fís/OC)", ACCENT_TEAL, 86),
                             crear_caja_digital(lbl_inb_unidades, "Unid. Recibidas", ACCENT_BLUE, 86),
                             crear_caja_digital(lbl_inb_pallets, "LPNs Activos", "#D97706", 78),
-                            crear_caja_digital(lbl_inb_avance, "Avance PO", "#10B981", 78),
+                            crear_caja_digital(lbl_inb_avance, "Avance OC", "#10B981", 78),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
@@ -2643,7 +2653,7 @@ class RecepcionModulo:
             expand_val=True,
         )
 
-        # PANEL 1: Solo aquí aparece barra_titulo_monitor ("KPI RECEPCIÓN & CONCILIACIÓN 3-WAY MATCH")
+        # PANEL 1: Recepción Activa
         subvista_inb_recepcion = ft.Column(
             [
                 barra_titulo_monitor,
@@ -2653,7 +2663,7 @@ class RecepcionModulo:
                         [
                             ft.Row(
                                 [
-                                    ft.Text("Detalle de órdenes y conciliación 3-Way Match por partida (PO vs Recepción RF)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                                    ft.Text("Detalle de órdenes y conciliación 3-Way Match por partida (OC vs Recepción RF)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                                     ft.Row(
                                         [
                                             sw_auto_sync_rf,
@@ -2681,7 +2691,7 @@ class RecepcionModulo:
             spacing=10,
         )
 
-        # PANEL 2: Consultor Histórico separado por Día de Recepción y con N° PO Real
+        # PANEL 2: Consultor Histórico con filtro de Ingresos sin PO y casillas por artículo
         subvista_inb_consultas = tarjeta_dark(
             ft.Column(
                 [
@@ -2689,8 +2699,8 @@ class RecepcionModulo:
                         [
                             ft.Column(
                                 [
-                                    ft.Text("2. CONSULTOR HISTÓRICO DE RECEPCIONES POR DÍA Y PO REAL", size=14, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                                    ft.Text("Si una misma PO se recepciona en 2 o más días distintos, cada día aparece desglosado por separado.", size=11, color=TEXT_MUTED),
+                                    ft.Text("2. CONSULTOR HISTÓRICO DE RECEPCIONES POR DÍA Y OC/PO REAL", size=14, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
+                                    ft.Text("Filtre por Fecha o haga clic en 'SOLO SIN PO', marque los artículos deseados y descargue sus etiquetas LPN, Acta PDF o Excel.", size=11, color=TEXT_MUTED),
                                 ],
                                 spacing=2,
                             ),
@@ -2699,9 +2709,9 @@ class RecepcionModulo:
                                     dd_fecha_hist_rec,
                                     txt_fecha_hist_rec,
                                     txt_buscar_hist_rec,
+                                    boton_primario("SOLO SIN PO", ft.Icons.INVENTORY_2_OUTLINED, filtrar_solo_sin_po_hist, "#D97706"),
                                     boton_primario("FILTRAR", ft.Icons.SEARCH_ROUNDED, cargar_historico_recepciones, ACCENT_TEAL),
                                     boton_primario("LIMPIAR", ft.Icons.FILTER_ALT_OFF_OUTLINED, limpiar_filtros_historico, "#475569"),
-                                    boton_primario("DESCARGAR PDF RECEPCIÓN", ft.Icons.PICTURE_AS_PDF_OUTLINED, descargar_pdf_historico_filtrado, "#047857"),
                                 ],
                                 spacing=8,
                                 wrap=True,
@@ -2711,7 +2721,28 @@ class RecepcionModulo:
                         wrap=True,
                     ),
                     ft.Divider(color=BORDER_COLOR, height=4),
-                    ft.Text("DESGLOSE RÁPIDO POR DÍA DE RECEPCIÓN Y N° DE PO (CLIC PARA FILTRAR DÍA):", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
+                    ft.Row(
+                        [
+                            ft.Row(
+                                [
+                                    boton_primario("MARCAR TODOS", ft.Icons.CHECK_BOX_OUTLINED, lambda e: marcar_desmarcar_hist(True), "#334155", height_val=28),
+                                    boton_primario("DESMARCAR TODOS", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED, lambda e: marcar_desmarcar_hist(False), "#475569", height_val=28),
+                                ],
+                                spacing=6,
+                            ),
+                            ft.Row(
+                                [
+                                    boton_primario("IMPRIMIR LPNs MARCADOS (15x10)", ft.Icons.PRINT_ROUNDED, imprimir_lpns_seleccionados_hist, "#4F46E5", height_val=30),
+                                    boton_primario("BAJAR ACTA PDF (MARCADOS)", ft.Icons.PICTURE_AS_PDF_OUTLINED, descargar_pdf_historico_filtrado, ACCENT_TEAL, height_val=30),
+                                    boton_primario("BAJAR EXCEL (MARCADOS)", ft.Icons.TABLE_VIEW_OUTLINED, exportar_excel_seleccionados_hist, ACCENT_BLUE, height_val=30),
+                                ],
+                                spacing=8,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
+                    ),
+                    ft.Text("DESGLOSE RÁPIDO POR DÍA DE RECEPCIÓN Y N° DE OC/PO (CLIC PARA FILTRAR DÍA):", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
                     fila_resumen_dias_hist,
                     ft.Divider(color=BORDER_COLOR, height=4),
                     cont_tabla_hist_rec,
@@ -2732,7 +2763,7 @@ class RecepcionModulo:
                             dd_qa_lpn,
                             dd_qa_estado,
                             boton_primario("APLICAR A LPN", ft.Icons.VERIFIED_USER_OUTLINED, actualizar_dictamen_qa_lpn, ACCENT_BLUE),
-                            boton_primario("LIBERAR TODA LA PO", ft.Icons.DONE_ALL_ROUNDED, aplicar_qa_masivo_toda_la_po, ACCENT_TEAL),
+                            boton_primario("LIBERAR TODA LA OC", ft.Icons.DONE_ALL_ROUNDED, aplicar_qa_masivo_toda_la_po, ACCENT_TEAL),
                         ],
                         wrap=True,
                         spacing=8,
@@ -2744,7 +2775,7 @@ class RecepcionModulo:
             )
         )
 
-        # PANEL 4: Modificación de PO y LPNs (con su propio selector de PO)
+        # PANEL 4: Modificación de OC y LPNs
         subvista_inb_modificacion = ft.Column(
             [
                 tarjeta_dark(
@@ -2752,7 +2783,7 @@ class RecepcionModulo:
                         [
                             ft.Row(
                                 [
-                                    ft.Text("4.1 MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA (PO)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                                    ft.Text("4.1 MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA (OC)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                                     dd_mod_po_base,
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -2769,7 +2800,7 @@ class RecepcionModulo:
                                     txt_edit_unid_esp,
                                     txt_edit_lote_sug,
                                     txt_edit_venc_sug,
-                                    boton_primario("GUARDAR EN PO", ft.Icons.SAVE_OUTLINED, guardar_ajuste_linea_asn, ACCENT_TEAL),
+                                    boton_primario("GUARDAR EN OC", ft.Icons.SAVE_OUTLINED, guardar_ajuste_linea_asn, ACCENT_TEAL),
                                     boton_primario("ELIMINAR LÍNEA", ft.Icons.DELETE_OUTLINE, eliminar_linea_po_seleccionada, "#B91C1C"),
                                 ],
                                 wrap=True,
