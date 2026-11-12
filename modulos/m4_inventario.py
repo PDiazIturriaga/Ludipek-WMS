@@ -31,16 +31,21 @@ class InventarioModulo:
 
         # --- 2. VARIABLES GLOBALES DE ESTADO ---
         datos_stock_wms = []
-        mapa_stock_por_sku = {}       
-        mapa_ubicaciones_por_sku = {} 
-        mapa_sku_maestra = {}         
-        lista_usuarios_wms = []       
-        mapa_usuarios_wms = {}        
+        mapa_stock_por_sku = {}
+        mapa_ubicaciones_por_sku = {}
+        mapa_sku_maestra = {}
+        lista_usuarios_wms = []
+        mapa_usuarios_wms = {}
         asignaciones_pasillo_db = []
-        conteos_ubic_vacias_db = []   
-        conteos_ciclico_sku_db = []   
+        conteos_ubic_vacias_db = []
+        conteos_ciclico_sku_db = []
         desvios_db = []
         subvista_activa_idx = 0
+
+        # --- HELPER MULTI-BODEGA ---
+        def obtener_bodega_actual() -> str:
+            bod = str(getattr(self.page, "bodega_actual", "") or "").strip()
+            return bod if bod in ("Bodega Santiago", "Bodega Concepcion") else "Bodega Santiago"
 
         # --- 3. FUNCIONES AUXILIARES UI ---
         def notificar(texto: str, color: str = "#0284C7"):
@@ -275,9 +280,10 @@ class InventarioModulo:
         )
         cont_desvios = envolver_tabla_scroll(tabla_desvios_grua, 320)
 
-        # --- 8. LÓGICA CORE Y SUPABASE (WMS_USUARIOS, ASIGNACIONES Y CONTEOS) ---
+        # --- 8. LÓGICA CORE Y SUPABASE (FILTRADO ESTRICTO MULTI-BODEGA) ---
         def cargar_usuarios_wms():
             nonlocal lista_usuarios_wms, mapa_usuarios_wms
+            bodega_act = obtener_bodega_actual()
             nuevo_mapa = {}
             nueva_lista = []
             opciones_ops = []
@@ -288,6 +294,7 @@ class InventarioModulo:
                     u_id = str(row.get("usuario") or row.get("rut") or row.get("id") or "").strip()
                     n_comp = str(row.get("nombre_completo") or row.get("nombre") or u_id).strip()
                     rol_u = str(row.get("rol") or "OPERADOR").strip()
+                    bod_u = str(row.get("bodega") or "Bodega Santiago").strip()
                     if not u_id:
                         continue
 
@@ -299,6 +306,16 @@ class InventarioModulo:
 
                     if row.get("activo") is False:
                         continue
+
+                    # Filtrar el dropdown para que solo muestre operadores de la bodega activa (o ADMIN / AMBAS)
+                    es_global = (
+                        "ADMIN" in rol_u.upper()
+                        or "AMBAS" in bod_u.upper()
+                        or "TODAS" in bod_u.upper()
+                    )
+                    if not es_global and bod_u.upper() != bodega_act.upper():
+                        continue
+
                     nueva_lista.append(row)
                     opciones_ops.append(opt_w(u_id, f"{etiqueta_mostrar} ({rol_u})"))
             except Exception:
@@ -322,16 +339,20 @@ class InventarioModulo:
 
         def sync_stock_inventario():
             nonlocal datos_stock_wms, mapa_sku_maestra, mapa_stock_por_sku, mapa_ubicaciones_por_sku
+            bodega_act = obtener_bodega_actual()
             nuevo_stock_sku = {}
             nuevas_ubic_sku = {}
             nueva_maestra = {}
 
-            def leer_paginado(nombre_tabla: str, max_reg: int = 4000) -> list:
+            def leer_paginado(nombre_tabla: str, max_reg: int = 4000, filtrar_bodega: bool = False) -> list:
                 acum = []
                 paso = 1000
                 for off in range(0, max_reg, paso):
                     try:
-                        res = supabase.table(nombre_tabla).select("*").range(off, off + paso - 1).execute()
+                        q = supabase.table(nombre_tabla).select("*")
+                        if filtrar_bodega:
+                            q = q.eq("bodega", bodega_act)
+                        res = q.range(off, off + paso - 1).execute()
                         lote = res.data or []
                         acum.extend(lote)
                         if len(lote) < paso:
@@ -341,83 +362,81 @@ class InventarioModulo:
                 return acum
 
             try:
-                # 1. Cargar Maestra de SKUs completa
-                for m in leer_paginado("maestra_sku", 4000):
+                # 1. Cargar Maestra de SKUs (Global para ambas bodegas)
+                for m in leer_paginado("maestra_sku", 4000, filtrar_bodega=False):
                     s_k = str(m.get("sku") or "").strip().upper()
                     if s_k:
                         nueva_maestra[s_k] = str(m.get("descripcion") or "")
 
-                # 2. Cargar registro_recepcion para cruzar LPNs (SKU y unidades por LPN)
-                filas_rec = leer_paginado("registro_recepcion", 4000)
+                # 2. Cargar registro_recepcion filtrado por la bodega activa
+                filas_rec = leer_paginado("registro_recepcion", 4000, filtrar_bodega=True)
                 mapa_rec_lpn = {}
                 for r in filas_rec:
                     lpn_k = str(r.get("lpn") or "").strip().upper()
                     if lpn_k:
                         mapa_rec_lpn[lpn_k] = r
 
-                # 3. Leer tablas de ubicaciones en Racks leyendo correctamente cantidad_unidades
+                # 3. Leer bodega_inventario_ubicacion filtrado por la bodega activa
                 ubicados_vistos = set()
                 lpns_en_racks = set()
 
-                for nom_t in ("bodega_inventario_ubicacion", "inventario_ubicaciones", "bodega_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
-                    filas_u = leer_paginado(nom_t, 4000)
-                    for r in filas_u:
-                        ubi_r = str(r.get("codigo_ubicacion") or r.get("ubicacion") or r.get("posicion") or "").strip().upper()
-                        lpn_r = str(r.get("lpn") or r.get("codigo_lpn") or r.get("pallet") or "").strip().upper()
-                        sku_r = str(r.get("sku") or "").strip().upper()
+                filas_u = leer_paginado("bodega_inventario_ubicacion", 4000, filtrar_bodega=True)
+                for r in filas_u:
+                    ubi_r = str(r.get("codigo_ubicacion") or r.get("ubicacion") or r.get("posicion") or "").strip().upper()
+                    lpn_r = str(r.get("lpn") or r.get("codigo_lpn") or r.get("pallet") or "").strip().upper()
+                    sku_r = str(r.get("sku") or "").strip().upper()
 
-                        # Ignorar ubicaciones vacías del maestro de racks
-                        if not lpn_r and not sku_r:
-                            continue
+                    if not lpn_r and not sku_r:
+                        continue
 
-                        info_lpn = mapa_rec_lpn.get(lpn_r, {})
-                        sku_final = sku_r or str(info_lpn.get("sku") or "").strip().upper()
-                        if not sku_final or sku_final in ("NONE", "NULL", "-"):
-                            continue
+                    info_lpn = mapa_rec_lpn.get(lpn_r, {})
+                    sku_final = sku_r or str(info_lpn.get("sku") or "").strip().upper()
+                    if not sku_final or sku_final in ("NONE", "NULL", "-"):
+                        continue
 
-                        raw_unid = (
-                            r.get("cantidad_unidades")
-                            if r.get("cantidad_unidades") is not None
+                    raw_unid = (
+                        r.get("cantidad_unidades")
+                        if r.get("cantidad_unidades") is not None
+                        else (
+                            r.get("unidades")
+                            if r.get("unidades") is not None
                             else (
-                                r.get("unidades")
-                                if r.get("unidades") is not None
+                                r.get("unidades_totales")
+                                if r.get("unidades_totales") is not None
                                 else (
-                                    r.get("unidades_totales")
-                                    if r.get("unidades_totales") is not None
+                                    r.get("cantidad")
+                                    if r.get("cantidad") is not None
                                     else (
-                                        r.get("cantidad")
-                                        if r.get("cantidad") is not None
-                                        else (
-                                            r.get("stock")
-                                            if r.get("stock") is not None
-                                            else info_lpn.get("unidades_totales")
-                                        )
+                                        r.get("stock")
+                                        if r.get("stock") is not None
+                                        else info_lpn.get("unidades_totales")
                                     )
                                 )
                             )
                         )
-                        try:
-                            unid_val = int(float(raw_unid or 0))
-                        except Exception:
-                            unid_val = 0
+                    )
+                    try:
+                        unid_val = int(float(raw_unid or 0))
+                    except Exception:
+                        unid_val = 0
 
-                        if unid_val <= 0:
-                            continue
+                    if unid_val <= 0:
+                        continue
 
-                        clave_unica = (ubi_r or "RACK", lpn_r or f"{sku_final}_{r.get('id')}")
-                        if clave_unica in ubicados_vistos:
-                            continue
-                        ubicados_vistos.add(clave_unica)
-                        if lpn_r:
-                            lpns_en_racks.add(lpn_r)
+                    clave_unica = (ubi_r or "RACK", lpn_r or f"{sku_final}_{r.get('id')}")
+                    if clave_unica in ubicados_vistos:
+                        continue
+                    ubicados_vistos.add(clave_unica)
+                    if lpn_r:
+                        lpns_en_racks.add(lpn_r)
 
-                        nuevo_stock_sku[sku_final] = nuevo_stock_sku.get(sku_final, 0) + unid_val
-                        if ubi_r and ubi_r not in ("NONE", "NULL", ""):
-                            if sku_final not in nuevas_ubic_sku:
-                                nuevas_ubic_sku[sku_final] = set()
-                            nuevas_ubic_sku[sku_final].add(ubi_r)
+                    nuevo_stock_sku[sku_final] = nuevo_stock_sku.get(sku_final, 0) + unid_val
+                    if ubi_r and ubi_r not in ("NONE", "NULL", ""):
+                        if sku_final not in nuevas_ubic_sku:
+                            nuevas_ubic_sku[sku_final] = set()
+                        nuevas_ubic_sku[sku_final].add(ubi_r)
 
-                # 4. Incluir también LPNs recepcionados en registro_recepcion (Andén)
+                # 4. Incluir LPNs recepcionados en Andén de la bodega activa que aún no están en rack
                 lpns_anden_vistos = set()
                 for r in filas_rec:
                     lpn_r = str(r.get("lpn") or "").strip().upper()
@@ -443,10 +462,10 @@ class InventarioModulo:
                 mapa_sku_maestra = nueva_maestra
                 mapa_stock_por_sku = nuevo_stock_sku
                 mapa_ubicaciones_por_sku = nuevas_ubic_sku
-                datos_stock_wms = [{"sku": k, "unidades": v} for k, v in sorted(nuevo_stock_sku.items())]
+                datos_stock_wms = [{"sku": k, "unidades": v, "bodega": bodega_act} for k, v in sorted(nuevo_stock_sku.items())]
                 lbl_kpi_total_wms.value = f"{sum(nuevo_stock_sku.values()):,}".replace(",", ".")
             except Exception as ex_s:
-                print(f"[WARN] Error consolidando stock WMS: {ex_s}")
+                print(f"[WARN] Error consolidando stock WMS ({bodega_act}): {ex_s}")
 
         def actualizar_preview_sku_dirigido(e=None):
             sku_in = (txt_sku_dirigido.value or "").strip().upper()
@@ -458,16 +477,16 @@ class InventarioModulo:
             desc = mapa_sku_maestra.get(sku_in, "SKU no registrado en maestra")
             st_teo = mapa_stock_por_sku.get(sku_in, 0)
             ubics = sorted(mapa_ubicaciones_por_sku.get(sku_in, set()))
-            ubic_str = ", ".join(ubics[:4]) if ubics else "Sin ubicación registrada"
+            ubic_str = ", ".join(ubics[:4]) if ubics else "Sin ubicación registrada en esta bodega"
             if ubics and not (txt_ubic_sku_dirigido.value or "").strip():
                 txt_ubic_sku_dirigido.value = ubics[0]
-            txt_Info_sku_dirigido.value = f"📦 {sku_in}: {desc}  |  Stock Teórico WMS: {st_teo} UN  |  Ubicaciones: {ubic_str}"
+            txt_Info_sku_dirigido.value = f"📦 [{obtener_bodega_actual()}] {sku_in}: {desc}  |  Stock Teórico WMS: {st_teo} UN  |  Ubicaciones: {ubic_str}"
             txt_Info_sku_dirigido.color = ACCENT_CYAN
             page.update()
 
         txt_sku_dirigido.on_change = actualizar_preview_sku_dirigido
 
-        # --- ASIGNACIONES DE PASILLO VINCULADAS A WMS_USUARIOS ---
+        # --- ASIGNACIONES DE PASILLO VINCULADAS A WMS_USUARIOS Y BODEGA ---
         def renderizar_asignaciones():
             nuevas_filas_asig = []
             completadas_cnt = 0
@@ -540,15 +559,25 @@ class InventarioModulo:
 
         def cargar_asignaciones_piso():
             nonlocal asignaciones_pasillo_db
+            bodega_act = obtener_bodega_actual()
             cargadas = []
             for nom_t in ("wms_asignaciones_pasillo", "asignaciones_pasillo", "auditoria_pasillos"):
                 try:
-                    res = supabase.table(nom_t).select("*").order("id", desc=True).limit(100).execute()
+                    res = supabase.table(nom_t).select("*").eq("bodega", bodega_act).order("id", desc=True).limit(100).execute()
                     if res.data is not None:
                         cargadas = res.data
                         break
                 except Exception:
-                    continue
+                    try:
+                        res = supabase.table(nom_t).select("*").order("id", desc=True).limit(100).execute()
+                        if res.data is not None:
+                            cargadas = [
+                                r for r in res.data
+                                if not r.get("bodega") or str(r.get("bodega")).strip().upper() == bodega_act.upper()
+                            ]
+                            break
+                    except Exception:
+                        continue
 
             if not cargadas and lista_usuarios_wms:
                 for u_row in lista_usuarios_wms:
@@ -556,6 +585,7 @@ class InventarioModulo:
                     if pas_u and str(pas_u).strip().upper() not in ("NONE", "NULL", ""):
                         cargadas.append({
                             "id": u_row.get("id"),
+                            "bodega": bodega_act,
                             "pasillo": str(pas_u).upper(),
                             "usuario": u_row.get("usuario"),
                             "fecha": u_row.get("updated_at") or u_row.get("created_at"),
@@ -566,6 +596,7 @@ class InventarioModulo:
             renderizar_asignaciones()
 
         def asignar_operador_pasillo(e=None):
+            bodega_act = obtener_bodega_actual()
             p_sel = dd_racks_asignacion.value or "RACK A"
             o_sel = dd_operador_asignar.value
             if not o_sel:
@@ -579,8 +610,8 @@ class InventarioModulo:
                 if guardado_db:
                     break
                 for payload in (
+                    {"bodega": bodega_act, "pasillo": p_sel, "operador": o_sel, "usuario": o_sel, "estado": "EN PROCESO"},
                     {"pasillo": p_sel, "operador": o_sel, "usuario": o_sel, "estado": "EN PROCESO"},
-                    {"pasillo": p_sel, "operador": o_sel, "estado": "EN PROCESO"},
                     {"pasillo": p_sel, "usuario": o_sel, "estado": "EN PROCESO"},
                 ):
                     try:
@@ -597,13 +628,14 @@ class InventarioModulo:
 
             asignaciones_pasillo_db.insert(0, {
                 "id": len(asignaciones_pasillo_db) + 1,
+                "bodega": bodega_act,
                 "pasillo": p_sel,
                 "usuario": o_sel,
                 "operador": o_sel,
                 "fecha": ahora_iso,
                 "estado": "EN PROCESO",
             })
-            notificar(f"{p_sel} asignado a {resolver_nombre_usuario(o_sel)}.", "#047857")
+            notificar(f"{p_sel} ({bodega_act}) asignado a {resolver_nombre_usuario(o_sel)}.", "#047857")
             renderizar_asignaciones()
             page.update()
 
@@ -612,7 +644,7 @@ class InventarioModulo:
             filtro_c = (txt_buscar_ciclico.value or "").strip().upper()
             filtro_v = (txt_buscar_vacias.value or "").strip().upper()
 
-            # 1. Construir filas de auditoria_ciclico_sku (compatible con main.dart)
+            # 1. Construir filas de auditoria_ciclico_sku
             nuevas_filas_cic = []
             cic_conciliados = 0
 
@@ -637,7 +669,6 @@ class InventarioModulo:
                     teo_val = mapa_stock_por_sku.get(sku_c, 0)
                 teo_int = int(float(teo_val or 0))
 
-                # Leer tanto estado (PC) como estado_auditoria (main.dart: CONFORME / INCIDENCIA / SIN_REVISAR)
                 est_raw = str(row_c.get("estado") or row_c.get("estado_auditoria") or "").strip().upper()
 
                 cont_raw = (
@@ -751,7 +782,7 @@ class InventarioModulo:
             lbl_kpi_cic_total.value = str(len(conteos_ciclico_sku_db))
             lbl_kpi_cic_ok.value = str(cic_conciliados)
 
-            # 2. Construir filas de auditoria_ubicaciones_vacias (compatible con main.dart)
+            # 2. Construir filas de auditoria_ubicaciones_vacias
             nuevas_filas_vac = []
             hallazgos_vacias = 0
 
@@ -877,29 +908,51 @@ class InventarioModulo:
 
         def cargar_auditorias_ciclico_y_vacias():
             nonlocal conteos_ubic_vacias_db, conteos_ciclico_sku_db
+            bodega_act = obtener_bodega_actual()
             try:
-                res_cic = supabase.table("auditoria_ciclico_sku").select("*").order("id", desc=True).limit(250).execute()
+                res_cic = (
+                    supabase.table("auditoria_ciclico_sku")
+                    .select("*")
+                    .eq("bodega", bodega_act)
+                    .order("id", desc=True)
+                    .limit(250)
+                    .execute()
+                )
                 conteos_ciclico_sku_db = res_cic.data or []
             except Exception:
                 try:
-                    res_cic = supabase.table("auditoria_ciclico_sku").select("*").limit(250).execute()
-                    conteos_ciclico_sku_db = res_cic.data or []
+                    res_cic = supabase.table("auditoria_ciclico_sku").select("*").order("id", desc=True).limit(250).execute()
+                    conteos_ciclico_sku_db = [
+                        r for r in (res_cic.data or [])
+                        if not r.get("bodega") or str(r.get("bodega")).strip().upper() == bodega_act.upper()
+                    ]
                 except Exception:
                     conteos_ciclico_sku_db = []
 
             try:
-                res_vac = supabase.table("auditoria_ubicaciones_vacias").select("*").order("id", desc=True).limit(250).execute()
+                res_vac = (
+                    supabase.table("auditoria_ubicaciones_vacias")
+                    .select("*")
+                    .eq("bodega", bodega_act)
+                    .order("id", desc=True)
+                    .limit(250)
+                    .execute()
+                )
                 conteos_ubic_vacias_db = res_vac.data or []
             except Exception:
                 try:
-                    res_vac = supabase.table("auditoria_ubicaciones_vacias").select("*").limit(250).execute()
-                    conteos_ubic_vacias_db = res_vac.data or []
+                    res_vac = supabase.table("auditoria_ubicaciones_vacias").select("*").order("id", desc=True).limit(250).execute()
+                    conteos_ubic_vacias_db = [
+                        r for r in (res_vac.data or [])
+                        if not r.get("bodega") or str(r.get("bodega")).strip().upper() == bodega_act.upper()
+                    ]
                 except Exception:
                     conteos_ubic_vacias_db = []
 
             renderizar_tablas_auditorias_conteos()
 
         def dirigir_sku_a_operador(e=None):
+            bodega_act = obtener_bodega_actual()
             sku_obj = (txt_sku_dirigido.value or "").strip().upper()
             ubic_obj = (txt_ubic_sku_dirigido.value or "").strip().upper()
             usr_obj = dd_operador_sku_dirigido.value
@@ -921,6 +974,17 @@ class InventarioModulo:
 
             esquemas_candidatos = [
                 {
+                    "bodega": bodega_act,
+                    "lote_auditoria": lote_dir,
+                    "sku": sku_obj,
+                    "codigo_ubicacion": ubic_obj,
+                    "cajas_sistema": 0,
+                    "unidades_sistema": st_teo,
+                    "estado_auditoria": "PENDIENTE",
+                    "auditor": usr_obj,
+                    "fecha": ahora_iso,
+                },
+                {
                     "lote_auditoria": lote_dir,
                     "sku": sku_obj,
                     "codigo_ubicacion": ubic_obj,
@@ -938,17 +1002,6 @@ class InventarioModulo:
                     "usuario": usr_obj,
                     "estado": "PENDIENTE",
                 },
-                {
-                    "sku": sku_obj,
-                    "ubicacion": ubic_obj,
-                    "stock_teorico": st_teo,
-                    "usuario": usr_obj,
-                    "estado": "PENDIENTE",
-                },
-                {
-                    "sku": sku_obj,
-                    "usuario": usr_obj,
-                },
             ]
             insertado_db = False
             for payload in esquemas_candidatos:
@@ -962,6 +1015,7 @@ class InventarioModulo:
             if not insertado_db:
                 conteos_ciclico_sku_db.insert(0, {
                     "id": len(conteos_ciclico_sku_db) + 1,
+                    "bodega": bodega_act,
                     "sku": sku_obj,
                     "descripcion": desc_s,
                     "codigo_ubicacion": ubic_obj,
@@ -975,10 +1029,10 @@ class InventarioModulo:
 
             txt_sku_dirigido.value = ""
             txt_ubic_sku_dirigido.value = ""
-            notificar(f"SKU Dirigido [{sku_obj}] asignado a {resolver_nombre_usuario(usr_obj)}.", "#047857")
+            notificar(f"SKU Dirigido [{sku_obj}] ({bodega_act}) asignado a {resolver_nombre_usuario(usr_obj)}.", "#047857")
             renderizar_tablas_auditorias_conteos()
 
-        # --- 10. DESVÍOS, CRUCE ERP Y TRAZABILIDAD ---
+        # --- 10. DESVÍOS, CRUCE ERP Y TRAZABILIDAD (CON FILTRO MULTI-BODEGA) ---
         def renderizar_desvios():
             nuevas_filas_desv = []
             pend, res = 0, 0
@@ -1012,41 +1066,50 @@ class InventarioModulo:
 
         def cargar_desvios_grua():
             nonlocal desvios_db
+            bodega_act = obtener_bodega_actual()
             reales = []
-            # 1. Leer tabla directa de desvíos si existe
-            for nom_t in ("wms_desvios_inventario", "desvios_grua", "reporte_desvios", "incidencias_rf"):
-                try:
-                    res = supabase.table(nom_t).select("*").order("id", desc=True).limit(100).execute()
-                    if res.data:
-                        reales.extend(res.data)
-                        break
-                except Exception:
-                    continue
 
-            # 2. Leer alertas en tiempo real de ubicaciones vacías ocupadas desde historial_movimientos (main.dart)
+            # 1. Leer alertas en tiempo real de ubicaciones vacías ocupadas desde historial_movimientos filtradas por bodega
             try:
                 res_hm = (
                     supabase.table("historial_movimientos")
                     .select("*")
+                    .eq("bodega", bodega_act)
                     .eq("tipo_movimiento", "ALERTA_VACIA_OCUPADA")
                     .order("id", desc=True)
                     .limit(50)
                     .execute()
                 )
-                for hm in (res_hm.data or []):
-                    reales.append({
-                        "id": f"HM-{hm.get('id')}",
-                        "fecha": hm.get("fecha") or hm.get("created_at"),
-                        "lpn": hm.get("lpn") or "SIN-REGISTRO",
-                        "ubicacion_teorica": hm.get("ubicacion_destino") or "-",
-                        "incidencia": "ALERTA ROJA RF: POSICIÓN VACÍA OCUPADA SIN REGISTRO",
-                        "usuario": hm.get("usuario") or "APP_RF",
-                        "estado": "PENDIENTE",
-                    })
+                filas_hm = res_hm.data or []
             except Exception:
-                pass
+                try:
+                    res_hm = (
+                        supabase.table("historial_movimientos")
+                        .select("*")
+                        .eq("tipo_movimiento", "ALERTA_VACIA_OCUPADA")
+                        .order("id", desc=True)
+                        .limit(50)
+                        .execute()
+                    )
+                    filas_hm = [
+                        r for r in (res_hm.data or [])
+                        if not r.get("bodega") or str(r.get("bodega")).strip().upper() == bodega_act.upper()
+                    ]
+                except Exception:
+                    filas_hm = []
 
-            # 3. Sumar hallazgos reales detectados en auditoria_ubicaciones_vacias
+            for hm in filas_hm:
+                reales.append({
+                    "id": f"HM-{hm.get('id')}",
+                    "fecha": hm.get("fecha") or hm.get("created_at"),
+                    "lpn": hm.get("lpn") or "SIN-REGISTRO",
+                    "ubicacion_teorica": hm.get("ubicacion_destino") or "-",
+                    "incidencia": f"ALERTA ROJA RF ({bodega_act}): POSICIÓN VACÍA OCUPADA SIN REGISTRO",
+                    "usuario": hm.get("usuario") or "APP_RF",
+                    "estado": "PENDIENTE",
+                })
+
+            # 2. Sumar hallazgos reales detectados en auditoria_ubicaciones_vacias (ya filtrados por bodega)
             for rv in conteos_ubic_vacias_db:
                 res_f = str(rv.get("resultado_auditoria") or rv.get("resultado") or rv.get("estado_ubicacion") or "").upper()
                 lpn_h = str(rv.get("lpn_encontrado") or rv.get("lpn") or rv.get("sku_encontrado") or "").strip().upper()
@@ -1061,7 +1124,7 @@ class InventarioModulo:
                         "estado": "RESUELTO" if str(rv.get("estado") or "").upper() in ("VERIFICADA OK", "RESUELTO") else "PENDIENTE",
                     })
 
-            # 4. Sumar incidencias y diferencias reales detectadas en auditoria_ciclico_sku
+            # 3. Sumar incidencias y diferencias reales detectadas en auditoria_ciclico_sku (ya filtrados por bodega)
             for rc in conteos_ciclico_sku_db:
                 est_aud = str(rc.get("estado_auditoria") or rc.get("estado") or "").upper()
                 c_cont = rc.get("cantidad_contada") if rc.get("cantidad_contada") is not None else rc.get("conteo_fisico")
@@ -1101,8 +1164,9 @@ class InventarioModulo:
 
         def ejecutar_cruce_erp_wms(e=None):
             sync_stock_inventario()
+            bodega_act = obtener_bodega_actual()
             filtro_txt = (txt_buscar_inv.value or "").strip().upper()
-            lbl_estado_erp_cruce.value = "Consultando stock real en NetSuite (SuiteQL) y cruzando con Supabase..."
+            lbl_estado_erp_cruce.value = f"[{bodega_act}] Consultando stock en NetSuite (SuiteQL) y cruzando con Supabase..."
             lbl_estado_erp_cruce.color = ACCENT_CYAN
             page.update()
 
@@ -1124,7 +1188,7 @@ class InventarioModulo:
                             if s_k:
                                 stock_erp_map[s_k] = int(float(r_ns.get("stock_erp") or 0))
                 except Exception as ex_ns:
-                    lbl_estado_erp_cruce.value = f"Aviso SuiteQL ({ex_ns}). Mostrando stock físico real de WMS."
+                    lbl_estado_erp_cruce.value = f"Aviso SuiteQL ({ex_ns}). Mostrando stock físico real de WMS ({bodega_act})."
 
             todos_skus = sorted(
                 set(mapa_stock_por_sku.keys()) | set(stock_erp_map.keys()),
@@ -1186,26 +1250,27 @@ class InventarioModulo:
             lbl_kpi_total_wms.value = f"{suma_wms:,}".replace(",", ".")
             lbl_kpi_total_erp.value = f"{suma_erp:,}".replace(",", ".")
             lbl_kpi_dif_global.value = f"{dif_global:,}".replace(",", ".")
-            lbl_estado_erp_cruce.value = f"Cruce real actualizado: {len(todos_skus)} SKUs analizados | {dif_global} UN con diferencia."
+            lbl_estado_erp_cruce.value = f"[{bodega_act}] Cruce actualizado: {len(todos_skus)} SKUs analizados | {dif_global} UN con diferencia."
             lbl_estado_erp_cruce.color = "#34D399"
             page.update()
 
         txt_buscar_inv.on_change = ejecutar_cruce_erp_wms
 
         def buscar_trazabilidad_lpn(e=None):
+            bodega_act = obtener_bodega_actual()
             val = (txt_traz_buscar_lpn.value or "").strip().upper()
             if not val:
                 return
-            lbl_traz_lpn_actual.value = f"PALLET: {val}"
+            lbl_traz_lpn_actual.value = f"PALLET: {val} ({bodega_act})"
             lbl_traz_lpn_estado.value = "Consultando tablas reales en Supabase..."
             lbl_traz_lpn_estado.color = ACCENT_CYAN
             page.update()
 
             logs = []
 
-            # 1. Buscar ingreso original en registro_recepcion
+            # 1. Buscar ingreso original en registro_recepcion de la bodega activa
             try:
-                res_rec = supabase.table("registro_recepcion").select("*").ilike("lpn", val).execute()
+                res_rec = supabase.table("registro_recepcion").select("*").eq("bodega", bodega_act).ilike("lpn", val).execute()
                 for r in (res_rec.data or []):
                     u_rec = r.get("usuario") or r.get("operador") or r.get("recibido_por") or "RECEPCIÓN"
                     logs.append({
@@ -1219,49 +1284,51 @@ class InventarioModulo:
             except Exception:
                 pass
 
-            # 2. Buscar posición actual en bodega_inventario_ubicacion
-            for nom_tu in ("bodega_inventario_ubicacion", "bodega_ubicaciones", "inventario_ubicaciones"):
-                try:
-                    res_ub = supabase.table(nom_tu).select("*").ilike("lpn", val).execute()
-                    for r in (res_ub.data or []):
-                        u_put = r.get("auditor") or r.get("usuario") or r.get("operador") or r.get("ubicado_por") or "OPERADOR RF"
-                        unid_rack = r.get("cantidad_unidades") or r.get("unidades") or r.get("cantidad") or 0
-                        logs.append({
-                            "fecha": formatear_fecha_hora(r.get("fecha") or r.get("updated_at") or r.get("created_at")),
-                            "evento": f"ALMACENADO EN RACK ({r.get('sku', '-')} | {unid_rack} UN)",
-                            "origen": "RECEPCIÓN / GRÚA",
-                            "destino": str(r.get("codigo_ubicacion") or r.get("ubicacion") or "-").upper(),
-                            "usuario": resolver_nombre_usuario(u_put),
-                            "validacion": "UBICADO EN RACK",
-                        })
-                except Exception:
-                    continue
+            # 2. Buscar posición actual en bodega_inventario_ubicacion de la bodega activa
+            try:
+                res_ub = supabase.table("bodega_inventario_ubicacion").select("*").eq("bodega", bodega_act).ilike("lpn", val).execute()
+                for r in (res_ub.data or []):
+                    u_put = r.get("auditor") or r.get("usuario") or r.get("operador") or r.get("ubicado_por") or "OPERADOR RF"
+                    unid_rack = r.get("cantidad_unidades") or r.get("unidades") or r.get("cantidad") or 0
+                    logs.append({
+                        "fecha": formatear_fecha_hora(r.get("fecha") or r.get("updated_at") or r.get("created_at")),
+                        "evento": f"ALMACENADO EN RACK ({r.get('sku', '-')} | {unid_rack} UN)",
+                        "origen": "RECEPCIÓN / GRÚA",
+                        "destino": str(r.get("codigo_ubicacion") or r.get("ubicacion") or "-").upper(),
+                        "usuario": resolver_nombre_usuario(u_put),
+                        "validacion": "UBICADO EN RACK",
+                    })
+            except Exception:
+                pass
 
-            # 3. Buscar historial en tablas de movimientos
-            for nom_tm in ("historial_movimientos", "wms_movimientos", "registro_movimientos", "movimientos"):
-                for col_lpn in ("lpn", "codigo_lpn"):
-                    try:
-                        res_m = supabase.table(nom_tm).select("*").ilike(col_lpn, val).order("id", desc=False).execute()
-                        for r in (res_m.data or []):
-                            u_mov = r.get("usuario") or r.get("operador") or r.get("id_usuario") or "OPERADOR RF"
-                            logs.append({
-                                "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at") or r.get("fecha_movimiento")),
-                                "evento": str(r.get("tipo_movimiento") or r.get("evento") or r.get("accion") or "MOVIMIENTO RF").upper(),
-                                "origen": str(r.get("ubicacion_origen") or r.get("origen") or "-").upper(),
-                                "destino": str(r.get("ubicacion_destino") or r.get("destino") or r.get("ubicacion") or "-").upper(),
-                                "usuario": resolver_nombre_usuario(u_mov),
-                                "validacion": str(r.get("estado") or r.get("resultado") or "CONFIRMADO").upper(),
-                            })
-                        if res_m.data:
-                            break
-                    except Exception:
-                        continue
+            # 3. Buscar historial en historial_movimientos de la bodega activa
+            try:
+                res_m = (
+                    supabase.table("historial_movimientos")
+                    .select("*")
+                    .eq("bodega", bodega_act)
+                    .ilike("lpn", val)
+                    .order("id", desc=False)
+                    .execute()
+                )
+                for r in (res_m.data or []):
+                    u_mov = r.get("usuario") or r.get("operador") or r.get("id_usuario") or "OPERADOR RF"
+                    logs.append({
+                        "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at") or r.get("fecha_movimiento")),
+                        "evento": str(r.get("tipo_movimiento") or r.get("evento") or r.get("accion") or "MOVIMIENTO RF").upper(),
+                        "origen": str(r.get("ubicacion_origen") or r.get("origen") or "-").upper(),
+                        "destino": str(r.get("ubicacion_destino") or r.get("destino") or r.get("ubicacion") or "-").upper(),
+                        "usuario": resolver_nombre_usuario(u_mov),
+                        "validacion": str(r.get("estado") or r.get("resultado") or "CONFIRMADO").upper(),
+                    })
+            except Exception:
+                pass
 
             if logs:
-                lbl_traz_lpn_estado.value = f"UBICACIÓN ACTUAL REGISTRADA: {logs[-1]['destino']}"
+                lbl_traz_lpn_estado.value = f"UBICACIÓN ACTUAL REGISTRADA ({bodega_act}): {logs[-1]['destino']}"
                 lbl_traz_lpn_estado.color = "#34D399"
             else:
-                lbl_traz_lpn_estado.value = f"SIN REGISTROS PARA {val} EN SUPABASE"
+                lbl_traz_lpn_estado.value = f"SIN REGISTROS PARA {val} EN {bodega_act.upper()}"
                 lbl_traz_lpn_estado.color = "#F87171"
 
             tabla_trazabilidad_lpn.rows = [
@@ -1278,98 +1345,116 @@ class InventarioModulo:
             page.update()
 
         def buscar_trazabilidad_ubic(e=None):
+            bodega_act = obtener_bodega_actual()
             val = (txt_traz_buscar_ubic.value or "").strip().upper()
             if not val:
                 return
-            lbl_traz_ubic_actual.value = f"POSICIÓN RACK: {val}"
+            lbl_traz_ubic_actual.value = f"POSICIÓN RACK: {val} ({bodega_act})"
 
             logs = []
 
-            # 1. Pallets actualmente ubicados en esa posición (bodega_inventario_ubicacion)
-            for nom_tu in ("bodega_inventario_ubicacion", "bodega_ubicaciones", "inventario_ubicaciones"):
-                for col_u in ("codigo_ubicacion", "ubicacion"):
-                    try:
-                        res_u = supabase.table(nom_tu).select("*").ilike(col_u, val).execute()
-                        for r in (res_u.data or []):
-                            lpn_r = str(r.get("lpn") or r.get("codigo_lpn") or "").strip().upper()
-                            sku_r = str(r.get("sku") or "").strip().upper()
-                            if not lpn_r and not sku_r:
-                                continue
-                            u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or r.get("ubicado_por") or "OPERADOR RF"
-                            unid_u = r.get("cantidad_unidades") or r.get("unidades") or r.get("cantidad") or 0
-                            logs.append({
-                                "fecha": formatear_fecha_hora(r.get("fecha") or r.get("updated_at") or r.get("created_at")),
-                                "lpn": lpn_r or "STOCK EN RACK",
-                                "sku_lote": f"{sku_r or '-'} | Lote: {r.get('lote') or 'S/L'} ({unid_u} UN)",
-                                "accion": "STOCK ACTUAL EN UBICACIÓN",
-                                "usuario": resolver_nombre_usuario(u_cod),
-                            })
-                        if res_u.data:
-                            break
-                    except Exception:
+            # 1. Pallets actualmente ubicados en esa posición en la bodega activa
+            try:
+                res_u = (
+                    supabase.table("bodega_inventario_ubicacion")
+                    .select("*")
+                    .eq("bodega", bodega_act)
+                    .ilike("codigo_ubicacion", val)
+                    .execute()
+                )
+                for r in (res_u.data or []):
+                    lpn_r = str(r.get("lpn") or r.get("codigo_lpn") or "").strip().upper()
+                    sku_r = str(r.get("sku") or "").strip().upper()
+                    if not lpn_r and not sku_r:
                         continue
+                    u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or r.get("ubicado_por") or "OPERADOR RF"
+                    unid_u = r.get("cantidad_unidades") or r.get("unidades") or r.get("cantidad") or 0
+                    logs.append({
+                        "fecha": formatear_fecha_hora(r.get("fecha") or r.get("updated_at") or r.get("created_at")),
+                        "lpn": lpn_r or "STOCK EN RACK",
+                        "sku_lote": f"{sku_r or '-'} | Lote: {r.get('lote') or 'S/L'} ({unid_u} UN)",
+                        "accion": "STOCK ACTUAL EN UBICACIÓN",
+                        "usuario": resolver_nombre_usuario(u_cod),
+                    })
+            except Exception:
+                pass
 
-            # 2. Auditorías de ubicaciones vacías realizadas sobre esa ubicación (codigo_ubicacion o ubicacion)
-            for col_av in ("codigo_ubicacion", "ubicacion"):
+            # 2. Auditorías de ubicaciones vacías realizadas sobre esa ubicación en la bodega activa
+            try:
+                res_av = (
+                    supabase.table("auditoria_ubicaciones_vacias")
+                    .select("*")
+                    .eq("bodega", bodega_act)
+                    .ilike("codigo_ubicacion", val)
+                    .order("id", desc=True)
+                    .execute()
+                )
+                for r in (res_av.data or []):
+                    u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or "AUDITOR"
+                    hallazgo = r.get("lpn_encontrado") or r.get("sku_encontrado") or r.get("resultado_auditoria") or "VACÍA CONFIRMADA"
+                    logs.append({
+                        "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at")),
+                        "lpn": str(hallazgo).upper(),
+                        "sku_lote": str(r.get("resultado_auditoria") or r.get("estado") or "AUDITORÍA VACÍAS").upper(),
+                        "accion": "AUDITORÍA UBICACIÓN VACÍA",
+                        "usuario": resolver_nombre_usuario(u_cod),
+                    })
+            except Exception:
+                pass
+
+            # 3. Conteos cíclicos realizados en esa ubicación en la bodega activa
+            try:
+                res_ac = (
+                    supabase.table("auditoria_ciclico_sku")
+                    .select("*")
+                    .eq("bodega", bodega_act)
+                    .ilike("codigo_ubicacion", val)
+                    .order("id", desc=True)
+                    .execute()
+                )
+                for r in (res_ac.data or []):
+                    u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or "AUDITOR"
+                    sis_u = r.get("unidades_sistema") if r.get("unidades_sistema") is not None else r.get("cantidad_esperada", 0)
+                    est_a = r.get("estado_auditoria") or r.get("cantidad_contada") or "PEND"
+                    logs.append({
+                        "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at")),
+                        "lpn": f"SKU {r.get('sku', '-')} ({r.get('lpn') or '-'})",
+                        "sku_lote": f"Sist: {sis_u} UN | Resultado: {est_a}",
+                        "accion": "CONTEO CÍCLICO SKU DIRIGIDO",
+                        "usuario": resolver_nombre_usuario(u_cod),
+                    })
+            except Exception:
+                pass
+
+            # 4. Movimientos históricos desde/hacia esa ubicación en la bodega activa
+            for col_m in ("ubicacion_destino", "ubicacion_origen"):
                 try:
-                    res_av = supabase.table("auditoria_ubicaciones_vacias").select("*").ilike(col_av, val).order("id", desc=True).execute()
-                    for r in (res_av.data or []):
-                        u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or "AUDITOR"
-                        hallazgo = r.get("lpn_encontrado") or r.get("sku_encontrado") or r.get("resultado_auditoria") or "VACÍA CONFIRMADA"
+                    res_m = (
+                        supabase.table("historial_movimientos")
+                        .select("*")
+                        .eq("bodega", bodega_act)
+                        .ilike(col_m, val)
+                        .order("id", desc=True)
+                        .limit(50)
+                        .execute()
+                    )
+                    for r in (res_m.data or []):
+                        u_cod = r.get("usuario") or r.get("operador") or "OPERADOR RF"
+                        es_ingreso = "destino" in col_m
                         logs.append({
                             "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at")),
-                            "lpn": str(hallazgo).upper(),
-                            "sku_lote": str(r.get("resultado_auditoria") or r.get("estado") or "AUDITORÍA VACÍAS").upper(),
-                            "accion": "AUDITORÍA UBICACIÓN VACÍA",
+                            "lpn": str(r.get("lpn") or r.get("codigo_lpn") or "-").upper(),
+                            "sku_lote": f"{str(r.get('sku') or 'MOVIMIENTO').upper()} ({r.get('unidades_afectadas') or 0} UN)",
+                            "accion": str(r.get("tipo_movimiento") or ("INGRESO A RACK" if es_ingreso else "EXTRACCIÓN DE RACK")).upper(),
                             "usuario": resolver_nombre_usuario(u_cod),
                         })
-                    if res_av.data:
-                        break
                 except Exception:
                     continue
-
-            # 3. Conteos cíclicos realizados en esa ubicación (codigo_ubicacion o ubicacion)
-            for col_ac in ("codigo_ubicacion", "ubicacion"):
-                try:
-                    res_ac = supabase.table("auditoria_ciclico_sku").select("*").ilike(col_ac, val).order("id", desc=True).execute()
-                    for r in (res_ac.data or []):
-                        u_cod = r.get("auditor") or r.get("usuario") or r.get("operador") or "AUDITOR"
-                        sis_u = r.get("unidades_sistema") if r.get("unidades_sistema") is not None else r.get("cantidad_esperada", 0)
-                        est_a = r.get("estado_auditoria") or r.get("cantidad_contada") or "PEND"
-                        logs.append({
-                            "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at")),
-                            "lpn": f"SKU {r.get('sku', '-')} ({r.get('lpn') or '-'})",
-                            "sku_lote": f"Sist: {sis_u} UN | Resultado: {est_a}",
-                            "accion": "CONTEO CÍCLICO SKU DIRIGIDO",
-                            "usuario": resolver_nombre_usuario(u_cod),
-                        })
-                    if res_ac.data:
-                        break
-                except Exception:
-                    continue
-
-            # 4. Movimientos históricos desde/hacia esa ubicación
-            for nom_tm in ("historial_movimientos", "wms_movimientos", "registro_movimientos", "movimientos"):
-                for col_m in ("ubicacion_destino", "destino", "ubicacion_origen", "origen"):
-                    try:
-                        res_m = supabase.table(nom_tm).select("*").ilike(col_m, val).order("id", desc=True).limit(50).execute()
-                        for r in (res_m.data or []):
-                            u_cod = r.get("usuario") or r.get("operador") or "OPERADOR RF"
-                            es_ingreso = "destino" in col_m
-                            logs.append({
-                                "fecha": formatear_fecha_hora(r.get("fecha") or r.get("created_at")),
-                                "lpn": str(r.get("lpn") or r.get("codigo_lpn") or "-").upper(),
-                                "sku_lote": f"{str(r.get('sku') or 'MOVIMIENTO').upper()} ({r.get('unidades_afectadas') or 0} UN)",
-                                "accion": str(r.get("tipo_movimiento") or ("INGRESO A RACK" if es_ingreso else "EXTRACCIÓN DE RACK")).upper(),
-                                "usuario": resolver_nombre_usuario(u_cod),
-                            })
-                    except Exception:
-                        continue
 
             lbl_traz_ubic_actual.value = (
-                f"POSICIÓN RACK: {val} ({len(logs)} registros reales encontrados)"
+                f"POSICIÓN RACK: {val} ({bodega_act} • {len(logs)} registros encontrados)"
                 if logs
-                else f"POSICIÓN RACK: {val} (Sin registros en Supabase)"
+                else f"POSICIÓN RACK: {val} (Sin registros en {bodega_act})"
             )
 
             tabla_trazabilidad_ubic.rows = [
@@ -1387,7 +1472,7 @@ class InventarioModulo:
         txt_traz_buscar_lpn.on_submit = buscar_trazabilidad_lpn
         txt_traz_buscar_ubic.on_submit = buscar_trazabilidad_ubic
 
-        def actualizar_todos_los_datos():
+        def actualizar_todos_los_datos(e=None):
             cargar_usuarios_wms()
             sync_stock_inventario()
             cargar_asignaciones_piso()
@@ -1402,7 +1487,7 @@ class InventarioModulo:
             ft.Row([
                 tarjeta_dark(ft.Column([
                     ft.Text("ASIGNACIÓN DE PASILLOS Y CONTEO POR USUARIO (WMS_USUARIOS)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Text("Seleccione un pasillo y asígnelo a un usuario activo de la tabla wms_usuarios para su conteo en RF.", size=11, color=TEXT_MUTED),
+                    ft.Text("Seleccione un pasillo y asígnelo a un usuario activo de la bodega actual para su conteo en RF.", size=11, color=TEXT_MUTED),
                     ft.Divider(color=BORDER_COLOR, height=4),
                     ft.Row([dd_racks_asignacion, dd_operador_asignar, boton_primario("ASIGNAR PASILLO", ft.Icons.ASSIGNMENT_IND_ROUNDED, asignar_operador_pasillo, ACCENT_BLUE, height_val=34)], spacing=10, wrap=True),
                     cont_asignacion,
@@ -1411,7 +1496,7 @@ class InventarioModulo:
                 tarjeta_dark(ft.Column([
                     ft.Text("KPI GLOBALES INVENTARIO (WMS vs ERP)", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                     ft.Row([
-                        crear_caja_digital(lbl_kpi_total_wms, "Total WMS (Piso)", ACCENT_CYAN, 90, "Suma total de unidades físicas en Bodega"),
+                        crear_caja_digital(lbl_kpi_total_wms, "Total WMS (Piso)", ACCENT_CYAN, 90, "Suma total de unidades físicas en la Bodega Activa"),
                         crear_caja_digital(lbl_kpi_total_erp, "Total NetSuite", "#10B981", 90, "Suma total de unidades a nivel sistema ERP"),
                         crear_caja_digital(lbl_kpi_dif_global, "Desviación Global", ACCENT_AMBER, 90, "Diferencia absoluta total detectada"),
                         crear_caja_digital(lbl_kpi_avance_audi, "Avance Pasillos", ACCENT_PURPLE, 90, "Porcentaje de pasillos completados"),
@@ -1429,17 +1514,17 @@ class InventarioModulo:
                         txt_buscar_inv,
                         boton_primario("EJECUTAR CRUCE EN VIVO", ft.Icons.COMPARE_ARROWS_ROUNDED, ejecutar_cruce_erp_wms, ACCENT_TEAL, height_val=30),
                         boton_primario(
-    "EXPORTAR EXCEL",
-    ft.Icons.TABLE_VIEW_ROUNDED,
-    lambda e: (
-        os.makedirs("reportes_inventario", exist_ok=True),
-        pd.DataFrame(datos_stock_wms).to_excel(os.path.join("reportes_inventario", "Stock_WMS.xlsx"), index=False),
-        descargar_o_abrir_archivo(self.page, os.path.join("reportes_inventario", "Stock_WMS.xlsx")),
-        notificar("Excel descargado en tu navegador.", "#047857"),
-    ),
-    ACCENT_BLUE,
-    height_val=30,
-)
+                            "EXPORTAR EXCEL",
+                            ft.Icons.TABLE_VIEW_ROUNDED,
+                            lambda e: (
+                                os.makedirs("reportes_inventario", exist_ok=True),
+                                pd.DataFrame(datos_stock_wms).to_excel(os.path.join("reportes_inventario", "Stock_WMS.xlsx"), index=False),
+                                descargar_o_abrir_archivo(self.page, os.path.join("reportes_inventario", "Stock_WMS.xlsx")),
+                                notificar("Excel descargado en tu navegador.", "#047857"),
+                            ),
+                            ACCENT_BLUE,
+                            height_val=30,
+                        ),
                     ], spacing=8, expand=True, alignment=ft.MainAxisAlignment.END),
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 ft.Divider(color=BORDER_COLOR, height=1),
@@ -1447,7 +1532,7 @@ class InventarioModulo:
             ], spacing=8)),
         ], spacing=10)
 
-        # ZONA 2: CONTEOS CÍCLICOS (AUDITORIA_CICLICO_SKU DIRIGIDO & AUDITORIA_UBICACIONES_VACIAS) - APILADAS
+        # ZONA 2: CONTEOS CÍCLICOS (AUDITORIA_CICLICO_SKU DIRIGIDO & AUDITORIA_UBICACIONES_VACIAS)
         vista_2_conteos_ciclicos = ft.Column([
             ft.Row([
                 tarjeta_dark(ft.Column([
@@ -1477,7 +1562,6 @@ class InventarioModulo:
                 ], spacing=8), width_val=420),
             ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.START),
 
-            # TABLA 1 ARRIBA (100% ANCHO)
             tarjeta_dark(ft.Column([
                 ft.Row([
                     ft.Row([
@@ -1490,7 +1574,6 @@ class InventarioModulo:
                 cont_tabla_ciclico,
             ], spacing=8)),
 
-            # TABLA 2 ABAJO (100% ANCHO)
             tarjeta_dark(ft.Column([
                 ft.Row([
                     ft.Row([
@@ -1504,11 +1587,11 @@ class InventarioModulo:
             ], spacing=8)),
         ], spacing=10)
 
-        # ZONA 3: TRAZABILIDAD (LPN HISTORY & LOGS UBICACIONES) - APILADAS VERTICALMENTE
+        # ZONA 3: TRAZABILIDAD (LPN HISTORY & LOGS UBICACIONES)
         vista_3_trazabilidad = ft.Column([
             tarjeta_dark(ft.Column([
                 ft.Text("TRAZABILIDAD TRANSVERSAL DE PALLET (LPN HISTORY)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                ft.Text("Visualiza el ciclo de vida completo de un pallet, sus movimientos, validaciones y operadores involucrados.", size=11, color=TEXT_MUTED),
+                ft.Text("Visualiza el ciclo de vida completo de un pallet, sus movimientos, validaciones y operadores involucrados en la bodega activa.", size=11, color=TEXT_MUTED),
                 ft.Divider(color=BORDER_COLOR, height=4),
                 ft.Row([txt_traz_buscar_lpn, boton_primario("BUSCAR LPN", ft.Icons.SEARCH_ROUNDED, buscar_trazabilidad_lpn, ACCENT_CYAN, height_val=34)], spacing=10),
                 ft.Container(
@@ -1536,7 +1619,7 @@ class InventarioModulo:
             ft.Row([
                 tarjeta_dark(ft.Column([
                     ft.Text("AUDITORÍA DE PISO: ALERTAS Y DESVÍOS REPORTADOS POR GRÚEROS (APP RF)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Text("Monitorea incidencias en tiempo real reportadas desde las terminales RF (Ej: Posiciones físicamente ocupadas, Quiebres visuales, LPNs extraviados).", size=11, color=TEXT_MUTED),
+                    ft.Text("Monitorea incidencias en tiempo real reportadas desde las terminales RF en la bodega activa.", size=11, color=TEXT_MUTED),
                     ft.Divider(color=BORDER_COLOR, height=4),
                     ft.Row([txt_buscar_desvios, boton_primario("ACTUALIZAR", ft.Icons.REFRESH_ROUNDED, lambda e: cargar_desvios_grua(), ACCENT_TEAL, height_val=30)], spacing=10),
                 ], spacing=6), expand_val=True),
@@ -1609,7 +1692,7 @@ class InventarioModulo:
                 ], spacing=8),
                 ft.Row([
                     btn_modo_control, btn_modo_ciclico, btn_modo_traz, btn_modo_desv,
-                    ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, tooltip="Sincronizar Datos y Conteos", on_click=lambda e: actualizar_todos_los_datos()),
+                    ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, tooltip="Sincronizar Datos y Conteos", on_click=actualizar_todos_los_datos),
                 ], spacing=8, wrap=True),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
         )
@@ -1620,13 +1703,10 @@ class InventarioModulo:
         self.cambiar_subvista_inv_func = cambiar_subvista_inv
         self.actualizar_todos_los_datos_func = actualizar_todos_los_datos
 
-        def carga_inicial_segura():
-            import time
-            time.sleep(0.4)
-            actualizar_todos_los_datos()
-
-        threading.Thread(target=carga_inicial_segura, daemon=True).start()
+    def cargar_datos_inventario(self, e=None):
+        self.actualizar_todos_los_datos_func(e)
 
     def sel_sub_inventario(self, idx: int):
         mapa_idx = {0: 0, 1: 1, 2: 2, 3: 3, 4: 2, 5: 3}
+        self.actualizar_todos_los_datos_func()
         self.cambiar_subvista_inv_func(mapa_idx.get(idx, 0))

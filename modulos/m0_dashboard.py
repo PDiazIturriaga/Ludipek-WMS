@@ -179,10 +179,11 @@ class DashboardModulo:
         
         def refrescar_dashboard(e=None):
             nonlocal ultimo_id_recepcion_visto
-            lbl_hora_dash.value = f"Actualizado en vivo desde Supabase: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}"
+            bodega_act = obtener_bodega_activa(self.page)
+            lbl_hora_dash.value = f"[{bodega_act}] Actualizado en vivo desde Supabase: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}"
             try:
-                res_rec = supabase.table("registro_recepcion").select("*").order("id", desc=True).limit(150).execute()
-                res_po = supabase.table("asn_cabecera").select("*").order("id", desc=True).limit(12).execute()
+                res_rec = supabase.table("registro_recepcion").select("*").eq("bodega", bodega_act).order("id", desc=True).limit(150).execute()
+                res_po = supabase.table("asn_cabecera").select("*").eq("bodega", bodega_act).order("id", desc=True).limit(12).execute()
                 recs_data = res_rec.data or []
                 pos_data = res_po.data or []
         
@@ -236,7 +237,7 @@ class DashboardModulo:
                 # Inventario real en racks
                 inv_data = []
                 try:
-                    res_inv = supabase.table("bodega_inventario_ubicacion").select("*").limit(400).execute()
+                    res_inv = supabase.table("bodega_inventario_ubicacion").select("*").eq("bodega", bodega_act).limit(600).execute()
                     inv_data = res_inv.data or []
                 except Exception:
                     inv_data = []
@@ -257,8 +258,7 @@ class DashboardModulo:
         
                 # Medidor (Gauge) Ocupación del Almacén (Dinámico vs Maestra Supabase)
                 try:
-                    # Consulta el total real de ubicaciones (ej: tus 633 posiciones)
-                    res_cap = supabase.table("bodega_ubicaciones").select("codigo_ubicacion", count="exact").limit(1).execute()
+                    res_cap = supabase.table("bodega_ubicaciones").select("codigo_ubicacion", count="exact").eq("bodega", bodega_act).limit(1).execute()
                     capacidad_total_posiciones = res_cap.count if res_cap.count else 633
                 except Exception:
                     capacidad_total_posiciones = 633

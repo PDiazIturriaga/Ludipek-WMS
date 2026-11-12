@@ -30,7 +30,23 @@ class PutawayModulo:
         lpns_en_anden = []
         stock_en_racks = []
         mapa_descripciones_sku = {}
+        mapa_multiplos_sku = {}
         zona_seleccionada = "TODOS_RACKS"
+        ultima_bodega_sincronizada = None
+
+        # --- HELPERS DE AISLAMIENTO MULTI-BODEGA CON RESPALDO SEGURO ---
+        def obtener_bodega_actual() -> str:
+            bod = str(getattr(self.page, "bodega_actual", "") or "").strip()
+            return bod if bod in ("Bodega Santiago", "Bodega Concepcion") else "Bodega Santiago"
+
+        def coincide_bodega_fila(fila: dict, bodega_objetivo: str = None) -> bool:
+            if not isinstance(fila, dict):
+                return False
+            bod_obj = (bodega_objetivo or obtener_bodega_actual()).strip()
+            bod_fila = str(fila.get("bodega") or "").strip()
+            if not bod_fila or bod_fila.upper() in ("NONE", "NULL"):
+                return bod_obj.upper() == "BODEGA SANTIAGO"
+            return bod_fila.upper() == bod_obj.upper()
 
         # --- 3. FUNCIONES AUXILIARES DE UI ---
         def notificar(texto: str, color: str = "#0284C7"):
@@ -120,13 +136,17 @@ class PutawayModulo:
             )
 
         # --- 4. PAGINACIÓN SUPABASE Y CLASIFICADOR DE RACKS ---
-        def cargar_tabla_paginada(tabla: str, max_filas: int = 4000) -> list:
+        def cargar_tabla_paginada(tabla: str, max_filas: int = 4000, filtrar_bodega: bool = False) -> list:
             acumulado = []
             paso = 1000
+            bodega_act = obtener_bodega_actual()
             for offset in range(0, max_filas, paso):
                 res = supabase.table(tabla).select("*").range(offset, offset + paso - 1).execute()
                 lote = res.data or []
-                acumulado.extend(lote)
+                if filtrar_bodega:
+                    acumulado.extend([f for f in lote if coincide_bodega_fila(f, bodega_act)])
+                else:
+                    acumulado.extend(lote)
                 if len(lote) < paso:
                     break
             return acumulado
@@ -163,6 +183,18 @@ class PutawayModulo:
                 except ValueError:
                     continue
             return s[:10]
+
+        def parsear_fecha_fefo(valor_f) -> datetime:
+            """Convierte una fecha de vencimiento en datetime para ordenar candidatos FEFO (primero en vencer, primero en bajar)."""
+            s = str(valor_f or "").strip()
+            if not s or s.upper() in ("NONE", "NULL", "S/F", "-"):
+                return datetime(2099, 12, 31)
+            for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+                try:
+                    return datetime.strptime(s[:10], fmt)
+                except ValueError:
+                    continue
+            return datetime(2099, 12, 31)
 
         # --- 5. CONTROLES Y CONTADORES DIGITALES ---
         lbl_dig_anden = ft.Text("0", size=22, weight=ft.FontWeight.W_900, color=ACCENT_AMBER, font_family="Consolas")
@@ -328,24 +360,35 @@ class PutawayModulo:
                 "lote": lote_limpio,
                 "vencimiento": venc_str,
                 "qa": qa_est,
+                "bodega": obtener_bodega_actual(),
             }
 
         def sincronizar_datos_supabase():
-            nonlocal lpns_en_anden, stock_en_racks, mapa_descripciones_sku
+            nonlocal lpns_en_anden, stock_en_racks, mapa_descripciones_sku, mapa_multiplos_sku, ultima_bodega_sincronizada
+            bodega_act = obtener_bodega_actual()
             try:
-                filas_mae = cargar_tabla_paginada("maestra_sku", 3000)
-                mapa_descripciones_sku = {
-                    str(m.get("sku", "")).strip().upper(): str(m.get("descripcion") or "")
-                    for m in filas_mae
-                    if m.get("sku")
-                }
+                filas_mae = cargar_tabla_paginada("maestra_sku", 4000, filtrar_bodega=False)
+                mapa_descripciones_sku = {}
+                mapa_multiplos_sku = {}
+                for m in filas_mae:
+                    s_k = str(m.get("sku", "")).strip().upper()
+                    if s_k:
+                        if m.get("descripcion"):
+                            mapa_descripciones_sku[s_k] = str(m.get("descripcion") or "")
+                        try:
+                            mult_m = max(1, int(float(m.get("multiplo") or 1)))
+                            if mult_m > mapa_multiplos_sku.get(s_k, 1):
+                                mapa_multiplos_sku[s_k] = mult_m
+                        except Exception:
+                            pass
             except Exception:
                 mapa_descripciones_sku = {}
+                mapa_multiplos_sku = {}
 
             mapa_rec_por_lpn = {}
             filas_recepcion = []
             try:
-                filas_recepcion = cargar_tabla_paginada("registro_recepcion", 4000)
+                filas_recepcion = cargar_tabla_paginada("registro_recepcion", 4000, filtrar_bodega=True)
                 for r in filas_recepcion:
                     lpn_k = str(r.get("lpn") or "").strip().upper()
                     if lpn_k:
@@ -357,8 +400,11 @@ class PutawayModulo:
             lpns_ubicados_set = set()
 
             for nom_tabla in ("bodega_inventario_ubicacion", "bodega_ubicaciones", "inventario_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
+                # Si la tabla principal ya cargó el inventario de los racks, evitamos llamadas HTTP innecesarias a las tablas secundarias
+                if nom_tabla != "bodega_inventario_ubicacion" and ubicados_map:
+                    continue
                 try:
-                    filas_u = cargar_tabla_paginada(nom_tabla, 4000)
+                    filas_u = cargar_tabla_paginada(nom_tabla, 4000, filtrar_bodega=True)
                     for row_u in filas_u:
                         ubi_cod = str(
                             row_u.get("ubicacion")
@@ -387,7 +433,7 @@ class PutawayModulo:
                             or row_u.get("cantidad")
                             or info_rec.get("unidades_totales")
                             or 0
-)
+                        )
                         if unid_f <= 0 and not lpn_u:
                             continue
 
@@ -398,7 +444,7 @@ class PutawayModulo:
                             or row_u.get("vencimiento")
                             or info_rec.get("fecha_vencimiento_cl")
                         )
-                        clave_u = (ubi_cod, lpn_u or sku_f)
+                        clave_u = (ubi_cod, lpn_u or f"{sku_f}_{row_u.get('id')}")
                         if clave_u not in ubicados_map:
                             ubicados_map[clave_u] = construir_item_stock(
                                 ubi_cod,
@@ -462,6 +508,7 @@ class PutawayModulo:
                     )
                 )
             lpns_en_anden = anden_temp
+            ultima_bodega_sincronizada = bodega_act
 
         # --- 8. COMPONENTES DINÁMICOS (BOTONES DE RACKS Y FILAS DE TABLA) ---
         def crear_fila_tabla_stock(it: dict) -> ft.DataRow:
@@ -617,10 +664,12 @@ class PutawayModulo:
                 notificar("No hay datos para exportar.", "#D97706")
                 return
             try:
+                bodega_act = obtener_bodega_actual()
                 os.makedirs("reportes_recepcion", exist_ok=True)
                 df_exp = pd.DataFrame(
                     [
                         {
+                            "Bodega": bodega_act,
                             "Zona / Rack": x["rack"],
                             "Ubicacion": x["ubicacion"],
                             "Nivel": x["zona_nivel"],
@@ -628,6 +677,7 @@ class PutawayModulo:
                             "SKU": x["sku"],
                             "Descripcion": x["descripcion"],
                             "Unidades": x["unidades"],
+                            "Cajas": x["cajas"],
                             "Lote": x["lote"],
                             "Vencimiento": x["vencimiento"],
                             "QA": x["qa"],
@@ -637,10 +687,10 @@ class PutawayModulo:
                 )
                 ruta_xlsx = os.path.join(
                     "reportes_recepcion",
-                    f"Stock_Ubicaciones_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    f"Stock_Ubicaciones_{bodega_act.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 )
                 df_exp.to_excel(ruta_xlsx, index=False)
-                notificar(f"Excel exportado: {ruta_xlsx}", "#047857")
+                notificar(f"Excel exportado ({bodega_act}): {ruta_xlsx}", "#047857")
                 descargar_o_abrir_archivo(self.page, ruta_xlsx)
             except Exception as ex:
                 notificar(f"Error exportando Excel: {ex}", "#B91C1C")
@@ -651,6 +701,7 @@ class PutawayModulo:
         dd_cons_qa.on_change = ejecutar_filtro_consultador
 
         def renderizar_todo_el_modulo():
+            bodega_act = obtener_bodega_actual()
             racks_base = ["RACK A", "RACK B", "RACK C", "RACK D"]
             for rk in sorted({x["rack"] for x in stock_en_racks if x["rack"].startswith("RACK ")}):
                 if rk not in racks_base:
@@ -747,15 +798,15 @@ class PutawayModulo:
 
             if zona_seleccionada == "RECEPCION":
                 items_vista = lpns_en_anden
-                lbl_titulo_tabla_monitor.value = f"📥 LPNs EN RECEPCIÓN PENDIENTES DE UBICAR EN APP MÓVIL RF ({len(items_vista)} LPNs)"
+                lbl_titulo_tabla_monitor.value = f"📥 [{bodega_act}] LPNs EN RECEPCIÓN PENDIENTES DE UBICAR ({len(items_vista)} LPNs)"
                 lbl_titulo_tabla_monitor.color = ACCENT_AMBER
             elif zona_seleccionada == "TODOS_RACKS":
                 items_vista = stock_en_racks
-                lbl_titulo_tabla_monitor.value = f"🏢 MAPA GENERAL DE STOCK EN TODOS LOS RACKS ({len(items_vista)} LPNs)"
+                lbl_titulo_tabla_monitor.value = f"🏢 [{bodega_act}] MAPA GENERAL DE STOCK EN TODOS LOS RACKS ({len(items_vista)} LPNs)"
                 lbl_titulo_tabla_monitor.color = ACCENT_CYAN
             else:
                 items_vista = [x for x in stock_en_racks if x["rack"] == zona_seleccionada]
-                lbl_titulo_tabla_monitor.value = f"🗄️ PALLETS (LPNs) ALMACENADOS EN {zona_seleccionada} ({len(items_vista)} LPNs)"
+                lbl_titulo_tabla_monitor.value = f"🗄️ [{bodega_act}] PALLETS (LPNs) ALMACENADOS EN {zona_seleccionada} ({len(items_vista)} LPNs)"
                 lbl_titulo_tabla_monitor.color = ACCENT_GREEN
 
             lbl_dig_anden.value = str(len(lpns_en_anden))
@@ -769,25 +820,36 @@ class PutawayModulo:
 
             tabla_monitor_zona.rows = [crear_fila_tabla_stock(it) for it in items_vista[:200]]
 
-            # Alertas de Reabastecimiento (Reserva N2+ -> Picking N1)
+            # Alertas de Reabastecimiento (Reserva N2+ -> Picking N1) con ordenamiento FEFO real y umbral inteligente
             por_sku = {}
             for x in stock_en_racks:
                 sk = x["sku"]
                 if sk not in por_sku:
-                    por_sku[sk] = {"n1": 0, "res": 0, "cands": []}
+                    por_sku[sk] = {"n1": 0, "cajas_n1": 0, "res": 0, "cands": []}
                 if x["nivel_num"] <= 1:
                     por_sku[sk]["n1"] += x["unidades"]
+                    por_sku[sk]["cajas_n1"] += int(x.get("cajas") or 1)
                 else:
                     por_sku[sk]["res"] += x["unidades"]
                     por_sku[sk]["cands"].append(x)
 
             tabla_reabastecimiento.rows.clear()
             alertas_cnt = 0
-            for sk, d_n in sorted(por_sku.items(), key=lambda i: i[1]["n1"]):
-                if d_n["res"] > 0 and d_n["n1"] < 200:
+            for sk, d_n in sorted(por_sku.items(), key=lambda i: (i[1]["n1"], i[0])):
+                mult_sku = mapa_multiplos_sku.get(sk, 1)
+                umbral_unid = max(2 * mult_sku, min(200, mult_sku * 4)) if mult_sku > 1 else 50
+                requiere_reapro = d_n["res"] > 0 and (d_n["n1"] == 0 or d_n["cajas_n1"] <= 2 or d_n["n1"] < umbral_unid)
+
+                if requiere_reapro:
                     alertas_cnt += 1
-                    cand = d_n["cands"][0]
+                    # Ordenar candidatos de Reserva por FEFO (vencimiento más próximo primero)
+                    cands_fefo = sorted(
+                        d_n["cands"],
+                        key=lambda item_c: (parsear_fecha_fefo(item_c.get("vencimiento")), item_c.get("ubicacion", "")),
+                    )
+                    cand = cands_fefo[0]
                     crit = d_n["n1"] == 0
+                    venc_cand_txt = f" ({cand['vencimiento']})" if cand.get("vencimiento") and cand["vencimiento"] != "S/F" else ""
                     tabla_reabastecimiento.rows.append(
                         ft.DataRow(
                             cells=[
@@ -800,9 +862,9 @@ class PutawayModulo:
                                 ),
                                 ft.DataCell(ft.Text(sk, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                                 ft.DataCell(ft.Text(mapa_descripciones_sku.get(sk, "-")[:30], size=11, color=TEXT_WHITE)),
-                                ft.DataCell(ft.Text(f"{d_n['n1']} UN", weight=ft.FontWeight.BOLD, size=11, color="#F87171" if crit else ACCENT_AMBER)),
+                                ft.DataCell(ft.Text(f"{d_n['n1']} UN ({d_n['cajas_n1']} Cj)", weight=ft.FontWeight.BOLD, size=11, color="#F87171" if crit else ACCENT_AMBER)),
                                 ft.DataCell(ft.Text(f"{d_n['res']} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
-                                ft.DataCell(ft.Text(cand["lpn"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                                ft.DataCell(ft.Text(f"{cand['lpn']}{venc_cand_txt}", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                                 ft.DataCell(ft.Text(cand["ubicacion"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text("📱 Bajar con App RF", size=10, color=TEXT_MUTED)),
                             ]
@@ -837,7 +899,7 @@ class PutawayModulo:
                         ft.Column(
                             [
                                 ft.Text(
-                                    f"MAPA DE POSICIONES — {nom_rk} ({len(items_r)} LPNs)",
+                                    f"MAPA DE POSICIONES ({bodega_act}) — {nom_rk} ({len(items_r)} LPNs)",
                                     size=12,
                                     weight=ft.FontWeight.BOLD,
                                     color=TEXT_WHITE,
@@ -1116,10 +1178,13 @@ class PutawayModulo:
         self.contenedor = contenedor_subvista_putaway
         self.cargar_inventario_ubicaciones_func = cargar_inventario_ubicaciones
         self.cambiar_subvista_interna_func = cambiar_subvista_interna
+        self.obtener_ultima_bodega_func = lambda: ultima_bodega_sincronizada
+        self.obtener_bodega_actual_func = obtener_bodega_actual
 
     def cargar_inventario_ubicaciones(self, e=None):
         self.cargar_inventario_ubicaciones_func(e)
 
     def sel_sub_put(self, idx: int):
-        self.cargar_inventario_ubicaciones_func()
+        if self.obtener_ultima_bodega_func() != self.obtener_bodega_actual_func():
+            self.cargar_inventario_ubicaciones_func()
         self.cambiar_subvista_interna_func(idx)

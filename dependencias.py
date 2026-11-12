@@ -9,9 +9,7 @@ import inspect
 import qrcode
 from fpdf import FPDF
 import pandas as pd
-import sys
 import plotly.graph_objects as go
-import os
 import hashlib
 import hmac
 import shutil
@@ -29,6 +27,7 @@ import reportlab.graphics.barcode.usps
 import reportlab.graphics.barcode.usps4s
 import reportlab.graphics.barcode.ecc200datamatrix
 
+
 def obtener_ruta_recurso(relativo: str) -> str:
     """Obtiene la ruta absoluta del recurso, compatible con desarrollo y con PyInstaller (.exe)."""
     try:
@@ -36,6 +35,7 @@ def obtener_ruta_recurso(relativo: str) -> str:
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relativo)
+
 
 try:
     from dotenv import load_dotenv
@@ -89,8 +89,28 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY) if (GEMINI_DISPONIBLE and GEMIN
 
 
 # =====================================================================
-# 3. ADAPTADORES INTELIGENTES DE ESQUEMA
+# 3. ADAPTADORES INTELIGENTES DE ESQUEMA Y MULTI-BODEGA
 # =====================================================================
+def obtener_bodega_activa(page) -> str:
+    """Devuelve siempre la bodega activa de la sesión ('Bodega Santiago' o 'Bodega Concepcion')."""
+    if page is not None:
+        bod = str(getattr(page, "bodega_actual", "") or "").strip()
+        if bod in ("Bodega Santiago", "Bodega Concepcion"):
+            return bod
+    return "Bodega Santiago"
+
+
+def coincide_bodega(fila: dict, bodega_objetivo: str) -> bool:
+    """Valida si un registro pertenece a la bodega activa (asignando registros antiguos sin bodega a 'Bodega Santiago')."""
+    if not isinstance(fila, dict):
+        return False
+    bod_obj = str(bodega_objetivo or "Bodega Santiago").strip()
+    bod_fila = str(fila.get("bodega") or "").strip()
+    if not bod_fila or bod_fila.upper() in ("NONE", "NULL"):
+        return bod_obj.upper() == "BODEGA SANTIAGO"
+    return bod_fila.upper() == bod_obj.upper()
+
+
 def obtener_val(diccionario: dict, posibles_claves: list, por_defecto=""):
     if not isinstance(diccionario, dict):
         return por_defecto
@@ -329,6 +349,8 @@ def dibujar_pagina_lpn_15x10(pdf: FPDF, lpn: str, lineas_pallet: list):
                 pdf.cell(18, 10, str(item.get("unidades_totales", 0)), border=1, align="C")
                 pdf.cell(24, 10, venc[:10], border=1, align="C")
                 y_offset += 10
+
+
 def generar_pdf_recepcion_15x10(lpn: str, lineas_pallet: list):
     os.makedirs("reportes_recepcion", exist_ok=True)
     pdf = FPDF(orientation="L", unit="mm", format=(100, 150))
@@ -372,6 +394,7 @@ def generar_pdf_masivo_lpns_po(codigo_po: str, registros_recepcion: list) -> str
         except Exception:
             pass
     return nombre_archivo
+
 
 def obtener_fecha_cierre_o_recepcion(cabecera_po: dict, recepciones_lpn: list) -> str:
     """Obtiene la fecha fija de cierre de la PO o la del último LPN recepcionado."""
@@ -589,6 +612,7 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
     pdf.set_font("Helvetica", "B", 9)
     pdf.cell(65, 5, "RECEPCION BODEGA", align="C")
     pdf.set_xy(125, y_firma + 17)
+    pdf.set_font("Helvetica", "B", 9)
     pdf.cell(65, 5, "ASEGURAMIENTO DE CALIDAD (QA)", align="C")
 
     oc_limpio = _nombre_archivo_seguro(oc_num)
@@ -600,6 +624,7 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
     )
     pdf.output(archivo_salida)
     return archivo_salida
+
 
 def generar_pdf_totem_rack(pasillo: str, columna: str, niveles: int = 5):
     os.makedirs("temp_qrs", exist_ok=True)
@@ -700,13 +725,13 @@ def generar_pdf_ubicaciones_vacias(lista_vacias: list):
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 16)
     pdf.set_xy(0, 6)
-    pdf.cell(210, 10, txt=f"LUDIPEK WMS - REPORTE DE UBICACIONES Y ESPACIOS VACIOS", align="C")
+    pdf.cell(210, 10, txt="LUDIPEK WMS - REPORTE DE UBICACIONES Y ESPACIOS VACIOS", align="C")
     pdf.set_text_color(0, 0, 0)
-    
+
     pdf.set_font("Helvetica", "", 10)
     pdf.set_xy(10, 26)
     pdf.cell(190, 6, txt=f"Fecha de Generación: {datetime.now().strftime('%d-%m-%Y %H:%M')}", align="R")
-    
+
     pdf.set_xy(10, 35)
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_fill_color(226, 232, 240)
@@ -714,7 +739,7 @@ def generar_pdf_ubicaciones_vacias(lista_vacias: list):
     pdf.cell(60, 8, "CODIGO UBICACION", border=1, fill=True, align="C")
     pdf.cell(90, 8, "OBSERVACION DE INSPECCION", border=1, fill=True, align="C")
     pdf.ln(8)
-    
+
     pdf.set_font("Helvetica", "", 10)
     for ubi in sorted(lista_vacias):
         zona = ubi.split("-")[0] if "-" in ubi else "S/Z"
@@ -861,14 +886,34 @@ def boton_primario(texto: str, icono, evento, color="#1E3A8A", disabled=False, h
     )
 
 
+TABLAS_SCROLL_ADAPTABLES = []
+
+
 def envolver_tabla_scroll(tabla: ft.DataTable, altura_inicial: int):
-    return ft.Container(
+    # Compactar márgenes de la tabla para que quepan todas las columnas y botones sin cortarse
+    tabla.column_spacing = min(getattr(tabla, "column_spacing", 14) or 14, 12)
+    tabla.horizontal_margin = 8
+
+    cont = ft.Container(
         height=altura_inicial,
+        padding=ft.Padding.only(right=8, bottom=6),
         content=ft.Column(
-            [ft.Row([tabla], scroll=ft.ScrollMode.AUTO)],
-            scroll=ft.ScrollMode.AUTO,
+            [
+                ft.Row(
+                    [tabla],
+                    scroll=ft.ScrollMode.ALWAYS,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                )
+            ],
+            scroll=ft.ScrollMode.ALWAYS,
+            expand=True,
         ),
     )
+    # Mantener acotado el buffer global en caso de llamadas fuera del ciclo de inicio
+    if len(TABLAS_SCROLL_ADAPTABLES) > 250:
+        del TABLAS_SCROLL_ADAPTABLES[:100]
+    TABLAS_SCROLL_ADAPTABLES.append((cont, altura_inicial))
+    return cont
 
 
 def barra_horizontal_bi(etiqueta: str, valor: float, max_val: float, sufijo: str, color_barra: str):
@@ -924,7 +969,6 @@ def barra_apilada_turno(sector: str, manana_un: int, tarde_un: int, max_total: i
 # =====================================================================
 # 6. APLICACION PRINCIPAL - TORRE DE CONTROL BI & WMS
 # =====================================================================
-
 def notificar_global(page, texto: str, color: str = "#1E3A8A"):
     import flet as ft
     page.show_dialog(
@@ -934,6 +978,7 @@ def notificar_global(page, texto: str, color: str = "#1E3A8A"):
         )
     )
     page.update()
+
 
 def mostrar_aviso_ingreso_modal_global(page, lpn_str: str, sku_str: str, unid_str: str, lote_str: str, qa_str: str):
     import flet as ft
@@ -970,16 +1015,19 @@ def mostrar_aviso_ingreso_modal_global(page, lpn_str: str, sku_str: str, unid_st
     page.show_dialog(dialogo_ingreso)
     page.update()
 
+
 def reimprimir_desde_fila_global(page, lpn_cod: str):
     try:
         res = supabase.table("registro_recepcion").select("*").eq("lpn", lpn_cod).execute()
         if res.data:
-            ruta = generar_pdf_recepcion_15x10(lpn_cod, res.data); descargar_o_abrir_archivo(page, ruta)
+            ruta = generar_pdf_recepcion_15x10(lpn_cod, res.data)
+            descargar_o_abrir_archivo(page, ruta)
             notificar_global(page, f"Etiqueta LPN {lpn_cod} generada correctamente.", "#047857")
         else:
             notificar_global(page, f"No se encontró el LPN {lpn_cod}.", "#D97706")
     except Exception as ex:
         notificar_global(page, f"Error al generar documento para {lpn_cod}: {ex}", "#B91C1C")
+
 
 def hash_password_seguro(password_plana: str) -> str:
     salt = os.getenv("WMS_PASSWORD_SALT", "ludipek_wms_salt_2026")
@@ -997,7 +1045,7 @@ def verificar_password_seguro(password_ingresada: str, password_guardada: str) -
 
 
 def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):
-    """Publica el archivo en assets/descargas/ y permite descargarlo desde cualquier navegador en internet."""
+    """Abre el archivo localmente en Windows (os.startfile) y publica botón de descarga directa en SnackBar para Web."""
     if not ruta_archivo or not os.path.exists(ruta_archivo):
         if page is not None:
             notificar_global(page, "No se encontró el archivo generado para descargar.", "#B91C1C")
@@ -1022,32 +1070,44 @@ def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):
         if os.path.abspath(destino_pub) != os.path.abspath(destino_rel):
             shutil.copy2(ruta_archivo, destino_rel)
 
-        url_descarga = f"/descargas/{urllib.parse.quote(nombre_seguro)}"
+        # En Windows local (Escritorio), abrir directamente con os.startfile
+        if os.name == "nt" and not getattr(page, "web", False):
+            try:
+                os.startfile(os.path.abspath(ruta_archivo))
+            except Exception:
+                pass
+
+        url_rel = f"/descargas/{urllib.parse.quote(nombre_seguro)}"
 
         if page is not None:
-            try:
-                page.launch_url(url_descarga, web_popup_window_name="_blank")
-            except Exception:
-                try:
-                    page.launch_url(url_descarga)
-                except Exception:
-                    pass
-
-            # Mostrar barra con botón HTML directo (nunca es bloqueado por el navegador)
             snack_dl = ft.SnackBar(
                 bgcolor="#0F172A",
                 duration=8000,
                 content=ft.Row(
                     [
                         ft.Icon(ft.Icons.CLOUD_DONE_ROUNDED, color="#34D399", size=20),
-                        ft.Text(f"Listo: {nombre_seguro}", color=ft.Colors.WHITE, size=12, weight=ft.FontWeight.BOLD, expand=True),
-                        ft.Button(
-                            content=ft.Text("DESCARGAR AQUÍ", size=11, weight=ft.FontWeight.BOLD),
-                            icon=ft.Icons.DOWNLOAD_ROUNDED,
-                            bgcolor="#047857",
+                        ft.Text(
+                            f"Listo: {nombre_seguro}",
                             color=ft.Colors.WHITE,
-                            url=url_descarga,
-                            
+                            size=12,
+                            weight=ft.FontWeight.BOLD,
+                            expand=True,
+                        ),
+                        ft.TextButton(
+                            content=ft.Row(
+                                [
+                                    ft.Icon(ft.Icons.DOWNLOAD_ROUNDED, color=ft.Colors.WHITE, size=16),
+                                    ft.Text("DESCARGAR AQUÍ", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                ],
+                                spacing=6,
+                                tight=True,
+                            ),
+                            url=url_rel,
+                            style=ft.ButtonStyle(
+                                bgcolor="#047857",
+                                padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                                shape=ft.RoundedRectangleBorder(radius=6),
+                            ),
                         ),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,

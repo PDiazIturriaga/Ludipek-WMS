@@ -539,7 +539,9 @@ class PickingModulo:
 
             mapa_id_a_ov = {}
             try:
-                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(500).execute()
+                bodega_act = obtener_bodega_activa(self.page)
+            # ...
+                res_ov = supabase.table("netsuite_ordenes_venta").select("*").eq("bodega", bodega_act).order("id", desc=True).limit(500).execute()
                 filas_ov = res_ov.data or []
                 if filas_ov and not esquemas_tablas_sb.get("netsuite_ordenes_venta"):
                     esquemas_tablas_sb["netsuite_ordenes_venta"] = list(filas_ov[0].keys())
@@ -559,7 +561,7 @@ class PickingModulo:
 
             mapa_lineas_pl_por_ov = {}
             try:
-                res_pl = supabase.table("wms_packing_lists_fa").select("*").order("id", desc=True).limit(300).execute()
+                res_pl = supabase.table("wms_packing_lists_fa").select("*").eq("bodega", bodega_act).order("id", desc=True).limit(300).execute()
                 for pl in (res_pl.data or []):
                     ov_pl = str(pl.get("numero_ov") or "").strip().upper()
                     if not ov_pl:
@@ -1928,7 +1930,9 @@ class PickingModulo:
                     except Exception:
                         fecha_iso = datetime.now().isoformat()
 
+                bodega_act = obtener_bodega_activa(self.page)
                 payload_ov_exacto = {
+                    "bodega": bodega_act,
                     "id_externo_ns": id_ext_str,
                     "numero_ov": ov_final,
                     "cliente_nombre": cli_nom,

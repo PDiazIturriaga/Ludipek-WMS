@@ -1137,19 +1137,22 @@ class RecepcionModulo:
                 res_maestra = supabase.table("maestra_sku").select("sku, descripcion").execute()
                 mapa_nombres_maestra = {str(r["sku"]).strip().upper(): str(r.get("descripcion", "")) for r in res_maestra.data}
 
+                bodega_act = obtener_bodega_activa(self.page)
                 if dd_asn.value == "LIBRES":
                     asn_actual_id = None
                     cabecera_asn_actual = {
                         "codigo_asn": "OC-LIBRE",
-                        "proveedor": "RECEPCION DIRECTA SIN OC",
+                        "proveedor": f"RECEPCION DIRECTA SIN OC ({bodega_act})",
                         "numero_oc": "S/OC",
                         "estado": "ACTIVO",
                         "contenedor_referencia": "",
+                        "bodega": bodega_act,
                     }
                     lineas_asn_actual = []
                     recepciones_asn_actual = (
                         supabase.table("registro_recepcion")
                         .select("*")
+                        .eq("bodega", bodega_act)
                         .is_("asn_id", "null")
                         .order("id", desc=True)
                         .limit(100)
@@ -1468,7 +1471,15 @@ class RecepcionModulo:
 
         def cargar_lista_asns(e=None):
             try:
-                res = supabase.table("asn_cabecera").select("*").neq("estado", "COMPLETADO").order("id", desc=True).execute()
+                bodega_act = obtener_bodega_activa(self.page)
+                res = (
+                    supabase.table("asn_cabecera")
+                    .select("*")
+                    .eq("bodega", bodega_act)
+                    .neq("estado", "COMPLETADO")
+                    .order("id", desc=True)
+                    .execute()
+                )
                 opciones = [opt_w("LIBRES", "RECEPCIONES DIRECTAS SIN OC (INGRESOS LIBRES)")]
                 for r in (res.data or []):
                     oc_num = str(r.get("numero_oc") or "").strip()
@@ -1672,7 +1683,8 @@ class RecepcionModulo:
             try:
                 mapa_po_real = {}
                 try:
-                    res_cabs = supabase.table("asn_cabecera").select("id, numero_oc, codigo_asn, proveedor, estado, contenedor_referencia").limit(1000).execute()
+                    bodega_act = obtener_bodega_activa(self.page)
+                    res_cabs = supabase.table("asn_cabecera").select("id, numero_oc, codigo_asn, proveedor, estado, contenedor_referencia, bodega").eq("bodega", bodega_act).limit(1000).execute()
                     for c in (res_cabs.data or []):
                         cid = str(c.get("id"))
                         num_po_limpio = obtener_nombre_po_cabecera(c)
@@ -1686,7 +1698,7 @@ class RecepcionModulo:
                 except Exception:
                     pass
 
-                res_h = supabase.table("registro_recepcion").select("*").order("id", desc=True).limit(600).execute()
+                res_h = supabase.table("registro_recepcion").select("*").eq("bodega", bodega_act).order("id", desc=True).limit(600).execute()
                 registros_enriquecidos = []
                 resumen_por_dia = {}
                 resumen_dia_y_po = {}
@@ -2902,6 +2914,7 @@ class RecepcionModulo:
                     "unidades_esperadas": max(1, int(txt_edit_unid_esp.value.strip() or str(cajas_n * mult_n))),
                     "lote_sugerido": (txt_edit_lote_sug.value or "S/L").strip().upper(),
                     "vencimiento_sugerido_cl": normalizar_fecha_sql(txt_edit_venc_sug.value),
+                    "bodega": obtener_bodega_activa(self.page)
                 }
                 if linea_existente:
                     supabase.table("asn_detalle").update(datos_linea).eq("id", linea_existente["id"]).execute()
@@ -3170,6 +3183,7 @@ class RecepcionModulo:
                         "numero_oc": orden_str,
                         "contenedor_referencia": str(datos.get("contenedor_referencia") or (txt_contenedor.value or "")).strip().upper(),
                         "estado": "EN_RECEPCION",
+                        "bodega": obtener_bodega_activa(self.page)
                     }
                     res_cab = supabase.table("asn_cabecera").upsert(cab, on_conflict="codigo_asn").execute()
                     nuevo_id = res_cab.data[0]["id"]
