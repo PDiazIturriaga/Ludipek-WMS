@@ -83,6 +83,99 @@ class PickingModulo:
         def notificar(texto: str, color: str = "#0284C7"):
             from dependencias import notificar_global
             notificar_global(self.page, texto, color)
+            
+        def descargar_archivo_web(ruta_archivo: str, titulo_doc: str = "Documento Generado"):
+            """Publica el Excel/PDF en /descargas/, lanza descarga automática y muestra ventana con botón directo."""
+            import shutil
+            import inspect
+            import urllib.parse
+
+            if not ruta_archivo or not os.path.exists(ruta_archivo):
+                notificar("No se encontró el archivo generado en el servidor.", "#B91C1C")
+                return
+            try:
+                nombre_orig = os.path.basename(ruta_archivo)
+                base_nom, ext_nom = os.path.splitext(nombre_orig)
+                limpio = "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in str(base_nom))
+                nombre_seguro = f"{limpio[:45] or 'DOC'}{ext_nom.lower()}"
+
+                raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                for carpeta_d in (
+                    os.path.join(os.getcwd(), "assets", "descargas"),
+                    os.path.join(raiz_proyecto, "assets", "descargas"),
+                ):
+                    try:
+                        os.makedirs(carpeta_d, exist_ok=True)
+                        dest_f = os.path.join(carpeta_d, nombre_seguro)
+                        if os.path.abspath(ruta_archivo) != os.path.abspath(dest_f):
+                            shutil.copy2(ruta_archivo, dest_f)
+                    except Exception:
+                        pass
+
+                url_descarga = f"/descargas/{urllib.parse.quote(nombre_seguro)}"
+
+                async def _lanzar_url():
+                    try:
+                        res = self.page.launch_url(url_descarga, web_popup_window_name="_blank")
+                        if inspect.iscoroutine(res):
+                            await res
+                    except Exception:
+                        try:
+                            res2 = self.page.launch_url(url_descarga)
+                            if inspect.iscoroutine(res2):
+                                await res2
+                        except Exception:
+                            pass
+
+                try:
+                    self.page.run_task(_lanzar_url)
+                except Exception:
+                    pass
+
+                def _cerrar_dlg_dl(ev=None):
+                    try:
+                        self.page.pop_dialog()
+                    except Exception:
+                        dlg_dl.open = False
+                    self.page.update()
+
+                dlg_dl = ft.AlertDialog(
+                    modal=False,
+                    bgcolor="#1E293B",
+                    title=ft.Row(
+                        [
+                            ft.Icon(ft.Icons.CLOUD_DOWNLOAD_ROUNDED, color="#34D399", size=24),
+                            ft.Text(titulo_doc, size=15, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                        ],
+                        spacing=8,
+                    ),
+                    content=ft.Column(
+                        [
+                            ft.Text(f"Archivo listo: {nombre_seguro}", size=12, color=ACCENT_CYAN, weight=ft.FontWeight.BOLD),
+                            ft.Text(
+                                "Haga clic en el botón verde para guardar el archivo en su computador:",
+                                size=11,
+                                color=TEXT_MUTED,
+                            ),
+                        ],
+                        spacing=6,
+                        tight=True,
+                    ),
+                    actions=[
+                        ft.TextButton("CERRAR", on_click=_cerrar_dlg_dl),
+                        ft.Button(
+                            content=ft.Text("DESCARGAR ARCHIVO AHORA", size=12, weight=ft.FontWeight.BOLD),
+                            icon=ft.Icons.DOWNLOAD_ROUNDED,
+                            bgcolor="#047857",
+                            color=ft.Colors.WHITE,
+                            url=url_descarga,
+                        ),
+                    ],
+                )
+                self.page.show_dialog(dlg_dl)
+                self.page.update()
+            except Exception as ex_dl:
+                notificar(f"Error preparando descarga web: {ex_dl}", "#B91C1C")    
 
         def tarjeta_dark(contenido, padding=12, expand_val=None, height_val=None, width_val=None):
             t = ft.Container(
@@ -789,8 +882,7 @@ class PickingModulo:
                     tipo_empaque=tipo_usar,
                     total_bultos=bultos_usar,
                 )
-                descargar_o_abrir_archivo(self.page, ruta_pdf)
-                notificar(f"Etiquetas 15x10 generadas: {bultos_usar} {tipo_usar}(S) para {ov_cod}.", "#047857")
+                descargar_archivo_web(ruta_pdf, f"Etiquetas 15x10 ({bultos_usar} {tipo_usar}) - OV {ov_cod}")
             except Exception as ex:
                 notificar(f"Error generando etiquetas de bultos: {ex}", "#B91C1C")
 
@@ -870,14 +962,11 @@ class PickingModulo:
                         tipo_empaque=tipo_f,
                         total_bultos=cant_b,
                     )
-                    descargar_o_abrir_archivo(self.page, ruta_etq)
+                    descargar_archivo_web(ruta_etq, f"Etiquetas 15x10 - OV {ov_cod}")
                 except Exception as ex_p:
                     print(f"[WARN] Error generando PDF bultos: {ex_p}")
 
-                notificar(
-                    f"OV {ov_cod} empacada ({cant_b} {tipo_f}) y enviada al módulo de FACTURACIÓN.",
-                    "#047857",
-                )
+                
                 recargar_datos_supabase()
                 renderizar_monitor_cortes_y_tablas()
 
@@ -1003,15 +1092,15 @@ class PickingModulo:
             page.update()
 
         def exportar_excel_facturacion_netsuite(e=None, solo_ov: dict = None):
-            """Genera el archivo Excel (.xlsx) y CSV con todas las OVs en PENDIENTE_FACTURACION listo para subir a NetSuite y facturar."""
+            """Genera y descarga en el navegador el Excel (.xlsx) para subir a NetSuite y facturar."""
             import openpyxl
-            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.styles import Font, PatternFill, Alignment
 
             if solo_ov:
                 lista_fact = [solo_ov]
             else:
                 seleccionadas_chk = [
-                    reg for ov_k, (chk, reg) in checks_facturacion.items() if chk.value
+                    reg for _, (chk, reg) in checks_facturacion.items() if chk.value
                 ]
                 if seleccionadas_chk:
                     lista_fact = seleccionadas_chk
@@ -1028,15 +1117,20 @@ class PickingModulo:
             try:
                 os.makedirs("reportes_facturacion", exist_ok=True)
                 ts_now = datetime.now().strftime("%Y%m%d_%H%M%S")
-                ruta_xlsx = os.path.join("reportes_facturacion", f"NetSuite_Facturacion_OVs_{ts_now}.xlsx")
-                ruta_csv = os.path.join("reportes_facturacion", f"NetSuite_Facturacion_Upload_{ts_now}.csv")
+                suf_ov = str(solo_ov.get("ov", "")).strip() if solo_ov else "LOTE"
+                ruta_xlsx = os.path.join("reportes_facturacion", f"NetSuite_Facturacion_{suf_ov}_{ts_now}.xlsx")
 
                 filas_detalle_ns = []
                 filas_resumen_ov = []
+                ovs_procesadas_excel = set()
 
                 for ov_item in lista_fact:
                     ov_cod = str(ov_item.get("ov") or "").strip().upper()
                     ov_limpia = ov_cod.removesuffix("-FA").strip()
+                    if ov_limpia in ovs_procesadas_excel:
+                        continue
+                    ovs_procesadas_excel.add(ov_limpia)
+
                     fecha_ov = str(ov_item.get("fecha_ov") or datetime.now().strftime("%Y-%m-%d"))
                     cli_nom = str(ov_item.get("cliente") or "CLIENTE").strip()
                     comuna_nom = str(ov_item.get("comuna") or "SANTIAGO").strip()
@@ -1045,9 +1139,23 @@ class PickingModulo:
                     lpn_cod = str(ov_item.get("lpn") or f"LPN-PK-{ov_limpia}").strip()
                     canal_str = "FARMACIA (-FA)" if ov_item.get("es_farmacia") else "ESTANDAR"
 
-                    lineas = ov_item.get("lineas_detalle") or []
-                    unid_tot_emp = 0
+                    lineas = list(ov_item.get("lineas_detalle") or [])
+                    if not lineas and ov_item.get("id") is not None:
+                        try:
+                            r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", ov_item["id"]).order("linea_ns").execute()
+                            for d in (r_det.data or []):
+                                lineas.append({
+                                    "linea_ns": d.get("linea_ns"),
+                                    "sku": str(d.get("sku") or "").strip().upper(),
+                                    "descripcion": str(d.get("descripcion") or "").strip(),
+                                    "cantidad_pedida": int(float(d.get("cantidad_pedida") or 0)),
+                                    "cantidad_pickeada": int(float(d.get("cantidad_pickeada") or d.get("cantidad_pedida") or 0)),
+                                    "lotes": str(d.get("lotes_pickeados") or d.get("lote_asignado") or "S/L").strip(),
+                                })
+                        except Exception:
+                            pass
 
+                    unid_tot_emp = 0
                     if lineas:
                         for idx_l, lin in enumerate(lineas, start=1):
                             sol_u = int(lin.get("cantidad_pedida") or lin.get("cantidad") or 0)
@@ -1106,10 +1214,6 @@ class PickingModulo:
                 df_det = pd.DataFrame(filas_detalle_ns)
                 df_res = pd.DataFrame(filas_resumen_ov)
 
-                # Guardar CSV directo para importación masiva en NetSuite
-                df_det.to_csv(ruta_csv, index=False, encoding="utf-8-sig")
-
-                # Guardar Excel formateado con 2 hojas (1_Subida_NetSuite_Lineas y 2_Resumen_OVs_Bultos)
                 with pd.ExcelWriter(ruta_xlsx, engine="openpyxl") as writer:
                     df_det.to_excel(writer, sheet_name="1_Subida_NetSuite_Lineas", index=False)
                     df_res.to_excel(writer, sheet_name="2_Resumen_OVs_Bultos", index=False)
@@ -1129,10 +1233,9 @@ class PickingModulo:
                         ws.column_dimensions[col_letter].width = min(45, max(14, max_len + 4))
                 wb.save(ruta_xlsx)
 
-                descargar_o_abrir_archivo(self.page, ruta_xlsx)
-                notificar(
-                    f"Excel de Facturación NetSuite generado con {len(lista_fact)} OV(s) y {len(filas_detalle_ns)} líneas.",
-                    "#047857",
+                descargar_archivo_web(
+                    ruta_xlsx,
+                    f"Excel Facturación NetSuite ({len(ovs_procesadas_excel)} OVs | {len(filas_detalle_ns)} líneas)",
                 )
             except Exception as ex:
                 notificar(f"Error exportando Excel de Facturación: {ex}", "#B91C1C")
