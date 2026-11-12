@@ -3789,3 +3789,36 @@ class RecepcionModulo:
         elif idx in (2, 3):
             self.auditar_asn_seleccionado_func()
         self.page.update()
+
+        cargar_datos_vivos_panel_izquierdo()
+        page.on_resize = adaptar_resolucion_automatica
+        page.controls.clear()
+        page.overlay.clear()
+        page.bgcolor = COLOR_BG_PORTAL
+        page.add(ft.Column([encabezado, cuerpo_principal], spacing=0, expand=True))
+        adaptar_resolucion_automatica()
+        threading.Thread(target=loop_mascota_background, daemon=True).start()
+
+
+if __name__ == "__main__":
+    try:
+        os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
+        os.makedirs(os.path.join("assets", "descargas"), exist_ok=True)
+        if not os.environ.get("FLET_SECRET_KEY"):
+            os.environ["FLET_SECRET_KEY"] = os.environ.get("WMS_PASSWORD_SALT", "ludipek_secret_upload_key_2026")
+
+        puerto_cloud = int(os.environ.get("PORT", 8557))
+        print(f"[BOOT] Iniciando servidor LUDIPEK WMS en 0.0.0.0:{puerto_cloud}...", flush=True)
+
+        ft.run(
+            main,
+            view=ft.AppView.WEB_BROWSER,
+            port=puerto_cloud,
+            host="0.0.0.0",
+            assets_dir="assets",
+            upload_dir=os.path.join("assets", "uploads"),
+        )
+    except Exception as ex_boot:
+        print(f"[FATAL] Error al iniciar main.py: {ex_boot}", flush=True)
+        traceback.print_exc()
+        raise
