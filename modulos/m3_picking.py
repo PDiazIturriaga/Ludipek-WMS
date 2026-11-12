@@ -13,7 +13,7 @@ class PickingModulo:
         self.tarjetas_adaptables = tarjetas_adaptables
         self.kpis_adaptables = kpis_adaptables
 
-        # --- 1. CONSTANTES DE DISEÑO OSCURO (ESTILO MONITOR INDUSTRIAL) ---
+        # --- 1. CONSTANTES DE DISEÑO OSCURO ---
         BG_MODULO = "#1B2122"
         BG_CARD = "#262E30"
         BG_INPUT = "#1D2426"
@@ -29,12 +29,31 @@ class PickingModulo:
         # --- 2. VARIABLES DE ESTADO ---
         olas_extraidas_ns = []
         checks_liberacion = {}
+        checks_facturacion = {}
         registros_packing_db = []
         registros_locales_mem = []
         filtro_corte_activo = "TODOS"
         esquemas_tablas_sb = {}
-        tablas_destino_olas = []
         modo_columnas_packing = {"apilado": True}
+        Archivo_Meta_Despacho = "config_despacho_packing.json"
+
+        def cargar_meta_despacho() -> dict:
+            if os.path.exists(Archivo_Meta_Despacho):
+                try:
+                    with open(Archivo_Meta_Despacho, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    return {}
+            return {}
+
+        def guardar_meta_despacho(ov_key: str, datos: dict):
+            mapa = cargar_meta_despacho()
+            mapa[str(ov_key).strip().upper()] = datos
+            try:
+                with open(Archivo_Meta_Despacho, "w", encoding="utf-8") as f:
+                    json.dump(mapa, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
 
         def boton_primario(texto: str, icono, on_click, color_bg: str, height_val: int = 32, width_val=None):
             def animar_hover(e):
@@ -61,7 +80,6 @@ class PickingModulo:
                 on_hover=animar_hover,
             )
 
-        # --- 3. FUNCIONES AUXILIARES DE UI ---
         def notificar(texto: str, color: str = "#0284C7"):
             from dependencias import notificar_global
             notificar_global(self.page, texto, color)
@@ -83,7 +101,6 @@ class PickingModulo:
             return t
 
         def envolver_tabla_fluida(tabla: ft.DataTable, altura_max: int):
-            """Envuelve la tabla con barras de scroll visibles y margen derecho libre para no atrapar el mouse."""
             return ft.Container(
                 height=altura_max,
                 padding=ft.Padding.only(right=10, bottom=4),
@@ -178,7 +195,7 @@ class PickingModulo:
                 spacing=3,
             )
 
-        # --- 4. CLASIFICADOR INTELIGENTE DE CORTE HORARIO (09:00, 10:00, 12:00, 13:00) ---
+        # --- 4. CLASIFICADOR DE CORTE HORARIO ---
         def clasificar_corte_horario(valor_fecha_hora, corte_forzado: str = None) -> str:
             if corte_forzado and corte_forzado in ("09:00", "10:00", "12:00", "13:00", ">13:00"):
                 return corte_forzado
@@ -280,7 +297,7 @@ class PickingModulo:
         lbl_kpi_total_ovs = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color=TEXT_WHITE, font_family="Consolas")
         lbl_kpi_ov_normal = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#38BDF8", font_family="Consolas")
         lbl_kpi_ov_farma = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#FBBF24", font_family="Consolas")
-        lbl_kpi_avance_pack = ft.Text("0%", size=17, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
+        lbl_kpi_pend_fact = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
 
         fila_barras_cortes = ft.Row(
             spacing=14,
@@ -317,7 +334,7 @@ class PickingModulo:
             heading_row_height=32,
             data_row_min_height=32,
             data_row_max_height=38,
-            column_spacing=16,
+            column_spacing=14,
             horizontal_margin=10,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
@@ -325,8 +342,8 @@ class PickingModulo:
                 ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
                 ft.DataColumn(ft.Text("CORTE", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
                 ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ESTADO ACTUAL", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIONES DE PACKING Y ETIQUETA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("ESTADO OPERATIVO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("ACCIONES DE PACKING Y CIERRE A FACTURACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
             ],
             rows=[],
         )
@@ -336,7 +353,7 @@ class PickingModulo:
             heading_row_height=32,
             data_row_min_height=32,
             data_row_max_height=38,
-            column_spacing=16,
+            column_spacing=14,
             horizontal_margin=10,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
@@ -344,8 +361,41 @@ class PickingModulo:
                 ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
                 ft.DataColumn(ft.Text("CORTE", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
                 ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ESTADO SANITARIO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIONES DE PACKING Y ETIQUETA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("ESTADO OPERATIVO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("ACCIONES DE PACKING Y CIERRE A FACTURACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+            ],
+            rows=[],
+        )
+
+        # TABLA DEL NUEVO MÓDULO 4: FACTURACIÓN (OVs en PENDIENTE_FACTURACION)
+        txt_buscar_facturacion = texto_dark(label="Buscar por N° OV, Cliente, Comuna o LPN...", width=280)
+        sw_ver_ya_facturadas = ft.Switch(label="Ver también Facturadas", value=False, active_color="#10B981")
+        lbl_resumen_facturacion = ft.Text(
+            "0 OVs listas en Pendiente de Facturación para subir a NetSuite.",
+            size=12,
+            weight=ft.FontWeight.BOLD,
+            color="#34D399",
+        )
+
+        tabla_facturacion_ns = ft.DataTable(
+            heading_row_color="#181E20",
+            heading_row_height=34,
+            data_row_min_height=34,
+            data_row_max_height=40,
+            column_spacing=14,
+            horizontal_margin=10,
+            data_text_style=ft.TextStyle(color=TEXT_WHITE),
+            columns=[
+                ft.DataColumn(ft.Text("SEL.", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("OV / OT", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("FECHA", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+                ft.DataColumn(ft.Text("CANAL", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
+                ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("COMUNA DESPACHO", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("EMPAQUE / BULTOS", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
+                ft.DataColumn(ft.Text("UNID. EMPACADAS", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+                ft.DataColumn(ft.Text("ESTADO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("DOCUMENTOS Y ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
             ],
             rows=[],
         )
@@ -353,62 +403,19 @@ class PickingModulo:
         cont_tabla_prev_ns = envolver_tabla_fluida(tabla_previsualizacion_ns, 220)
         cont_tabla_pack_norm = envolver_tabla_fluida(tabla_packing_normal, 250)
         cont_tabla_pack_farm = envolver_tabla_fluida(tabla_packing_farmacia, 250)
+        cont_tabla_facturacion = envolver_tabla_fluida(tabla_facturacion_ns, 360)
 
-        # --- 7. CONEXIÓN EXACTA CON SUPABASE ---
-        def descubrir_tablas_olas_supabase() -> list:
-            nonlocal tablas_destino_olas
-            tablas_destino_olas = [
-                "netsuite_ordenes_venta",
-                "wms_packing_lists_fa",
-                "v_torre_control_ov_resumen",
-            ]
-            return tablas_destino_olas
-
-        def obtener_columnas_reales_tabla(nombre_tabla: str) -> list:
-            if nombre_tabla in esquemas_tablas_sb and esquemas_tablas_sb[nombre_tabla]:
-                return esquemas_tablas_sb[nombre_tabla]
-            try:
-                sb_url = (
-                    getattr(supabase, "supabase_url", None)
-                    or getattr(supabase, "rest_url", "").replace("/rest/v1", "")
-                    or globals().get("SUPABASE_URL")
-                    or os.environ.get("SUPABASE_URL", "")
-                )
-                sb_key = (
-                    getattr(supabase, "supabase_key", None)
-                    or globals().get("SUPABASE_KEY")
-                    or os.environ.get("SUPABASE_KEY", "")
-                )
-                if sb_url and sb_key:
-                    req = urllib.request.Request(
-                        f"{str(sb_url).rstrip('/')}/rest/v1/",
-                        headers={"apikey": str(sb_key), "Authorization": f"Bearer {sb_key}"},
-                    )
-                    with urllib.request.urlopen(req, timeout=5) as resp:
-                        spec = json.loads(resp.read().decode("utf-8"))
-                        defs = spec.get("definitions", {})
-                        for t_name, t_info in defs.items():
-                            esquemas_tablas_sb[t_name] = list((t_info.get("properties") or {}).keys())
-            except Exception:
-                pass
-            return esquemas_tablas_sb.get(nombre_tabla, [])
-
+        # --- 7. CONEXIÓN Y SINCRONIZACIÓN CON SUPABASE ---
         def detectar_es_farmacia_texto(*textos) -> bool:
             for t in textos:
                 s = str(t or "").strip().upper()
                 if not s:
                     continue
-                if (
-                    "-FA" in s
-                    or s.endswith("FA")
-                    or "BOEHRINGER" in s
-                    or "PICK-FARM" in s
-                    or "FARMACIA" in s
-                ):
+                if "-FA" in s or s.endswith("FA") or "BOEHRINGER" in s or "PICK-FARM" in s or "FARMACIA" in s:
                     return True
             return False
 
-        def extraer_campos_registro_ola(r: dict, mapa_clientes_ns: dict = None) -> dict:
+        def extraer_campos_registro_ola(r: dict, mapa_clientes_ns: dict = None, mapa_meta_desp: dict = None) -> dict:
             ov_val = str(
                 r.get("numero_ov")
                 or r.get("orden_venta")
@@ -448,18 +455,17 @@ class PickingModulo:
                 or "PENDIENTE_PICKING"
             ).strip().upper()
 
-            canal_val = str(
-                r.get("canal_venta")
-                or r.get("tipo_ola")
-                or r.get("canal")
-                or ""
-            ).strip().upper()
+            # Homologar el estado antiguo EMPACADO a PENDIENTE_FACTURACION para el nuevo flujo
+            if est_val in ("EMPACADO", "COMPLETADO"):
+                est_val = "PENDIENTE_FACTURACION"
+
+            canal_val = str(r.get("canal_venta") or r.get("tipo_ola") or r.get("canal") or "").strip().upper()
 
             es_fa = (
                 bool(r.get("es_farmacia"))
                 or detectar_es_farmacia_texto(ov_val, canal_val, r.get("sku"), r.get("descripcion"))
             )
-            if es_fa and not ov_val.endswith("-FA"):
+            if es_fa and not ov_val.endswith("-FA") and not ov_val.startswith("OT-"):
                 ov_val = f"{ov_val}-FA"
 
             ts_val = (
@@ -479,12 +485,22 @@ class PickingModulo:
             except Exception:
                 unid_val = 1
 
+            meta_ov = (mapa_meta_desp or {}).get(ov_val) or (mapa_meta_desp or {}).get(ov_limpia) or {}
+            comuna_str = str(r.get("comuna") or meta_ov.get("comuna") or ("CONCEPCIÓN" if "CONCEPCION" in cli_val.upper() else "SANTIAGO")).strip().upper()
+            tipo_emp_str = str(meta_ov.get("tipo_empaque") or "BULTO").strip().upper()
+            bultos_cnt = int(meta_ov.get("bultos") or 1)
+            lpn_str = str(meta_ov.get("lpn") or f"LPN-PK-{ov_limpia}").strip().upper()
+
             return {
                 "raw": r,
                 "id": r.get("id"),
                 "ov": ov_val,
                 "fecha_ov": fecha_ov_str,
                 "cliente": cli_val,
+                "comuna": comuna_str,
+                "tipo_empaque": tipo_emp_str,
+                "bultos": bultos_cnt,
+                "lpn": lpn_str,
                 "estado": est_val,
                 "es_farmacia": es_fa,
                 "corte": corte_str,
@@ -497,6 +513,7 @@ class PickingModulo:
         def recargar_datos_supabase():
             nonlocal registros_packing_db
             agrupado_por_ov = {}
+            mapa_meta_desp = cargar_meta_despacho()
 
             mapa_maestra_sku = {}
             try:
@@ -517,6 +534,7 @@ class PickingModulo:
                     info_sku_m = {
                         "descripcion": str(m.get("descripcion") or m.get("nombre") or "").strip(),
                         "ean": str(ean_val or "").strip(),
+                        "marca": str(m.get("marca") or "").strip(),
                     }
                     mapa_maestra_sku[s_k] = info_sku_m
                     s_base = s_k.split("-")[0].strip()
@@ -538,18 +556,17 @@ class PickingModulo:
                     mapa_clientes_ns[k_ov.replace("-FA", "")] = cli_ns
 
             mapa_id_a_ov = {}
+            bodega_act = obtener_bodega_activa(self.page)
             try:
-                bodega_act = obtener_bodega_activa(self.page)
-            # ...
-                res_ov = supabase.table("netsuite_ordenes_venta").select("*").eq("bodega", bodega_act).order("id", desc=True).limit(500).execute()
-                filas_ov = res_ov.data or []
-                if filas_ov and not esquemas_tablas_sb.get("netsuite_ordenes_venta"):
-                    esquemas_tablas_sb["netsuite_ordenes_venta"] = list(filas_ov[0].keys())
-
+                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(500).execute()
+                filas_ov = [
+                    r for r in (res_ov.data or [])
+                    if coincide_bodega(r, bodega_act)
+                ]
                 for r in filas_ov:
                     r_copia = dict(r)
                     r_copia["_tabla_origen"] = "netsuite_ordenes_venta"
-                    info = extraer_campos_registro_ola(r_copia, mapa_clientes_ns)
+                    info = extraer_campos_registro_ola(r_copia, mapa_clientes_ns, mapa_meta_desp)
                     if not info:
                         continue
                     ov_k = info["ov"]
@@ -561,13 +578,17 @@ class PickingModulo:
 
             mapa_lineas_pl_por_ov = {}
             try:
-                res_pl = supabase.table("wms_packing_lists_fa").select("*").eq("bodega", bodega_act).order("id", desc=True).limit(300).execute()
+                res_pl = supabase.table("wms_packing_lists_fa").select("*").order("id", desc=True).limit(300).execute()
                 for pl in (res_pl.data or []):
-                    ov_pl = str(pl.get("numero_ov") or "").strip().upper()
-                    if not ov_pl:
+                    if not coincide_bodega(pl, bodega_act):
                         continue
-                    if not ov_pl.endswith("-FA") and not ov_pl.startswith("OT-"):
-                        ov_pl = f"{ov_pl}-FA"
+                    ov_pl_raw = str(pl.get("numero_ov") or "").strip().upper()
+                    if not ov_pl_raw:
+                        continue
+                    ov_pl = ov_pl_raw.split("(")[0].split("|")[0].strip()
+                    if not ov_pl.endswith("-FA") and not ov_pl.startswith("OT-") and ov_pl not in agrupado_por_ov:
+                        if f"{ov_pl}-FA" in agrupado_por_ov:
+                            ov_pl = f"{ov_pl}-FA"
 
                     det_json = pl.get("detalle_json")
                     if isinstance(det_json, str):
@@ -577,10 +598,20 @@ class PickingModulo:
                             det_json = []
 
                     lineas_pl = []
+                    meta_desde_json = {}
                     if isinstance(det_json, list):
                         for item_j in det_json:
                             if isinstance(item_j, dict):
+                                if item_j.get("comuna") or item_j.get("bultos") or item_j.get("lpn_consolidado"):
+                                    meta_desde_json = {
+                                        "comuna": item_j.get("comuna"),
+                                        "tipo_empaque": item_j.get("tipo_empaque"),
+                                        "bultos": item_j.get("bultos"),
+                                        "lpn": item_j.get("lpn_consolidado"),
+                                    }
                                 sku_j = str(item_j.get("sku") or "").strip().upper()
+                                if not sku_j:
+                                    continue
                                 sku_j_base = sku_j.split("-")[0].strip()
                                 inf_m = mapa_maestra_sku.get(sku_j) or mapa_maestra_sku.get(sku_j_base) or {}
                                 lineas_pl.append({
@@ -597,30 +628,15 @@ class PickingModulo:
                     if lineas_pl and ov_pl not in mapa_lineas_pl_por_ov:
                         mapa_lineas_pl_por_ov[ov_pl] = lineas_pl
 
-                    raw_f_pl = str(pl.get("fecha_emision") or pl.get("created_at") or "").strip()
-                    fecha_ov_pl = raw_f_pl[:10] if len(raw_f_pl) >= 10 else datetime.now().strftime("%Y-%m-%d")
-
-                    if ov_pl not in agrupado_por_ov:
-                        agrupado_por_ov[ov_pl] = {
-                            "raw": pl,
-                            "id": pl.get("orden_id"),
-                            "ov": ov_pl,
-                            "fecha_ov": fecha_ov_pl,
-                            "cliente": str(pl.get("cliente_nombre") or "CLIENTE FARMACIA").strip(),
-                            "estado": "EMPACADO",
-                            "es_farmacia": True,
-                            "corte": clasificar_corte_horario(pl.get("fecha_emision")),
-                            "unidades": sum(x["cantidad_pedida"] for x in lineas_pl) or 1,
-                            "unidades_pickeadas": sum(x["cantidad_pickeada"] for x in lineas_pl),
-                            "lineas_detalle": lineas_pl,
-                            "tabla_origen": "wms_packing_lists_fa",
-                        }
-                    else:
-                        agrupado_por_ov[ov_pl]["estado"] = "EMPACADO"
-                        if pl.get("orden_id") and not agrupado_por_ov[ov_pl].get("id"):
-                            agrupado_por_ov[ov_pl]["id"] = pl.get("orden_id")
-                        if lineas_pl:
-                            agrupado_por_ov[ov_pl]["lineas_detalle"] = lineas_pl
+                    if ov_pl in agrupado_por_ov and meta_desde_json:
+                        if meta_desde_json.get("comuna"):
+                            agrupado_por_ov[ov_pl]["comuna"] = str(meta_desde_json["comuna"]).upper()
+                        if meta_desde_json.get("tipo_empaque"):
+                            agrupado_por_ov[ov_pl]["tipo_empaque"] = str(meta_desde_json["tipo_empaque"]).upper()
+                        if meta_desde_json.get("bultos"):
+                            agrupado_por_ov[ov_pl]["bultos"] = int(meta_desde_json["bultos"])
+                        if meta_desde_json.get("lpn"):
+                            agrupado_por_ov[ov_pl]["lpn"] = str(meta_desde_json["lpn"]).upper()
             except Exception:
                 pass
 
@@ -699,11 +715,11 @@ class PickingModulo:
                 filtro_corte_activo = corte_sel
             dd_filtro_corte.value = filtro_corte_activo
 
-        def construir_barra_corte(etiqueta_corte: str, cant_ovs: int, cant_empacadas: int, max_escala: int, fn_click_corte=None):
+        def construir_barra_corte(etiqueta_corte: str, cant_ovs: int, cant_listas: int, max_escala: int, fn_click_corte=None):
             altura_max_px = 86
             ratio = min(1.0, cant_ovs / max(1, max_escala))
             alto_barra = max(12, int(ratio * altura_max_px)) if cant_ovs > 0 else 6
-            es_completo = cant_ovs > 0 and cant_empacadas >= cant_ovs
+            es_completo = cant_ovs > 0 and cant_listas >= cant_ovs
             color_b = "#10B981" if es_completo else (ACCENT_BLUE if cant_ovs > 0 else "#334155")
 
             return ft.Column(
@@ -717,7 +733,7 @@ class PickingModulo:
                         alignment=ft.Alignment.BOTTOM_CENTER,
                         ink=True,
                         on_click=fn_click_corte,
-                        tooltip=f"Corte {etiqueta_corte}: {cant_ovs} OVs ({cant_empacadas} Empacadas) - Clic para filtrar",
+                        tooltip=f"Corte {etiqueta_corte}: {cant_ovs} OVs ({cant_listas} en Facturación) - Clic para filtrar",
                         content=ft.Container(
                             width=38,
                             height=alto_barra,
@@ -735,6 +751,186 @@ class PickingModulo:
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=3,
             )
+
+        def cambiar_estado_ov_db(info_item: dict, nuevo_estado: str):
+            ov_cod = str(info_item.get("ov") or "").strip().upper()
+            ov_sin_fa = ov_cod.removesuffix("-FA").strip()
+            info_item["estado"] = nuevo_estado
+            for m_it in registros_locales_mem:
+                if m_it["ov"] in (ov_cod, ov_sin_fa):
+                    m_it["estado"] = nuevo_estado
+
+            for col_ov in ("estado_ns", "estado"):
+                try:
+                    supabase.table("netsuite_ordenes_venta").update({col_ov: nuevo_estado}).or_(
+                        f"numero_ov.eq.{ov_cod},numero_ov.eq.{ov_sin_fa}"
+                    ).execute()
+                    break
+                except Exception:
+                    continue
+
+        def imprimir_etiqueta_packing_bultos_ov(info_ov: dict):
+            ov_cod = str(info_ov.get("ov") or "S/OV").strip().upper()
+            ov_limpia = ov_cod.removesuffix("-FA").strip()
+            meta_ov = cargar_meta_despacho().get(ov_cod) or cargar_meta_despacho().get(ov_limpia) or {}
+
+            lpn_usar = str(meta_ov.get("lpn") or info_ov.get("lpn") or f"LPN-PK-{ov_limpia}").strip().upper()
+            cli_usar = str(info_ov.get("cliente") or "SIN CLIENTE").strip().upper()
+            comuna_usar = str(meta_ov.get("comuna") or info_ov.get("comuna") or "SANTIAGO").strip().upper()
+            tipo_usar = str(meta_ov.get("tipo_empaque") or info_ov.get("tipo_empaque") or "BULTO").strip().upper()
+            bultos_usar = int(meta_ov.get("bultos") or info_ov.get("bultos") or 1)
+
+            try:
+                ruta_pdf = generar_pdf_etiqueta_packing_bultos_15x10(
+                    lpn=lpn_usar,
+                    numero_ov=ov_cod,
+                    cliente=cli_usar,
+                    comuna=comuna_usar,
+                    tipo_empaque=tipo_usar,
+                    total_bultos=bultos_usar,
+                )
+                descargar_o_abrir_archivo(self.page, ruta_pdf)
+                notificar(f"Etiquetas 15x10 generadas: {bultos_usar} {tipo_usar}(S) para {ov_cod}.", "#047857")
+            except Exception as ex:
+                notificar(f"Error generando etiquetas de bultos: {ex}", "#B91C1C")
+
+        def abrir_modal_empaque_y_pasar_a_facturacion(info_ov: dict):
+            """Abre el asistente de Packing para definir Comuna, Bulto/Pallet y Cantidad (1 de N), imprime etiquetas y pasa a Facturación."""
+            ov_cod = str(info_ov.get("ov") or "").strip().upper()
+            ov_limpia = ov_cod.removesuffix("-FA").strip()
+            cli_str = str(info_ov.get("cliente") or "SIN CLIENTE").strip()
+            meta_prev = cargar_meta_despacho().get(ov_cod) or cargar_meta_despacho().get(ov_limpia) or {}
+
+            lpn_default = str(meta_prev.get("lpn") or info_ov.get("lpn") or f"LPN-PK-{ov_limpia}-{datetime.now().strftime('%H%M')}").upper()
+            comuna_default = str(meta_prev.get("comuna") or info_ov.get("comuna") or ("CONCEPCIÓN" if "CONCEPCION" in cli_str.upper() else "SANTIAGO")).upper()
+            tipo_default = str(meta_prev.get("tipo_empaque") or info_ov.get("tipo_empaque") or "BULTO").upper()
+            bultos_default = str(meta_prev.get("bultos") or info_ov.get("bultos") or 1)
+
+            txt_lpn_pk = texto_dark("LPN de Despacho", width=220, value=lpn_default)
+            txt_comuna_pk = texto_dark("Comuna de Despacho", width=240, value=comuna_default)
+            dd_tipo_pk = dropdown_dark(
+                "Modalidad de Despacho",
+                width=220,
+                value=tipo_default if tipo_default in ("BULTO", "PALLET") else "BULTO",
+                options=[
+                    opt_w("BULTO", "POR BULTO / CAJA"),
+                    opt_w("PALLET", "POR PALLET"),
+                ],
+            )
+            txt_cant_bultos_pk = texto_dark(
+                "Cantidad de Bultos / Pallets (Ej: 3 -> 1 de 3, 2 de 3, 3 de 3)",
+                width=240,
+                value=bultos_default,
+                keyboard_type=ft.KeyboardType.NUMBER,
+            )
+
+            def cerrar_m(ev=None):
+                try:
+                    page.pop_dialog()
+                except Exception:
+                    dlg_pack.open = False
+                page.update()
+
+            def confirmar_cierre_packing(ev=None):
+                comuna_f = (txt_comuna_pk.value or "SANTIAGO").strip().upper()
+                tipo_f = (dd_tipo_pk.value or "BULTO").strip().upper()
+                lpn_f = (txt_lpn_pk.value or f"LPN-PK-{ov_limpia}").strip().upper()
+                try:
+                    cant_b = max(1, int((txt_cant_bultos_pk.value or "1").strip()))
+                except Exception:
+                    cant_b = 1
+
+                datos_meta = {
+                    "lpn": lpn_f,
+                    "comuna": comuna_f,
+                    "tipo_empaque": tipo_f,
+                    "bultos": cant_b,
+                    "fecha_packing": datetime.now().strftime("%d-%m-%Y %H:%M"),
+                }
+                guardar_meta_despacho(ov_cod, datos_meta)
+                guardar_meta_despacho(ov_limpia, datos_meta)
+
+                info_ov["comuna"] = comuna_f
+                info_ov["tipo_empaque"] = tipo_f
+                info_ov["bultos"] = cant_b
+                info_ov["lpn"] = lpn_f
+
+                cerrar_m()
+
+                # 1. Cambiar estado a PENDIENTE_FACTURACION (desaparece de Picking/Packing y pasa a Facturación)
+                cambiar_estado_ov_db(info_ov, "PENDIENTE_FACTURACION")
+
+                # 2. Emitir etiquetas 15x10 por cada bulto/pallet (1 de N, 2 de N...)
+                try:
+                    ruta_etq = generar_pdf_etiqueta_packing_bultos_15x10(
+                        lpn=lpn_f,
+                        numero_ov=ov_cod,
+                        cliente=cli_str,
+                        comuna=comuna_f,
+                        tipo_empaque=tipo_f,
+                        total_bultos=cant_b,
+                    )
+                    descargar_o_abrir_archivo(self.page, ruta_etq)
+                except Exception as ex_p:
+                    print(f"[WARN] Error generando PDF bultos: {ex_p}")
+
+                notificar(
+                    f"OV {ov_cod} empacada ({cant_b} {tipo_f}) y enviada al módulo de FACTURACIÓN.",
+                    "#047857",
+                )
+                recargar_datos_supabase()
+                renderizar_monitor_cortes_y_tablas()
+
+            dlg_pack = ft.AlertDialog(
+                modal=True,
+                bgcolor="#1E293B",
+                title=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.INVENTORY_ROUNDED, color=ACCENT_CYAN, size=22),
+                        ft.Text(f"Cerrar Packing y Emitir Etiquetas (OV {ov_cod})", size=15, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ],
+                    spacing=8,
+                ),
+                content=ft.Container(
+                    width=520,
+                    content=ft.Column(
+                        [
+                            ft.Container(
+                                padding=10,
+                                bgcolor="#0F172A",
+                                border_radius=6,
+                                content=ft.Column(
+                                    [
+                                        ft.Text(f"CLIENTE: {cli_str}", size=12, weight=ft.FontWeight.BOLD, color="#34D399"),
+                                        ft.Text(
+                                            "Al confirmar, se imprimirán las etiquetas 15x10 (1 de N) con OV, Cliente, Comuna y Bultos, y la OV pasará a PENDIENTE DE FACTURACIÓN.",
+                                            size=11,
+                                            color=TEXT_MUTED,
+                                        ),
+                                    ],
+                                    spacing=4,
+                                ),
+                            ),
+                            ft.Row([txt_lpn_pk, txt_comuna_pk], spacing=10, wrap=True),
+                            ft.Row([dd_tipo_pk, txt_cant_bultos_pk], spacing=10, wrap=True),
+                        ],
+                        spacing=10,
+                        tight=True,
+                    ),
+                ),
+                actions=[
+                    ft.TextButton("CANCELAR", on_click=cerrar_m),
+                    boton_primario(
+                        "CONFIRMAR PACKING -> PASAR A FACTURACIÓN + ETIQUETAS 15x10",
+                        ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED,
+                        confirmar_cierre_packing,
+                        "#047857",
+                        height_val=36,
+                    ),
+                ],
+            )
+            page.show_dialog(dlg_pack)
+            page.update()
 
         def mostrar_modal_detalle_ov(ov_num: str, info_ov: dict):
             lineas_det = info_ov.get("lineas_detalle", [])
@@ -759,7 +955,7 @@ class PickingModulo:
                 )
             if not filas_d:
                 filas_d.append(ft.Text(f"Cliente: {info_ov.get('cliente', '-')}", size=12, color=TEXT_WHITE))
-                filas_d.append(ft.Text(f"Canal: {'FARMACIA (-FA)' if info_ov.get('es_farmacia') else 'ESTÁNDAR'}", size=12, color="#FBBF24" if info_ov.get("es_farmacia") else ACCENT_CYAN))
+                filas_d.append(ft.Text(f"Comuna: {info_ov.get('comuna', 'SANTIAGO')}", size=12, color=ACCENT_CYAN))
                 filas_d.append(ft.Text(f"Estado Actual: {info_ov.get('estado', '-')}", size=12, color="#34D399"))
 
             def cerrar_d(ev=None):
@@ -771,7 +967,7 @@ class PickingModulo:
 
             dlg_det = ft.AlertDialog(
                 title=ft.Text(
-                    f"Detalle Orden de Venta #{ov_num} (Corte {info_ov.get('corte', '-')})",
+                    f"Detalle Orden #{ov_num} | {info_ov.get('cliente', '')[:30]}",
                     color=TEXT_WHITE,
                     size=15,
                     weight=ft.FontWeight.BOLD,
@@ -787,14 +983,14 @@ class PickingModulo:
                 ),
                 actions=[
                     boton_primario(
-                        "DESCARGAR ETIQUETA LPN (15x10)",
+                        "ETIQUETA BULTOS (15x10)",
                         ft.Icons.QR_CODE_2_ROUNDED,
-                        lambda ev: descargar_lpn_consolidado_ov(info_ov),
+                        lambda ev: imprimir_etiqueta_packing_bultos_ov(info_ov),
                         ACCENT_TEAL,
                         height_val=32,
                     ),
                     boton_primario(
-                        "DESCARGAR PACKING LIST (PDF + EXCEL)",
+                        "PACKING LIST (PDF + EXCEL)",
                         ft.Icons.PICTURE_AS_PDF_OUTLINED,
                         lambda ev: exportar_ov_farmacia_excel_pdf(info_ov),
                         "#B45309",
@@ -806,155 +1002,167 @@ class PickingModulo:
             page.show_dialog(dlg_det)
             page.update()
 
-        def cambiar_estado_packing_ov(info_item: dict, nuevo_estado: str):
-            ov_cod = str(info_item.get("ov") or "").strip().upper()
-            ov_sin_fa = ov_cod.removesuffix("-FA").strip()
-            info_item["estado"] = nuevo_estado
-            for m_it in registros_locales_mem:
-                if m_it["ov"] in (ov_cod, ov_sin_fa):
-                    m_it["estado"] = nuevo_estado
+        def exportar_excel_facturacion_netsuite(e=None, solo_ov: dict = None):
+            """Genera el archivo Excel (.xlsx) y CSV con todas las OVs en PENDIENTE_FACTURACION listo para subir a NetSuite y facturar."""
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-            for col_ov in ("estado_ns", "estado"):
-                try:
-                    supabase.table("netsuite_ordenes_venta").update({col_ov: nuevo_estado}).or_(
-                        f"numero_ov.eq.{ov_cod},numero_ov.eq.{ov_sin_fa}"
-                    ).execute()
-                    break
-                except Exception:
-                    continue
+            if solo_ov:
+                lista_fact = [solo_ov]
+            else:
+                seleccionadas_chk = [
+                    reg for ov_k, (chk, reg) in checks_facturacion.items() if chk.value
+                ]
+                if seleccionadas_chk:
+                    lista_fact = seleccionadas_chk
+                else:
+                    lista_fact = [
+                        r for r in registros_packing_db
+                        if r.get("estado") == "PENDIENTE_FACTURACION"
+                    ]
 
-            if info_item.get("es_farmacia"):
-                for col_est in ("estado_ns", "estado_sanitario", "estado"):
-                    try:
-                        supabase.table("wms_packing_lists_fa").update({col_est: nuevo_estado}).or_(
-                            f"numero_ov.eq.{ov_cod},numero_ov.eq.{ov_sin_fa}"
-                        ).execute()
-                        break
-                    except Exception:
-                        continue
+            if not lista_fact:
+                notificar("No hay OVs en estado PENDIENTE_FACTURACION seleccionadas para exportar.", "#D97706")
+                return
 
-            notificar(f"OV {ov_cod} actualizada a [{nuevo_estado}].", "#047857")
+            try:
+                os.makedirs("reportes_facturacion", exist_ok=True)
+                ts_now = datetime.now().strftime("%Y%m%d_%H%M%S")
+                ruta_xlsx = os.path.join("reportes_facturacion", f"NetSuite_Facturacion_OVs_{ts_now}.xlsx")
+                ruta_csv = os.path.join("reportes_facturacion", f"NetSuite_Facturacion_Upload_{ts_now}.csv")
+
+                filas_detalle_ns = []
+                filas_resumen_ov = []
+
+                for ov_item in lista_fact:
+                    ov_cod = str(ov_item.get("ov") or "").strip().upper()
+                    ov_limpia = ov_cod.removesuffix("-FA").strip()
+                    fecha_ov = str(ov_item.get("fecha_ov") or datetime.now().strftime("%Y-%m-%d"))
+                    cli_nom = str(ov_item.get("cliente") or "CLIENTE").strip()
+                    comuna_nom = str(ov_item.get("comuna") or "SANTIAGO").strip()
+                    tipo_emp = str(ov_item.get("tipo_empaque") or "BULTO").strip()
+                    cant_bultos = int(ov_item.get("bultos") or 1)
+                    lpn_cod = str(ov_item.get("lpn") or f"LPN-PK-{ov_limpia}").strip()
+                    canal_str = "FARMACIA (-FA)" if ov_item.get("es_farmacia") else "ESTANDAR"
+
+                    lineas = ov_item.get("lineas_detalle") or []
+                    unid_tot_emp = 0
+
+                    if lineas:
+                        for idx_l, lin in enumerate(lineas, start=1):
+                            sol_u = int(lin.get("cantidad_pedida") or lin.get("cantidad") or 0)
+                            pick_u = int(lin.get("cantidad_pickeada") or sol_u)
+                            unid_tot_emp += pick_u
+                            filas_detalle_ns.append({
+                                "Numero_OV_NetSuite": ov_limpia,
+                                "Codigo_WMS": ov_cod,
+                                "Fecha_OV": fecha_ov,
+                                "Cliente": cli_nom,
+                                "Comuna_Despacho": comuna_nom,
+                                "Modalidad_Empaque": tipo_emp,
+                                "Cantidad_Bultos_Pallets": cant_bultos,
+                                "LPN_Despacho": lpn_cod,
+                                "Linea_NS": lin.get("linea_ns") or idx_l,
+                                "SKU": str(lin.get("sku") or "").strip().upper(),
+                                "Descripcion": str(lin.get("descripcion") or "").strip(),
+                                "Cantidad_Solicitada": sol_u,
+                                "Cantidad_Facturar_Despachar": pick_u,
+                                "Lotes_y_Vencimientos": str(lin.get("lotes") or "S/L").strip(),
+                                "Estado_Facturacion": ov_item.get("estado", "PENDIENTE_FACTURACION"),
+                            })
+                    else:
+                        unid_tot_emp = int(ov_item.get("unidades_pickeadas") or ov_item.get("unidades") or 1)
+                        filas_detalle_ns.append({
+                            "Numero_OV_NetSuite": ov_limpia,
+                            "Codigo_WMS": ov_cod,
+                            "Fecha_OV": fecha_ov,
+                            "Cliente": cli_nom,
+                            "Comuna_Despacho": comuna_nom,
+                            "Modalidad_Empaque": tipo_emp,
+                            "Cantidad_Bultos_Pallets": cant_bultos,
+                            "LPN_Despacho": lpn_cod,
+                            "Linea_NS": 1,
+                            "SKU": "CONSOLIDADO",
+                            "Descripcion": "ORDEN EMPACADA EN WMS",
+                            "Cantidad_Solicitada": int(ov_item.get("unidades") or unid_tot_emp),
+                            "Cantidad_Facturar_Despachar": unid_tot_emp,
+                            "Lotes_y_Vencimientos": "S/L",
+                            "Estado_Facturacion": ov_item.get("estado", "PENDIENTE_FACTURACION"),
+                        })
+
+                    filas_resumen_ov.append({
+                        "Numero_OV_NetSuite": ov_limpia,
+                        "Canal": canal_str,
+                        "Fecha_OV": fecha_ov,
+                        "Cliente": cli_nom,
+                        "Comuna_Despacho": comuna_nom,
+                        "Modalidad": tipo_emp,
+                        "N_Bultos_Pallets": cant_bultos,
+                        "LPN_Despacho": lpn_cod,
+                        "Total_Unidades_Facturar": unid_tot_emp,
+                        "Estado": ov_item.get("estado", "PENDIENTE_FACTURACION"),
+                    })
+
+                df_det = pd.DataFrame(filas_detalle_ns)
+                df_res = pd.DataFrame(filas_resumen_ov)
+
+                # Guardar CSV directo para importación masiva en NetSuite
+                df_det.to_csv(ruta_csv, index=False, encoding="utf-8-sig")
+
+                # Guardar Excel formateado con 2 hojas (1_Subida_NetSuite_Lineas y 2_Resumen_OVs_Bultos)
+                with pd.ExcelWriter(ruta_xlsx, engine="openpyxl") as writer:
+                    df_det.to_excel(writer, sheet_name="1_Subida_NetSuite_Lineas", index=False)
+                    df_res.to_excel(writer, sheet_name="2_Resumen_OVs_Bultos", index=False)
+
+                wb = openpyxl.load_workbook(ruta_xlsx)
+                fill_hdr = PatternFill(fill_type="solid", start_color="1E3A8A", end_color="1E3A8A")
+                font_hdr = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+                for ws in wb.worksheets:
+                    ws.row_dimensions[1].height = 24
+                    for cell in ws[1]:
+                        cell.fill = fill_hdr
+                        cell.font = font_hdr
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                    for col in ws.columns:
+                        max_len = max(len(str(c.value or "")) for c in col)
+                        col_letter = col[0].column_letter
+                        ws.column_dimensions[col_letter].width = min(45, max(14, max_len + 4))
+                wb.save(ruta_xlsx)
+
+                descargar_o_abrir_archivo(self.page, ruta_xlsx)
+                notificar(
+                    f"Excel de Facturación NetSuite generado con {len(lista_fact)} OV(s) y {len(filas_detalle_ns)} líneas.",
+                    "#047857",
+                )
+            except Exception as ex:
+                notificar(f"Error exportando Excel de Facturación: {ex}", "#B91C1C")
+
+        def marcar_ovs_como_facturadas(e=None, ov_unica: dict = None):
+            if ov_unica:
+                objetivos = [ov_unica]
+            else:
+                objetivos = [reg for _, (chk, reg) in checks_facturacion.items() if chk.value]
+
+            if not objetivos:
+                notificar("Seleccione al menos una OV para marcarla como FACTURADA.", "#D97706")
+                return
+
+            for it in objetivos:
+                cambiar_estado_ov_db(it, "FACTURADO")
+
+            notificar(f"{len(objetivos)} OV(s) marcadas como FACTURADAS en NetSuite.", "#047857")
             recargar_datos_supabase()
             renderizar_monitor_cortes_y_tablas()
-
-        def descargar_lpn_consolidado_ov(info_ov: dict):
-            """Genera y descarga en el navegador la etiqueta térmica 15x10 cm del LPN consolidado de la OV/OT."""
-            if not info_ov:
-                notificar("Seleccione una Orden de Venta / Traslado válida.", "#D97706")
-                return
-
-            ov_raw = str(info_ov.get("ov") or "OV").strip().upper()
-            ov_base = ov_raw.split("(")[0].strip()
-            ov_limpia = ov_base.removesuffix("-FA").replace("OT-", "").strip()
-
-            mapa_mult_sku = {}
-            try:
-                res_m = supabase.table("maestra_sku").select("sku, multiplo").limit(5000).execute()
-                for m in (res_m.data or []):
-                    s_k = str(m.get("sku") or "").strip().upper()
-                    if s_k:
-                        mult_v = max(1, int(float(m.get("multiplo") or 1)))
-                        mapa_mult_sku[s_k] = mult_v
-                        s_raiz = s_k.split("-")[0].strip()
-                        if s_raiz not in mapa_mult_sku:
-                            mapa_mult_sku[s_raiz] = mult_v
-            except Exception:
-                pass
-
-            try:
-                res_rec = (
-                    supabase.table("registro_recepcion")
-                    .select("*")
-                    .or_(f"contenedor.eq.{ov_raw},contenedor.eq.{ov_base},contenedor.eq.{ov_limpia},contenedor.eq.OT-{ov_limpia}")
-                    .order("id", desc=True)
-                    .execute()
-                )
-                filas_rec = res_rec.data or []
-                if filas_rec:
-                    lpns_unicos = sorted({str(r.get("lpn") or "").strip() for r in filas_rec if r.get("lpn")})
-                    if len(lpns_unicos) == 1:
-                        ruta_pdf = generar_pdf_recepcion_15x10(lpns_unicos[0], filas_rec)
-                    else:
-                        ruta_pdf = generar_pdf_masivo_lpns_po(ov_base, filas_rec)
-                    descargar_o_abrir_archivo(self.page, ruta_pdf)
-                    return
-            except Exception:
-                pass
-
-            lpn_detectado = f"LPN-{ov_base}"
-            lineas_fuente = list(info_ov.get("lineas_detalle") or [])
-
-            if not lineas_fuente and info_ov.get("id") is not None:
-                try:
-                    r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", info_ov["id"]).execute()
-                    for d in (r_det.data or []):
-                        lineas_fuente.append({
-                            "sku": str(d.get("sku") or "").strip().upper(),
-                            "cantidad_pedida": int(float(d.get("cantidad_pedida") or 0)),
-                            "cantidad_pickeada": int(float(d.get("cantidad_pickeada") or 0)),
-                            "lotes": str(d.get("lotes_pickeados") or d.get("lote_asignado") or "").strip(),
-                        })
-                except Exception:
-                    pass
-
-            if not lineas_fuente:
-                notificar(f"La orden {ov_base} no tiene líneas de artículos para generar etiqueta LPN.", "#D97706")
-                return
-
-            lineas_pallet_pdf = []
-            for lin in lineas_fuente:
-                sku_c = str(lin.get("sku") or "-").strip().upper()
-                sku_raiz = sku_c.split("-")[0].strip()
-                mult_c = mapa_mult_sku.get(sku_c) or mapa_mult_sku.get(sku_raiz) or 1
-                unid_c = int(float(lin.get("cantidad_pickeada") or lin.get("cantidad_pedida") or lin.get("cantidad") or 0))
-                if unid_c <= 0:
-                    continue
-                cajas_c = max(1, round(unid_c / mult_c))
-
-                raw_lotes = str(lin.get("lotes") or "").strip()
-                if raw_lotes.startswith("[") and "]" in raw_lotes:
-                    lpn_extraido = raw_lotes[1:raw_lotes.index("]")].strip()
-                    if lpn_extraido:
-                        lpn_detectado = lpn_extraido
-                    raw_lotes = raw_lotes[raw_lotes.index("]") + 1:].strip()
-
-                lote_limpio = "S/L"
-                venc_limpio = "S/F"
-                if raw_lotes and raw_lotes.upper() not in ("NONE", "NULL"):
-                    primer_lote = raw_lotes.split("|")[0].split("(")[0].strip()
-                    if "/" in primer_lote:
-                        partes_lv = primer_lote.split("/")
-                        lote_limpio = partes_lv[0].strip() or "S/L"
-                        venc_limpio = partes_lv[1].strip() or "S/F"
-                    else:
-                        lote_limpio = primer_lote or "S/L"
-
-                lineas_pallet_pdf.append({
-                    "sku": sku_c,
-                    "cajas": cajas_c,
-                    "multiplo_aplicado": mult_c,
-                    "unidades_sueltas": 0,
-                    "unidades_totales": unid_c,
-                    "lote": lote_limpio,
-                    "fecha_vencimiento_cl": venc_limpio,
-                })
-
-            if not lineas_pallet_pdf:
-                notificar(f"No hay unidades válidas en {ov_base} para emitir el LPN.", "#D97706")
-                return
-
-            try:
-                ruta_pdf = generar_pdf_recepcion_15x10(lpn_detectado, lineas_pallet_pdf)
-                descargar_o_abrir_archivo(self.page, ruta_pdf)
-            except Exception as ex:
-                notificar(f"Error generando etiqueta LPN: {ex}", "#B91C1C")
 
         def exportar_ov_farmacia_excel_pdf(info_ov: dict = None):
             import textwrap
             import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-            objetivos = [info_ov] if info_ov else list(registros_packing_db)
+            objetivos = [info_ov] if info_ov else [
+                r for r in registros_packing_db
+                if r.get("estado") in ("PENDIENTE_PICKING", "PENDIENTE_PACKING", "PENDIENTE_FACTURACION")
+            ]
             if not objetivos:
                 notificar("No hay órdenes cargadas para exportar.", "#D97706")
                 return
@@ -971,8 +1179,6 @@ class PickingModulo:
                         or m.get("ean")
                         or m.get("ean_base")
                         or m.get("gtin")
-                        or m.get("barcode")
-                        or m.get("upc")
                         or ""
                     )
                     inf_m = {
@@ -986,182 +1192,64 @@ class PickingModulo:
             except Exception:
                 pass
 
-            def esc_pdf(txt: str) -> str:
-                s = str(txt or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-                return s.encode("cp1252", "replace").decode("latin-1")
-
             try:
                 os.makedirs("reportes_farmacia", exist_ok=True)
                 ahora_dt = datetime.now()
                 ts_arch = ahora_dt.strftime("%Y%m%d_%H%M%S")
                 fecha_emision_str = ahora_dt.strftime("%d-%m-%Y %H:%M")
 
-                for ov_reg in objetivos:
+                for ov_reg in objetivos[:5]:
                     ov_raw = str(ov_reg.get("ov") or "OV").strip().upper()
                     ov_base = ov_raw.split("(")[0].strip()
                     ov_limpia = ov_base.removesuffix("-FA").strip()
-                    ov_con_fa = f"{ov_limpia}-FA"
                     cli_nom = str(ov_reg.get("cliente") or "CLIENTE / DESTINO").strip()
-                    id_ov_db = ov_reg.get("id")
-
-                    lpn_asociado_str = "S/LPN"
-                    try:
-                        r_lpn_rec = (
-                            supabase.table("registro_recepcion")
-                            .select("lpn")
-                            .or_(f"contenedor.eq.{ov_raw},contenedor.eq.{ov_base},contenedor.eq.{ov_limpia},contenedor.eq.{ov_con_fa}")
-                            .limit(5)
-                            .execute()
-                        )
-                        if r_lpn_rec.data:
-                            lpn_asociado_str = ", ".join(sorted({str(x["lpn"]) for x in r_lpn_rec.data if x.get("lpn")}))
-                    except Exception:
-                        pass
-
-                    if id_ov_db is None:
-                        try:
-                            r_cab = (
-                                supabase.table("netsuite_ordenes_venta")
-                                .select("id, cliente_nombre")
-                                .or_(f"numero_ov.eq.{ov_raw},numero_ov.eq.{ov_limpia},numero_ov.eq.{ov_con_fa}")
-                                .limit(1)
-                                .execute()
-                            )
-                            if r_cab.data:
-                                id_ov_db = r_cab.data[0].get("id")
-                                if r_cab.data[0].get("cliente_nombre"):
-                                    cli_nom = str(r_cab.data[0]["cliente_nombre"]).strip()
-                        except Exception:
-                            pass
-
-                    mapa_pl_sku = {}
-                    lineas_desde_pl = []
-                    try:
-                        r_pl = (
-                            supabase.table("wms_packing_lists_fa")
-                            .select("*")
-                            .or_(f"numero_ov.ilike.{ov_limpia}%,numero_ov.eq.{ov_raw},numero_ov.eq.{ov_con_fa}")
-                            .order("id", desc=True)
-                            .limit(1)
-                            .execute()
-                        )
-                        if r_pl.data:
-                            row_pl = r_pl.data[0]
-                            if row_pl.get("cliente_nombre") and cli_nom in ("CLIENTE FARMACIA", "CLIENTE REGISTRADO", "SIN CLIENTE", "CLIENTE / DESTINO"):
-                                cli_nom = str(row_pl["cliente_nombre"]).strip()
-                            det_j = row_pl.get("detalle_json")
-                            if isinstance(det_j, str):
-                                try:
-                                    det_j = json.loads(det_j)
-                                except Exception:
-                                    det_j = []
-                            if isinstance(det_j, list):
-                                for it_j in det_j:
-                                    if isinstance(it_j, dict):
-                                        if lpn_asociado_str == "S/LPN" and it_j.get("lpn_consolidado"):
-                                            lpn_asociado_str = str(it_j.get("lpn_consolidado")).strip()
-                                        s_j = str(it_j.get("sku") or "").strip().upper()
-                                        s_j_base = s_j.split("-")[0].strip()
-                                        inf_m = mapa_sku_info.get(s_j) or mapa_sku_info.get(s_j_base) or {}
-                                        item_norm = {
-                                            "sku": s_j,
-                                            "ean": str(it_j.get("ean") or inf_m.get("ean") or s_j).strip(),
-                                            "descripcion": str(it_j.get("descripcion") or inf_m.get("descripcion") or "").strip(),
-                                            "solicitado": int(float(it_j.get("solicitado") or 0)),
-                                            "pickeado": int(float(it_j.get("pickeado") or 0)),
-                                            "lotes": str(it_j.get("lotes") or "").strip(),
-                                        }
-                                        lineas_desde_pl.append(item_norm)
-                                        mapa_pl_sku[s_j] = item_norm
-                                        if s_j_base:
-                                            mapa_pl_sku[s_j_base] = item_norm
-                    except Exception:
-                        pass
+                    comuna_nom = str(ov_reg.get("comuna") or "SANTIAGO").strip()
+                    tipo_emp = str(ov_reg.get("tipo_empaque") or "BULTO").strip()
+                    cant_bultos = int(ov_reg.get("bultos") or 1)
+                    lpn_asociado_str = str(ov_reg.get("lpn") or f"LPN-PK-{ov_limpia}").strip()
 
                     lineas_exportar = []
-                    if id_ov_db is not None:
-                        try:
-                            r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", id_ov_db).order("linea_ns", desc=False).execute()
-                            for d in (r_det.data or []):
-                                sku_c = str(d.get("sku") or "").strip().upper()
-                                sku_limpio = sku_c.split("-")[0].strip()
-                                info_m = mapa_sku_info.get(sku_c) or mapa_sku_info.get(sku_limpio) or {}
-                                info_pl = mapa_pl_sku.get(sku_c) or mapa_pl_sku.get(sku_limpio) or {}
-
-                                ean_c = str(info_m.get("ean") or d.get("ean") or info_pl.get("ean") or sku_c).strip()
-                                desc_c = str(info_m.get("descripcion") or d.get("descripcion") or info_pl.get("descripcion") or "").strip()
-                                sol_c = int(float(d.get("cantidad_pedida") or d.get("cantidad_comprometida") or info_pl.get("solicitado") or 0))
-                                pick_db = int(float(d.get("cantidad_pickeada") or 0))
-                                pick_pl = int(float(info_pl.get("pickeado") or 0))
-                                pick_c = max(pick_db, pick_pl)
-
-                                lotes_c = str(d.get("lotes_pickeados") or d.get("lote_asignado") or "").strip()
-                                if lotes_c.upper() in ("NONE", "NULL", ""):
-                                    lotes_c = str(info_pl.get("lotes") or "").strip()
-
-                                if lpn_asociado_str == "S/LPN" and lotes_c.startswith("[") and "]" in lotes_c:
-                                    lpn_asociado_str = lotes_c[1:lotes_c.index("]")].strip()
-
-                                lineas_exportar.append({
-                                    "sku": sku_c,
-                                    "ean": ean_c,
-                                    "descripcion": desc_c,
-                                    "solicitado": sol_c,
-                                    "pickeado": pick_c,
-                                    "lotes": lotes_c,
-                                })
-                        except Exception:
-                            pass
-
-                    if not lineas_exportar and lineas_desde_pl:
-                        lineas_exportar = lineas_desde_pl
-
-                    if not lineas_exportar:
-                        for ld in (ov_reg.get("lineas_detalle") or []):
-                            sku_c = str(ld.get("sku") or "").strip().upper()
-                            sku_limpio = sku_c.split("-")[0].strip()
-                            info_m = mapa_sku_info.get(sku_c) or mapa_sku_info.get(sku_limpio) or {}
-                            ean_c = str(ld.get("ean") or info_m.get("ean") or sku_c).strip()
-                            desc_c = str(ld.get("descripcion") or info_m.get("descripcion") or "").strip()
-                            sol_c = int(float(ld.get("cantidad_pedida") or ld.get("cantidad") or 0))
-                            pick_c = int(float(ld.get("cantidad_pickeada") or 0))
-                            lotes_c = str(ld.get("lotes") or ld.get("lotes_pickeados") or ld.get("lote_asignado") or "").strip()
-                            lineas_exportar.append({
-                                "sku": sku_c,
-                                "ean": ean_c,
-                                "descripcion": desc_c,
-                                "solicitado": sol_c,
-                                "pickeado": pick_c,
-                                "lotes": lotes_c,
-                            })
+                    for ld in (ov_reg.get("lineas_detalle") or []):
+                        sku_c = str(ld.get("sku") or "").strip().upper()
+                        sku_limpio = sku_c.split("-")[0].strip()
+                        info_m = mapa_sku_info.get(sku_c) or mapa_sku_info.get(sku_limpio) or {}
+                        ean_c = str(ld.get("ean") or info_m.get("ean") or sku_c).strip()
+                        desc_c = str(ld.get("descripcion") or info_m.get("descripcion") or "").strip()
+                        sol_c = int(float(ld.get("cantidad_pedida") or ld.get("cantidad") or 0))
+                        pick_c = int(float(ld.get("cantidad_pickeada") or sol_c))
+                        lotes_c = str(ld.get("lotes") or ld.get("lotes_pickeados") or "S/L").strip()
+                        lineas_exportar.append({
+                            "sku": sku_c,
+                            "ean": ean_c,
+                            "descripcion": desc_c,
+                            "solicitado": sol_c,
+                            "pickeado": pick_c,
+                            "lotes": lotes_c,
+                        })
 
                     ruta_excel = os.path.join("reportes_farmacia", f"PackingList_{ov_limpia}_{ts_arch}.xlsx")
-                    ruta_pdf = os.path.join("reportes_farmacia", f"PackingList_{ov_limpia}_{ts_arch}.pdf")
-
                     wb = openpyxl.Workbook()
                     ws = wb.active
                     ws.title = "Packing_List"
 
                     ws["A1"] = "LUDIPEK WMS"
                     ws["A1"].font = Font(name="Calibri", size=16, bold=True, color="1E3A8A")
-
-                    ws["H2"] = f"PACKING LIST OFICIAL | LPN: {lpn_asociado_str}"
-                    ws["H2"].font = Font(name="Calibri", size=14, bold=True, color="000000")
-                    ws["H2"].alignment = Alignment(horizontal="right")
-
-                    ws["H3"] = f"Fecha de Emisión: {fecha_emision_str}"
-                    ws["H3"].font = Font(name="Calibri", size=11, bold=False, color="64748B")
-                    ws["H3"].alignment = Alignment(horizontal="right")
+                    ws["C1"] = f"PACKING LIST OFICIAL - OV {ov_limpia} | {tipo_emp}S: {cant_bultos} | COMUNA: {comuna_nom}"
+                    ws["C1"].font = Font(name="Calibri", size=13, bold=True)
+                    ws["C2"] = f"Cliente: {cli_nom}   |   LPN: {lpn_asociado_str}   |   Fecha: {fecha_emision_str}"
+                    ws["C2"].font = Font(name="Calibri", size=11)
 
                     encabezados = [
                         "ORDEN (OV/OT)",
-                        "LPN CONSOLIDADO",
+                        "COMUNA",
+                        "EMPAQUE",
+                        "BULTOS",
                         "CLIENTE / DESTINO",
                         "SKU",
                         "EAN / GTIN Base",
                         "Descripción",
                         "Solicitado",
-                        "Pickeado",
+                        "Empacado",
                         "Lotes y Vencimientos",
                     ]
                     fill_hdr = PatternFill(fill_type="solid", start_color="1E3A8A", end_color="1E3A8A")
@@ -1170,16 +1258,18 @@ class PickingModulo:
                     border_celda = Border(left=borde_fino, right=borde_fino, top=borde_fino, bottom=borde_fino)
 
                     for col_idx, texto_h in enumerate(encabezados, start=1):
-                        c = ws.cell(row=5, column=col_idx, value=texto_h)
+                        c = ws.cell(row=4, column=col_idx, value=texto_h)
                         c.fill = fill_hdr
                         c.font = font_hdr
                         c.alignment = Alignment(horizontal="center", vertical="center")
                         c.border = border_celda
 
-                    for r_idx, lin in enumerate(lineas_exportar, start=6):
+                    for r_idx, lin in enumerate(lineas_exportar, start=5):
                         valores_fila = [
                             ov_limpia,
-                            lpn_asociado_str,
+                            comuna_nom,
+                            tipo_emp,
+                            cant_bultos,
                             cli_nom,
                             lin["sku"],
                             lin["ean"],
@@ -1190,138 +1280,10 @@ class PickingModulo:
                         ]
                         for c_idx, val in enumerate(valores_fila, start=1):
                             celda = ws.cell(row=r_idx, column=c_idx, value=val)
-                            celda.font = Font(name="Calibri", size=11, bold=False)
+                            celda.font = Font(name="Calibri", size=11)
                             celda.border = border_celda
-                            if c_idx in (1, 2, 4, 5, 7, 8):
-                                celda.alignment = Alignment(horizontal="center", vertical="center")
-                            else:
-                                celda.alignment = Alignment(horizontal="left", vertical="center", wrap_text=(c_idx == 9))
-
-                    anchos_cols = {"A": 15.0, "B": 20.0, "C": 32.0, "D": 15.0, "E": 20.0, "F": 42.0, "G": 11.0, "H": 12.0, "I": 65.0}
-                    for col_l, w_val in anchos_cols.items():
-                        ws.column_dimensions[col_l].width = w_val
 
                     wb.save(ruta_excel)
-
-                    cmds = [
-                        "2 J",
-                        "0.57 w",
-                        "BT /F1 22.00 Tf ET",
-                        "q BT 42.52 531.99 Td 0.1176 0.2275 0.5412 rg (LUDIPEK) Tj ET Q",
-                        "BT /F1 18.00 Tf ET",
-                        "q BT 495.00 536.02 Td 0 g (PACKING LIST - CONSOLIDADO LPN) Tj ET Q",
-                        "BT /F2 10.00 Tf ET",
-                        f"q BT 625.00 517.16 Td 0.3922 0.4549 0.5451 rg (Fecha de Emisión: {esc_pdf(fecha_emision_str)}) Tj ET Q",
-                        "0.9451 0.9608 0.9765 rg",
-                        "0.7961 0.8353 0.8824 RG",
-                        "39.69 481.89 762.52 -45.35 re B",
-                        "q 39.69 436.54 758.00 45.35 re W n",
-                        "BT /F1 11.50 Tf ET",
-                        f"BT 50.00 455.32 Td 0 g (ORDEN: {esc_pdf(ov_limpia)}   |   LPN: {esc_pdf(lpn_asociado_str[:22])}) Tj ET",
-                        f"BT 360.00 455.32 Td 0 g (DESTINO/CLIENTE: {esc_pdf(cli_nom[:44])}) Tj ET",
-                        "Q",
-                    ]
-
-                    cols_def = [
-                        ("SKU", 39.69, 95.0, "L"),
-                        ("EAN / GTIN Base", 134.69, 105.0, "L"),
-                        ("Descripción", 239.69, 245.0, "L"),
-                        ("Sol.", 484.69, 42.0, "C"),
-                        ("Pick.", 526.69, 42.0, "C"),
-                        ("Lotes Trazabilidad (y Venc.)", 568.69, 233.52, "L"),
-                    ]
-
-                    y_top = 411.03
-                    h_hdr = 22.68
-                    cmds.append("0.1176 0.2275 0.5412 rg")
-                    cmds.append("0.0588 0.0902 0.1647 RG")
-                    cmds.append("BT /F1 10.00 Tf ET")
-                    for titulo, cx, cw, _ in cols_def:
-                        tx = cx + max(4.0, (cw - len(titulo) * 5.2) / 2.0)
-                        ty = y_top - 14.34
-                        cmds.append(
-                            f"q {cx:.2f} {y_top:.2f} {cw:.2f} -{h_hdr:.2f} re B BT {tx:.2f} {ty:.2f} Td 1 1 1 rg ({esc_pdf(titulo)}) Tj ET Q"
-                        )
-
-                    y_curr = y_top - h_hdr
-                    for lin in lineas_exportar[:14]:
-                        lotes_txt = str(lin.get("lotes") or "").strip()
-                        desc_txt = str(lin.get("descripcion") or "").strip()
-                        ean_txt = str(lin.get("ean") or "").strip()
-                        sku_txt = str(lin.get("sku") or "").strip()
-
-                        lotes_lines = textwrap.wrap(lotes_txt, width=46)[:2] if lotes_txt else [""]
-                        desc_lines = textwrap.wrap(desc_txt, width=46)[:2] if desc_txt else [""]
-                        ean_lines = textwrap.wrap(ean_txt, width=19)[:2] if ean_txt else [""]
-
-                        max_lines = max(len(lotes_lines), len(desc_lines), len(ean_lines), 1)
-                        row_h = 22.68 if max_lines == 1 else 28.0
-
-                        celdas_vals = [
-                            ([sku_txt[:18]], cols_def[0]),
-                            (ean_lines, cols_def[1]),
-                            (desc_lines, cols_def[2]),
-                            ([str(int(lin.get("solicitado", 0)))], cols_def[3]),
-                            ([str(int(lin.get("pickeado", 0)))], cols_def[4]),
-                            (lotes_lines, cols_def[5]),
-                        ]
-
-                        for lista_txt, (_, cx, cw, align_c) in celdas_vals:
-                            cmds.append(f"q 0.5588 0.6353 0.7224 RG {cx:.2f} {y_curr:.2f} {cw:.2f} -{row_h:.2f} re S Q")
-                            cmds.append(f"q {cx+1.5:.2f} {y_curr-row_h+1.0:.2f} {cw-3.0:.2f} {row_h-2.0:.2f} re W n")
-                            font_sz = 8.5 if len(lista_txt) > 1 else 9.0
-                            cmds.append(f"BT /F2 {font_sz:.2f} Tf ET")
-                            if len(lista_txt) == 1:
-                                t_val = lista_txt[0]
-                                tx = (cx + max(2.0, (cw - len(t_val) * 4.8) / 2.0)) if align_c == "C" else (cx + 4.0)
-                                ty = y_curr - (row_h / 2.0) - 3.0
-                                cmds.append(f"BT {tx:.2f} {ty:.2f} Td 0 g ({esc_pdf(t_val)}) Tj ET")
-                            else:
-                                for idx_ln, t_val in enumerate(lista_txt):
-                                    tx = cx + 4.0
-                                    ty = y_curr - 10.5 - (idx_ln * 10.5)
-                                    cmds.append(f"BT {tx:.2f} {ty:.2f} Td 0 g ({esc_pdf(t_val)}) Tj ET")
-                            cmds.append("Q")
-
-                        y_curr -= row_h
-
-                    y_sig = min(181.42, y_curr - 40.0)
-                    if y_sig < 48.0:
-                        y_sig = 48.0
-                    cmds.extend([
-                        "0 G",
-                        f"155.91 {y_sig:.2f} m 325.98 {y_sig:.2f} l S",
-                        f"524.41 {y_sig:.2f} m 694.49 {y_sig:.2f} l S",
-                        "BT /F1 10.00 Tf ET",
-                        f"q BT 196.77 {y_sig - 18.59:.2f} Td 0 g (PREPARADO POR) Tj ET Q",
-                        f"q BT 574.44 {y_sig - 18.59:.2f} Td 0 g (AUDITADO PACKING / QA) Tj ET Q",
-                    ])
-
-                    stream_bytes = "\n".join(cmds).encode("latin-1")
-                    objetos_pdf = [
-                        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-                        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-                        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 841.89 595.28] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>\nendobj\n",
-                        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n",
-                        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
-                        f"6 0 obj\n<< /Length {len(stream_bytes)} >>\nstream\n".encode("latin-1") + stream_bytes + b"\nendstream\nendobj\n",
-                    ]
-                    pdf_bytes = bytearray(b"%PDF-1.4\n")
-                    offsets = []
-                    for obj in objetos_pdf:
-                        offsets.append(len(pdf_bytes))
-                        pdf_bytes.extend(obj)
-                    xref_pos = len(pdf_bytes)
-                    pdf_bytes.extend(f"xref\n0 {len(objetos_pdf)+1}\n0000000000 65535 f \n".encode("latin-1"))
-                    for off in offsets:
-                        pdf_bytes.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
-                    pdf_bytes.extend(
-                        f"trailer\n<< /Size {len(objetos_pdf)+1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF".encode("latin-1")
-                    )
-                    with open(ruta_pdf, "wb") as f_pdf:
-                        f_pdf.write(pdf_bytes)
-
-                    descargar_o_abrir_archivo(self.page, ruta_pdf)
                     descargar_o_abrir_archivo(self.page, ruta_excel)
             except Exception as ex:
                 notificar(f"Error al generar Packing List: {ex}", "#B91C1C")
@@ -1331,18 +1293,29 @@ class PickingModulo:
             lbl_tip_corte.value = txt_t
             lbl_tip_corte.color = col_t
 
+            # 1. Separar OVs activas en Bodega (PENDIENTE_PICKING y PENDIENTE_PACKING) vs OVs en FACTURACIÓN
+            ovs_operativas_bodega = [
+                r for r in registros_packing_db
+                if r.get("estado") in ("PENDIENTE_PICKING", "PENDIENTE_PACKING", "EN_PICKING", "PREVISUALIZADA")
+            ]
+            ovs_en_facturacion = [
+                r for r in registros_packing_db
+                if r.get("estado") == "PENDIENTE_FACTURACION"
+                or (sw_ver_ya_facturadas.value and r.get("estado") == "FACTURADO")
+            ]
+
             mapa_ovs_unicas = {}
-            for item_db in registros_packing_db:
+            for item_db in ovs_operativas_bodega:
                 mapa_ovs_unicas[item_db["ov"]] = item_db
             for item_ns in olas_extraidas_ns:
                 if item_ns["ov"] not in mapa_ovs_unicas:
                     mapa_ovs_unicas[item_ns["ov"]] = item_ns
 
-            todas_ovs = list(mapa_ovs_unicas.values())
+            todas_ovs_activas = list(mapa_ovs_unicas.values())
 
             cortes_orden = ["09:00", "10:00", "12:00", "13:00", ">13:00"]
             agrupado_cortes = {c: [] for c in cortes_orden}
-            for item in todas_ovs:
+            for item in todas_ovs_activas:
                 c_key = item.get("corte", "09:00")
                 if c_key not in agrupado_cortes:
                     c_key = ">13:00"
@@ -1353,31 +1326,19 @@ class PickingModulo:
             lbl_corte_12.value = f"{len(agrupado_cortes['12:00']):02d}"
             lbl_corte_13.value = f"{len(agrupado_cortes['13:00']):02d}"
 
-            fuente_kpis = registros_packing_db if registros_packing_db else todas_ovs
-            ovs_kpi_filtradas = [
-                r for r in fuente_kpis
-                if filtro_corte_activo == "TODOS" or r.get("corte") == filtro_corte_activo
-            ]
-
-            normales_kpi = [r for r in ovs_kpi_filtradas if not r.get("es_farmacia")]
-            farmacias_kpi = [r for r in ovs_kpi_filtradas if r.get("es_farmacia")]
-
             ovs_pack_filtradas = [
-                r for r in registros_packing_db
+                r for r in ovs_operativas_bodega
                 if filtro_corte_activo == "TODOS" or r.get("corte") == filtro_corte_activo
             ]
             normales_pack = [r for r in ovs_pack_filtradas if not r.get("es_farmacia")]
             farmacias_pack = [r for r in ovs_pack_filtradas if r.get("es_farmacia")]
 
-            empacadas_cnt = sum(
-                1 for r in ovs_pack_filtradas if r.get("estado") in ("EMPACADO", "COMPLETADO", "DESPACHADO", "CERRADO")
-            )
+            pend_fact_cnt = sum(1 for r in registros_packing_db if r.get("estado") == "PENDIENTE_FACTURACION")
 
-            lbl_kpi_total_ovs.value = str(len(ovs_kpi_filtradas))
-            lbl_kpi_ov_normal.value = str(len(normales_kpi))
-            lbl_kpi_ov_farma.value = str(len(farmacias_kpi))
-            pct_pack = int(round((empacadas_cnt / max(1, len(ovs_pack_filtradas))) * 100)) if ovs_pack_filtradas else 0
-            lbl_kpi_avance_pack.value = f"{pct_pack}%"
+            lbl_kpi_total_ovs.value = str(len(ovs_pack_filtradas))
+            lbl_kpi_ov_normal.value = str(len(normales_pack))
+            lbl_kpi_ov_farma.value = str(len(farmacias_pack))
+            lbl_kpi_pend_fact.value = str(pend_fact_cnt)
 
             fila_barras_cortes.controls.clear()
             col_detalle_ovs_por_corte.controls.clear()
@@ -1385,12 +1346,12 @@ class PickingModulo:
 
             for c_label in cortes_orden:
                 lista_c = agrupado_cortes[c_label]
-                emp_c = sum(1 for x in lista_c if x.get("estado") in ("EMPACADO", "COMPLETADO", "DESPACHADO"))
+                listas_pack_c = sum(1 for x in lista_c if x.get("estado") == "PENDIENTE_PACKING")
                 fila_barras_cortes.controls.append(
                     construir_barra_corte(
                         c_label,
                         len(lista_c),
-                        emp_c,
+                        listas_pack_c,
                         max_corte_cnt,
                         lambda e, c=c_label: (cambiar_filtro_estado_interno(c), renderizar_monitor_cortes_y_tablas()),
                     )
@@ -1399,15 +1360,15 @@ class PickingModulo:
                 if lista_c:
                     chips_ov = []
                     for x_ov in lista_c[:12]:
-                        es_emp = x_ov.get("estado") in ("EMPACADO", "COMPLETADO")
+                        es_p_pack = x_ov.get("estado") == "PENDIENTE_PACKING"
                         es_fa = x_ov.get("es_farmacia")
                         chips_ov.append(
                             ft.Container(
                                 padding=ft.Padding.symmetric(horizontal=7, vertical=2),
-                                bgcolor="#065F46" if es_emp else ("#78350F" if es_fa else "#1E3A8A"),
+                                bgcolor="#065F46" if es_p_pack else ("#78350F" if es_fa else "#1E3A8A"),
                                 border_radius=4,
-                                border=ft.Border.all(1, "#34D399" if es_emp else ("#FBBF24" if es_fa else "#38BDF8")),
-                                tooltip=f"OV {x_ov['ov']} | {x_ov['cliente']} | {'FARMACIA (-FA)' if es_fa else 'ESTÁNDAR'} | {x_ov['estado']}",
+                                border=ft.Border.all(1, "#34D399" if es_p_pack else ("#FBBF24" if es_fa else "#38BDF8")),
+                                tooltip=f"OV {x_ov['ov']} | {x_ov['cliente']} | {x_ov['estado']}",
                                 on_click=lambda ev, ov_s=x_ov["ov"], inf=x_ov: mostrar_modal_detalle_ov(ov_s, inf),
                                 content=ft.Text(
                                     f"OV {x_ov['ov']}",
@@ -1420,7 +1381,7 @@ class PickingModulo:
                     if len(lista_c) > 12:
                         chips_ov.append(ft.Text(f"+{len(lista_c) - 12} más", size=10, color=TEXT_MUTED))
                 else:
-                    chips_ov = [ft.Text("Sin OVs en este corte", size=10, color="#64748B")]
+                    chips_ov = [ft.Text("Sin OVs pendientes en este corte", size=10, color="#64748B")]
 
                 col_detalle_ovs_por_corte.controls.append(
                     ft.Container(
@@ -1434,10 +1395,10 @@ class PickingModulo:
                                     [
                                         ft.Text(f"⏱️ CORTE {c_label} HRS", size=11, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
                                         ft.Text(
-                                            f"{len(lista_c)} OVs ({emp_c} Empacadas)",
+                                            f"{len(lista_c)} OVs Activas ({listas_pack_c} en Packing)",
                                             size=10,
                                             weight=ft.FontWeight.W_600,
-                                            color="#34D399" if emp_c == len(lista_c) and lista_c else TEXT_MUTED,
+                                            color="#34D399" if listas_pack_c > 0 else TEXT_MUTED,
                                         ),
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -1449,14 +1410,14 @@ class PickingModulo:
                     )
                 )
 
-            # Llenar Tabla Línea 1: OV Estándar
+            # Llenar Tabla Línea 1: OV Estándar (Solo PENDIENTE_PICKING y PENDIENTE_PACKING)
             tabla_packing_normal.rows.clear()
             for r_norm in normales_pack:
                 est_n = r_norm["estado"]
                 badge_n = (
-                    crear_badge_estado(est_n, "#065F46", "#D1FAE5")
-                    if est_n in ("EMPACADO", "COMPLETADO", "LIBERADO")
-                    else crear_badge_estado(est_n, "#92400E", "#FEF3C7")
+                    crear_badge_estado("PENDIENTE PACKING", "#0369A1", "#E0F2FE")
+                    if est_n == "PENDIENTE_PACKING"
+                    else crear_badge_estado("PENDIENTE PICKING", "#92400E", "#FEF3C7")
                 )
                 tabla_packing_normal.rows.append(
                     ft.DataRow(
@@ -1464,34 +1425,34 @@ class PickingModulo:
                             ft.DataCell(ft.Text(r_norm["ov"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                             ft.DataCell(ft.Text(str(r_norm.get("fecha_ov") or "-"), size=11, color="#34D399")),
                             ft.DataCell(ft.Text(f"{r_norm['corte']} hrs", size=11, weight=ft.FontWeight.BOLD, color="#A78BFA")),
-                            ft.DataCell(ft.Text(r_norm["cliente"][:34], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(r_norm["cliente"][:32], size=11, color=TEXT_WHITE)),
                             ft.DataCell(badge_n),
                             ft.DataCell(
                                 ft.Row(
                                     [
                                         boton_primario(
-                                            "EMPACAR",
-                                            ft.Icons.INVENTORY_2_OUTLINED,
-                                            lambda ev, it=r_norm: cambiar_estado_packing_ov(it, "EMPACADO"),
-                                            "#047857" if est_n != "EMPACADO" else "#334155",
+                                            "FIN PICKING" if est_n == "PENDIENTE_PICKING" else "EN PACKING ✓",
+                                            ft.Icons.PLAY_ARROW_ROUNDED,
+                                            lambda ev, it=r_norm: cambiar_estado_ov_db(it, "PENDIENTE_PACKING") or renderizar_monitor_cortes_y_tablas(),
+                                            "#0284C7" if est_n == "PENDIENTE_PICKING" else "#334155",
                                             height_val=26,
                                         ),
                                         boton_primario(
-                                            "LPN 15x10",
-                                            ft.Icons.QR_CODE_2_ROUNDED,
-                                            lambda ev, it=r_norm: descargar_lpn_consolidado_ov(it),
+                                            "EMPACAR -> FACTURACIÓN",
+                                            ft.Icons.INVENTORY_2_OUTLINED,
+                                            lambda ev, it=r_norm: abrir_modal_empaque_y_pasar_a_facturacion(it),
+                                            "#047857",
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
+                                            "VER SKUs",
+                                            ft.Icons.VISIBILITY_OUTLINED,
+                                            lambda ev, it=r_norm: mostrar_modal_detalle_ov(it["ov"], it),
                                             ACCENT_TEAL,
                                             height_val=26,
                                         ),
-                                        boton_primario(
-                                            "PACKING PDF/XLS",
-                                            ft.Icons.DOWNLOAD_ROUNDED,
-                                            lambda ev, it=r_norm: exportar_ov_farmacia_excel_pdf(it),
-                                            "#B45309",
-                                            height_val=26,
-                                        ),
                                     ],
-                                    spacing=6,
+                                    spacing=5,
                                     tight=True,
                                 )
                             ),
@@ -1499,14 +1460,14 @@ class PickingModulo:
                     )
                 )
 
-            # Llenar Tabla Línea 2: OV Farmacia (-FA)
+            # Llenar Tabla Línea 2: OV Farmacia (-FA) (Solo PENDIENTE_PICKING y PENDIENTE_PACKING)
             tabla_packing_farmacia.rows.clear()
             for r_fa in farmacias_pack:
                 est_f = r_fa["estado"]
                 badge_f = (
-                    crear_badge_estado(est_f, "#065F46", "#D1FAE5")
-                    if est_f in ("EMPACADO", "COMPLETADO", "LIBERADO")
-                    else crear_badge_estado(est_f, "#92400E", "#FEF3C7")
+                    crear_badge_estado("PENDIENTE PACKING", "#0369A1", "#E0F2FE")
+                    if est_f == "PENDIENTE_PACKING"
+                    else crear_badge_estado("PENDIENTE PICKING", "#92400E", "#FEF3C7")
                 )
                 tabla_packing_farmacia.rows.append(
                     ft.DataRow(
@@ -1514,34 +1475,113 @@ class PickingModulo:
                             ft.DataCell(ft.Text(r_fa["ov"], weight=ft.FontWeight.BOLD, size=11, color="#FBBF24")),
                             ft.DataCell(ft.Text(str(r_fa.get("fecha_ov") or "-"), size=11, color="#34D399")),
                             ft.DataCell(ft.Text(f"{r_fa['corte']} hrs", size=11, weight=ft.FontWeight.BOLD, color="#A78BFA")),
-                            ft.DataCell(ft.Text(r_fa["cliente"][:34], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(r_fa["cliente"][:32], size=11, color=TEXT_WHITE)),
                             ft.DataCell(badge_f),
                             ft.DataCell(
                                 ft.Row(
                                     [
                                         boton_primario(
-                                            "VALIDAR -FA",
-                                            ft.Icons.VERIFIED_USER_OUTLINED,
-                                            lambda ev, it=r_fa: (cambiar_estado_packing_ov(it, "EMPACADO"), exportar_ov_farmacia_excel_pdf(it)),
-                                            "#0F766E" if est_f != "EMPACADO" else "#334155",
+                                            "FIN PICKING" if est_f == "PENDIENTE_PICKING" else "EN PACKING ✓",
+                                            ft.Icons.PLAY_ARROW_ROUNDED,
+                                            lambda ev, it=r_fa: cambiar_estado_ov_db(it, "PENDIENTE_PACKING") or renderizar_monitor_cortes_y_tablas(),
+                                            "#0284C7" if est_f == "PENDIENTE_PICKING" else "#334155",
                                             height_val=26,
                                         ),
                                         boton_primario(
-                                            "LPN 15x10",
+                                            "EMPACAR -FA -> FACTURACIÓN",
+                                            ft.Icons.VERIFIED_USER_OUTLINED,
+                                            lambda ev, it=r_fa: abrir_modal_empaque_y_pasar_a_facturacion(it),
+                                            "#0F766E",
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
+                                            "VER SKUs",
+                                            ft.Icons.VISIBILITY_OUTLINED,
+                                            lambda ev, it=r_fa: mostrar_modal_detalle_ov(it["ov"], it),
+                                            ACCENT_TEAL,
+                                            height_val=26,
+                                        ),
+                                    ],
+                                    spacing=5,
+                                    tight=True,
+                                )
+                            ),
+                        ]
+                    )
+                )
+
+            # Llenar Tabla Módulo 4: FACTURACIÓN (OVs en PENDIENTE_FACTURACION)
+            q_fact = (txt_buscar_facturacion.value or "").strip().upper()
+            tabla_facturacion_ns.rows.clear()
+            checks_facturacion.clear()
+
+            filtradas_fact = []
+            for r_fc in ovs_en_facturacion:
+                if q_fact and not any(
+                    q_fact in str(r_fc.get(k, "")).upper()
+                    for k in ("ov", "cliente", "comuna", "lpn", "tipo_empaque")
+                ):
+                    continue
+                filtradas_fact.append(r_fc)
+
+            lbl_resumen_facturacion.value = (
+                f"{len(filtradas_fact)} OV(s) en bandeja de Facturación listas para descargar Excel y subir a NetSuite."
+            )
+
+            for r_fc in filtradas_fact:
+                ov_c = r_fc["ov"]
+                es_fa = r_fc.get("es_farmacia", False)
+                est_fc = r_fc.get("estado", "PENDIENTE_FACTURACION")
+                chk_f = ft.Checkbox(value=(est_fc == "PENDIENTE_FACTURACION"), active_color=ACCENT_CYAN)
+                checks_facturacion[ov_c] = (chk_f, r_fc)
+
+                badge_est_fc = (
+                    crear_badge_estado("FACTURADO", "#065F46", "#D1FAE5")
+                    if est_fc == "FACTURADO"
+                    else crear_badge_estado("PENDIENTE FACTURACIÓN", "#1E3A8A", "#DBEAFE")
+                )
+
+                unid_emp = int(r_fc.get("unidades_pickeadas") or r_fc.get("unidades") or 0)
+                bultos_txt = f"{r_fc.get('bultos', 1)} {r_fc.get('tipo_empaque', 'BULTO')}(S)"
+
+                tabla_facturacion_ns.rows.append(
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(chk_f),
+                            ft.DataCell(ft.Text(ov_c, weight=ft.FontWeight.BOLD, size=11, color="#FBBF24" if es_fa else ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(str(r_fc.get("fecha_ov") or "-"), size=11, color="#34D399")),
+                            ft.DataCell(ft.Text("FARMACIA (-FA)" if es_fa else "ESTÁNDAR", size=10, weight=ft.FontWeight.BOLD, color="#FBBF24" if es_fa else TEXT_MUTED)),
+                            ft.DataCell(ft.Text(r_fc["cliente"][:28], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(str(r_fc.get("comuna") or "SANTIAGO"), size=11, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(bultos_txt, size=11, weight=ft.FontWeight.BOLD, color="#A78BFA")),
+                            ft.DataCell(ft.Text(f"{unid_emp} UN", size=11, weight=ft.FontWeight.BOLD, color="#34D399")),
+                            ft.DataCell(badge_est_fc),
+                            ft.DataCell(
+                                ft.Row(
+                                    [
+                                        boton_primario(
+                                            "EXCEL NS",
+                                            ft.Icons.TABLE_VIEW_ROUNDED,
+                                            lambda ev, it=r_fc: exportar_excel_facturacion_netsuite(solo_ov=it),
+                                            ACCENT_BLUE,
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
+                                            "LPN BULTOS",
                                             ft.Icons.QR_CODE_2_ROUNDED,
-                                            lambda ev, it=r_fa: descargar_lpn_consolidado_ov(it),
+                                            lambda ev, it=r_fc: imprimir_etiqueta_packing_bultos_ov(it),
                                             ACCENT_TEAL,
                                             height_val=26,
                                         ),
                                         boton_primario(
-                                            "PACKING PDF/XLS",
-                                            ft.Icons.DOWNLOAD_ROUNDED,
-                                            lambda ev, it=r_fa: exportar_ov_farmacia_excel_pdf(it),
-                                            "#B45309",
+                                            "FACTURADA ✓",
+                                            ft.Icons.CHECK_CIRCLE_OUTLINE,
+                                            lambda ev, it=r_fc: marcar_ovs_como_facturadas(ov_unica=it),
+                                            "#047857" if est_fc != "FACTURADO" else "#334155",
                                             height_val=26,
                                         ),
                                     ],
-                                    spacing=6,
+                                    spacing=4,
                                     tight=True,
                                 )
                             ),
@@ -1562,12 +1602,14 @@ class PickingModulo:
 
         dd_filtro_corte.on_select = cambiar_filtro_corte_dropdown
         dd_filtro_corte.on_change = cambiar_filtro_corte_dropdown
+        txt_buscar_facturacion.on_change = lambda e: renderizar_monitor_cortes_y_tablas()
+        sw_ver_ya_facturadas.on_change = lambda e: renderizar_monitor_cortes_y_tablas()
 
         def cargar_monitor_packing_dual(e=None):
             recargar_datos_supabase()
             renderizar_monitor_cortes_y_tablas()
 
-        # --- 8. EXTRACCIÓN DE OLAS DESDE NETSUITE, SEPARACIÓN (-FA) Y LIBERACIÓN A RF ---
+        # --- 8. EXTRACCIÓN DE OLAS DESDE NETSUITE Y LIBERACIÓN A RF ---
         def alternar_canal_farmacia_manual(item_ola: dict):
             es_fa_nuevo = not item_ola.get("es_farmacia", False)
             item_ola["es_farmacia"] = es_fa_nuevo
@@ -1632,23 +1674,16 @@ class PickingModulo:
             for item in olas_extraidas_ns:
                 item["seleccionada"] = True
             renderizar_tabla_previsualizacion()
-            notificar(f"Todas las {len(olas_extraidas_ns)} olas han sido marcadas.", ACCENT_TEAL)
 
         def marcar_solo_farmacia_olas(e=None):
-            cont_fa = 0
             for item in olas_extraidas_ns:
-                es_fa = bool(item.get("es_farmacia", False))
-                item["seleccionada"] = es_fa
-                if es_fa:
-                    cont_fa += 1
+                item["seleccionada"] = bool(item.get("es_farmacia", False))
             renderizar_tabla_previsualizacion()
-            notificar(f"Se marcaron únicamente las {cont_fa} olas de Farmacia (-FA).", "#D97706")
 
         def desmarcar_todas_olas(e=None):
             for item in olas_extraidas_ns:
                 item["seleccionada"] = False
             renderizar_tabla_previsualizacion()
-            notificar("Todas las olas han sido desmarcadas.", "#475569")
 
         def obtener_skus_farmacia_supabase() -> set:
             skus_fa = set()
@@ -1658,40 +1693,13 @@ class PickingModulo:
                     sku_c = str(row.get("sku") or "").strip().upper()
                     if not sku_c:
                         continue
-                    marca_c = str(row.get("marca") or row.get("categoria") or row.get("familia") or "").strip().upper()
-                    ubic_fija = str(
-                        row.get("ubicacion_picking_fija")
-                        or row.get("ubicacion_picking")
-                        or row.get("ubicacion_sugerida")
-                        or ""
-                    ).strip().upper()
-                    if (
-                        "BOEHRINGER" in marca_c
-                        or "FARM" in marca_c
-                        or "-FA" in marca_c
-                        or "PICK-FARM" in ubic_fija
-                        or "FARM" in ubic_fija
-                        or sku_c.endswith("-FA")
-                    ):
+                    marca_c = str(row.get("marca") or row.get("categoria") or "").strip().upper()
+                    ubic_fija = str(row.get("ubicacion_picking_fija") or row.get("ubicacion_picking") or "").strip().upper()
+                    if "BOEHRINGER" in marca_c or "FARM" in marca_c or "-FA" in marca_c or "FARM" in ubic_fija or sku_c.endswith("-FA"):
                         skus_fa.add(sku_c)
                         skus_fa.add(sku_c.split("-")[0].strip())
             except Exception:
                 pass
-
-            if os.path.exists("config_maestra_extra.json"):
-                try:
-                    with open("config_maestra_extra.json", "r", encoding="utf-8") as f_ext:
-                        extra_map = json.load(f_ext)
-                    for sku_k, datos_k in extra_map.items():
-                        cat_k = str((datos_k or {}).get("categoria") or "").upper()
-                        ubi_k = str((datos_k or {}).get("ubicacion_picking") or "").upper()
-                        if "FARM" in cat_k or "BOEHRINGER" in cat_k or "-FA" in cat_k or "FARM" in ubi_k:
-                            s_up = str(sku_k).strip().upper()
-                            skus_fa.add(s_up)
-                            skus_fa.add(s_up.split("-")[0].strip())
-                except Exception:
-                    pass
-
             return skus_fa
 
         def normalizar_fecha_comparacion(val_f: str) -> str:
@@ -1722,14 +1730,7 @@ class PickingModulo:
             page.update()
 
             try:
-                from conexion_erp import obtener_ultimo_error_netsuite
-            except Exception:
-                obtener_ultimo_error_netsuite = lambda: ""
-
-            try:
                 skus_fa_catalogo = obtener_skus_farmacia_supabase()
-                df_ov = None
-
                 q_ov = f"""
                     SELECT
                         t.id AS ov_internal_id,
@@ -1752,51 +1753,17 @@ class PickingModulo:
                     AND t.trandate <= TO_DATE('{f_hasta}', 'YYYY-MM-DD')
                     ORDER BY t.id DESC
                 """
-                try:
-                    df_ov = consultar_netsuite(q_ov, max_registros=1000)
-                except Exception:
-                    df_ov = None
-
-                usando_fallback = False
-                if df_ov is None or df_ov.empty:
-                    usando_fallback = True
-                    q_fallback = """
-                        SELECT
-                            t.id AS ov_internal_id,
-                            t.type AS tipo_doc,
-                            t.tranid AS numero_ov,
-                            t.memo AS nota_ot,
-                            TO_CHAR(t.trandate, 'YYYY-MM-DD') AS fecha_ov,
-                            BUILTIN.DF(t.entity) AS cliente,
-                            BUILTIN.DF(t.transferlocation) AS bodega_destino,
-                            BUILTIN.DF(tl.location) AS bodega_ns,
-                            i.itemid AS sku,
-                            BUILTIN.DF(tl.item) AS descripcion,
-                            ABS(tl.quantity) AS cantidad
-                        FROM transaction t
-                        INNER JOIN transactionline tl ON t.id = tl.transaction
-                        INNER JOIN item i ON tl.item = i.id
-                        WHERE t.type IN ('SalesOrd', 'TrnfrOrd')
-                        AND tl.mainline = 'F'
-                        ORDER BY t.id DESC
-                    """
-                    try:
-                        df_ov = consultar_netsuite(q_fallback, max_registros=500)
-                    except Exception:
-                        df_ov = None
+                df_ov = consultar_netsuite(q_ov, max_registros=1000)
 
                 if df_ov is None or df_ov.empty:
-                    detalle_real = obtener_ultimo_error_netsuite() or "0 registros devueltos por SuiteQL."
-                    msg_mostrar = f"Diagnóstico NetSuite: {detalle_real}"
-                    notificar(msg_mostrar, "#B91C1C")
-                    txt_estado_erp.value = msg_mostrar
-                    txt_estado_erp.color = "#F87171"
+                    notificar(f"No se encontraron OVs entre {f_desde} y {f_hasta}.", "#D97706")
+                    txt_estado_erp.value = f"Sin OVs en {f_desde}..{f_hasta}."
+                    txt_estado_erp.color = "#FBBF24"
                     page.update()
                     return
 
                 agrupado_olas = {}
                 corte_forzado_ui = None if dd_corte_asignar.value == "AUTO" else dd_corte_asignar.value
-                fechas_detectadas_ns = set()
 
                 for _, fila in df_ov.iterrows():
                     cant_item = int(float(fila.get("cantidad") or 0))
@@ -1811,13 +1778,6 @@ class PickingModulo:
 
                     fh_raw = str(fila.get("fecha_ov") or "")
                     f_ov_norm = normalizar_fecha_comparacion(fh_raw)
-                    if f_ov_norm:
-                        fechas_detectadas_ns.add(f_ov_norm)
-
-                    if usando_fallback and f_desde and f_hasta and f_ov_norm:
-                        if not (f_desde <= f_ov_norm <= f_hasta):
-                            continue
-
                     desc_str = str(fila.get("descripcion") or "").strip()
                     bodega_ns = str(fila.get("bodega_ns") or "")
                     tipo_doc = str(fila.get("tipo_doc") or "").strip()
@@ -1838,14 +1798,13 @@ class PickingModulo:
                         ov_base = ov_raw.removesuffix("-FA").strip()
                         ov_clave = f"{ov_base}-FA" if es_linea_fa else ov_base
 
-                    ubic_linea = "PICK-FARM" if es_linea_fa else "ZONA-PICKING"
-
                     if ov_clave not in agrupado_olas:
                         agrupado_olas[ov_clave] = {
                             "ov": ov_clave,
                             "ov_original": ov_raw,
                             "fecha_ov": f_ov_norm or f_desde,
                             "cliente": cli_str,
+                            "comuna": "CONCEPCIÓN" if "CONCEPCION" in cli_str.upper() else "SANTIAGO",
                             "fecha_hora": fh_raw,
                             "corte": clasificar_corte_horario(None, corte_forzado_ui),
                             "es_farmacia": es_linea_fa,
@@ -1857,40 +1816,22 @@ class PickingModulo:
                         }
                     agrupado_olas[ov_clave]["unidades"] += cant_item
                     agrupado_olas[ov_clave]["lineas_cnt"] += 1
-                    agrupado_olas[ov_clave]["lineas_detalle"].append(
-                        {
-                            "sku": sku_str,
-                            "descripcion": desc_str,
-                            "cantidad": cant_item,
-                            "ubicacion": ubic_linea,
-                            "es_farmacia": es_linea_fa,
-                        }
-                    )
-
-                if not agrupado_olas:
-                    ult_fechas = ", ".join(sorted(fechas_detectadas_ns, reverse=True)[:4]) if fechas_detectadas_ns else "Ninguna"
-                    notificar(f"No hay OVs entre {f_desde} y {f_hasta}. Últimas fechas con OVs: {ult_fechas}", "#D97706")
-                    txt_estado_erp.value = f"Sin OVs en {f_desde}..{f_hasta}. Últimas fechas: {ult_fechas}"
-                    txt_estado_erp.color = "#FBBF24"
-                    page.update()
-                    return
+                    agrupado_olas[ov_clave]["lineas_detalle"].append({
+                        "sku": sku_str,
+                        "descripcion": desc_str,
+                        "cantidad": cant_item,
+                        "es_farmacia": es_linea_fa,
+                    })
 
                 olas_extraidas_ns = list(agrupado_olas.values())
                 cant_fa = sum(1 for x in olas_extraidas_ns if x.get("es_farmacia"))
                 cant_norm = len(olas_extraidas_ns) - cant_fa
-                txt_estado_erp.value = (
-                    f"Extracción exitosa: {len(olas_extraidas_ns)} Olas ({cant_norm} Estándar | {cant_fa} Farmacia -FA)."
-                )
+                txt_estado_erp.value = f"Extracción exitosa: {len(olas_extraidas_ns)} Olas ({cant_norm} Estándar | {cant_fa} Farmacia -FA)."
                 txt_estado_erp.color = "#34D399"
-                notificar(
-                    f"{len(olas_extraidas_ns)} Olas extraídas ({cant_norm} Normal y {cant_fa} Farmacia -FA).",
-                    "#047857",
-                )
                 renderizar_tabla_previsualizacion()
             except Exception as ex:
                 txt_estado_erp.value = f"Error consultando NetSuite: {ex}"
                 txt_estado_erp.color = "#F87171"
-                notificar(f"Error extrayendo OVs: {ex}", "#B91C1C")
                 page.update()
 
         def liberar_olas_a_terminal_rf(e=None):
@@ -1900,14 +1841,13 @@ class PickingModulo:
                 or (item["ov"] not in checks_liberacion and item.get("seleccionada", False))
             ]
             if not seleccionadas:
-                notificar("Seleccione al menos una Orden de Venta (casilla azul) para liberar a RF.", "#D97706")
+                notificar("Seleccione al menos una Orden de Venta para liberar a RF.", "#D97706")
                 return
 
             corte_forzado_ui = None if dd_corte_asignar.value == "AUTO" else dd_corte_asignar.value
             liberadas_ok = 0
-            lineas_insertadas_total = 0
-            errores_db = []
             ovs_liberadas_set = set()
+            bodega_act = obtener_bodega_activa(self.page)
 
             for item in seleccionadas:
                 corte_final = corte_forzado_ui or item.get("corte", "09:00")
@@ -1919,25 +1859,15 @@ class PickingModulo:
                 cli_nom = str(item.get("cliente") or "CLIENTE REGISTRADO").strip()
                 canal_str = "FARMACIA (-FA)" if es_fa else "ESTANDAR"
                 id_ext_str = str(item.get("id_externo_ns") or item.get("ov_original") or ov_final).strip()
-                if es_fa and not id_ext_str.upper().endswith("-FA") and not id_ext_str.upper().startswith("OT-"):
-                    id_ext_str = f"{id_ext_str}-FA"
 
-                fh_raw = str(item.get("fecha_hora") or "").strip()
-                fecha_iso = datetime.now().isoformat()
-                if fh_raw and len(fh_raw) >= 10:
-                    try:
-                        fecha_iso = datetime.fromisoformat(fh_raw.replace(" ", "T")).isoformat()
-                    except Exception:
-                        fecha_iso = datetime.now().isoformat()
-
-                bodega_act = obtener_bodega_activa(self.page)
-                payload_ov_exacto = {
+                # Estado inicial estricto: PENDIENTE_PICKING
+                payload_ov = {
                     "bodega": bodega_act,
                     "id_externo_ns": id_ext_str,
                     "numero_ov": ov_final,
                     "cliente_nombre": cli_nom,
                     "canal_venta": canal_str,
-                    "fecha_emision_ns": fecha_iso,
+                    "fecha_emision_ns": datetime.now().isoformat(),
                     "estado_ns": "PENDIENTE_PICKING",
                 }
 
@@ -1946,24 +1876,20 @@ class PickingModulo:
                     r_exist = supabase.table("netsuite_ordenes_venta").select("id").eq("numero_ov", ov_final).limit(1).execute()
                     if r_exist.data:
                         id_ov_db = r_exist.data[0].get("id")
-                        supabase.table("netsuite_ordenes_venta").update(payload_ov_exacto).eq("id", id_ov_db).execute()
+                        supabase.table("netsuite_ordenes_venta").update(payload_ov).eq("id", id_ov_db).execute()
                     else:
-                        r_ins = supabase.table("netsuite_ordenes_venta").insert(payload_ov_exacto).execute()
+                        r_ins = supabase.table("netsuite_ordenes_venta").insert(payload_ov).execute()
                         if r_ins.data:
                             id_ov_db = r_ins.data[0].get("id")
-                except Exception as ex_cab:
+                except Exception:
                     try:
-                        r_b1 = supabase.table("netsuite_ordenes_venta").select("id").eq("numero_ov", ov_final).limit(1).execute()
-                        if r_b1.data:
-                            id_ov_db = r_b1.data[0].get("id")
-                        else:
-                            r_b2 = supabase.table("netsuite_ordenes_venta").select("id").eq("id_externo_ns", id_ext_str).limit(1).execute()
-                            if r_b2.data:
-                                id_ov_db = r_b2.data[0].get("id")
+                        copia_sb = dict(payload_ov)
+                        copia_sb.pop("bodega", None)
+                        r_ins2 = supabase.table("netsuite_ordenes_venta").insert(copia_sb).execute()
+                        if r_ins2.data:
+                            id_ov_db = r_ins2.data[0].get("id")
                     except Exception:
                         pass
-                    if id_ov_db is None:
-                        errores_db.append(f"Cabecera {ov_final}: {ex_cab}")
 
                 lineas_det = item.get("lineas_detalle") or []
                 if id_ov_db is not None and lineas_det:
@@ -1971,74 +1897,38 @@ class PickingModulo:
                         supabase.table("netsuite_detalle_ov").delete().eq("orden_id", id_ov_db).execute()
                     except Exception:
                         pass
-
-                    lote_detalles = []
-                    for idx_l, lin in enumerate(lineas_det, start=1):
-                        sku_l = str(lin.get("sku") or "SKU").strip().upper()
-                        cant_l = int(float(lin.get("cantidad") or lin.get("cantidad_pedida") or 1))
-                        lote_detalles.append({
+                    lote_detalles = [
+                        {
                             "orden_id": int(id_ov_db),
-                            "linea_ns": int(idx_l),
-                            "sku": sku_l,
-                            "cantidad_pedida": cant_l,
-                            "cantidad_comprometida": cant_l,
+                            "linea_ns": idx_l,
+                            "sku": str(lin.get("sku") or "SKU").strip().upper(),
+                            "cantidad_pedida": int(float(lin.get("cantidad") or 1)),
+                            "cantidad_comprometida": int(float(lin.get("cantidad") or 1)),
                             "cantidad_pickeada": 0,
                             "lote_asignado": "",
                             "estado_linea": "PENDIENTE",
                             "lotes_pickeados": "",
-                        })
-
+                        }
+                        for idx_l, lin in enumerate(lineas_det, start=1)
+                    ]
                     try:
                         supabase.table("netsuite_detalle_ov").insert(lote_detalles).execute()
-                        lineas_insertadas_total += len(lote_detalles)
                     except Exception:
-                        for fila_d in lote_detalles:
-                            try:
-                                supabase.table("netsuite_detalle_ov").insert(fila_d).execute()
-                                lineas_insertadas_total += 1
-                            except Exception as ex_d_ind:
-                                errores_db.append(f"Detalle {ov_final} ({fila_d['sku']}): {ex_d_ind}")
+                        pass
 
                 ovs_liberadas_set.add(ov_final)
-                registros_locales_mem[:] = [r for r in registros_locales_mem if r["ov"] != ov_final]
-                registros_locales_mem.insert(
-                    0,
-                    {
-                        "raw": payload_ov_exacto,
-                        "id": id_ov_db,
-                        "ov": ov_final,
-                        "fecha_ov": item.get("fecha_ov", datetime.now().strftime("%Y-%m-%d")),
-                        "cliente": cli_nom,
-                        "estado": "PENDIENTE_PICKING",
-                        "es_farmacia": es_fa,
-                        "corte": corte_final,
-                        "unidades": int(item.get("unidades", 1)),
-                        "unidades_pickeadas": 0,
-                        "lineas_detalle": lineas_det,
-                        "tabla_origen": "netsuite_ordenes_venta",
-                    },
-                )
                 liberadas_ok += 1
 
             olas_extraidas_ns[:] = [it for it in olas_extraidas_ns if it["ov"] not in ovs_liberadas_set]
-            cant_fa_lib = sum(1 for x in seleccionadas if x.get("es_farmacia"))
-            cant_norm_lib = liberadas_ok - cant_fa_lib
-
-            if errores_db:
-                notificar(f"Aviso Supabase: {errores_db[0][:100]}", "#D97706")
-            else:
-                notificar(
-                    f"¡{liberadas_ok} OVs y {lineas_insertadas_total} líneas enviadas a RF! ({cant_norm_lib} Normal | {cant_fa_lib} -FA)",
-                    "#047857",
-                )
+            notificar(f"¡{liberadas_ok} OVs liberadas en estado PENDIENTE DE PICKING!", "#047857")
             renderizar_tabla_previsualizacion()
             cargar_monitor_packing_dual()
 
-        # --- 9. COMPOSICIÓN DE PANELES RESPONSIVOS (ADAPTABLES A MONITOR Y NOTEBOOK) ---
+        # --- 9. COMPOSICIÓN DE PANELES RESPONSIVOS ---
         panel_relojes_izquierdo = tarjeta_dark(
             ft.Column(
                 [
-                    ft.Text("OVs capturadas por Corte Horario (Clic para filtrar)", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ft.Text("OVs Activas por Corte Horario (Clic para filtrar)", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                     ft.Row(
                         [
                             crear_caja_digital(lbl_corte_09, "Corte 09:00", ACCENT_PURPLE, 82, lambda e: aplicar_filtro_corte_rapido("09:00")),
@@ -2050,13 +1940,13 @@ class PickingModulo:
                         wrap=True,
                     ),
                     ft.Divider(color=BORDER_COLOR, height=8),
-                    ft.Text("Indicadores físicos de Olas y Estaciones de Packing", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ft.Text("Flujo Operativo: Picking -> Packing -> Facturación", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                     ft.Row(
                         [
-                            crear_caja_digital(lbl_kpi_total_ovs, "Total OVs", ACCENT_TEAL, 82, lambda e: aplicar_filtro_corte_rapido("TODOS")),
+                            crear_caja_digital(lbl_kpi_total_ovs, "En Bodega", ACCENT_TEAL, 82, lambda e: aplicar_filtro_corte_rapido("TODOS")),
                             crear_caja_digital(lbl_kpi_ov_normal, "OV Normal", ACCENT_BLUE, 82),
                             crear_caja_digital(lbl_kpi_ov_farma, "OV Farmacia", "#D97706", 82),
-                            crear_caja_digital(lbl_kpi_avance_pack, "Avance Pack", "#10B981", 82),
+                            crear_caja_digital(lbl_kpi_pend_fact, "Por Facturar", "#10B981", 82, lambda e: self.sel_sub_olas(3)),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_AROUND,
                         wrap=True,
@@ -2071,15 +1961,15 @@ class PickingModulo:
                 [
                     ft.Row(
                         [
-                            ft.Text("Distribución de OVs por Corte Horario (09, 10, 12 y 13 hrs) y N° de OV", size=12.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                            ft.Text("Distribución de OVs Activas en Bodega por Corte Horario", size=12.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                             ft.Row(
                                 [
                                     ft.Container(width=10, height=10, bgcolor=ACCENT_BLUE, border_radius=2),
-                                    ft.Text("En Picking", size=10, color=TEXT_MUTED),
+                                    ft.Text("Pendiente Picking", size=10, color=TEXT_MUTED),
                                     ft.Container(width=10, height=10, bgcolor="#FBBF24", border_radius=2),
                                     ft.Text("Farmacia (-FA)", size=10, color=TEXT_MUTED),
                                     ft.Container(width=10, height=10, bgcolor="#10B981", border_radius=2),
-                                    ft.Text("Empacado", size=10, color=TEXT_MUTED),
+                                    ft.Text("En Packing", size=10, color=TEXT_MUTED),
                                 ],
                                 spacing=6,
                             ),
@@ -2118,14 +2008,8 @@ class PickingModulo:
 
         bloque_superior_kpi_cortes = ft.ResponsiveRow(
             [
-                ft.Container(
-                    col={"xs": 12, "sm": 12, "md": 12, "lg": 5, "xl": 4},
-                    content=panel_relojes_izquierdo,
-                ),
-                ft.Container(
-                    col={"xs": 12, "sm": 12, "md": 12, "lg": 7, "xl": 8},
-                    content=panel_grafico_derecho,
-                ),
+                ft.Container(col={"xs": 12, "sm": 12, "md": 12, "lg": 5, "xl": 4}, content=panel_relojes_izquierdo),
+                ft.Container(col={"xs": 12, "sm": 12, "md": 12, "lg": 7, "xl": 8}, content=panel_grafico_derecho),
             ],
             spacing=10,
             run_spacing=10,
@@ -2143,7 +2027,7 @@ class PickingModulo:
                             ft.Column(
                                 [
                                     ft.Text(
-                                        "PRE-VISUALIZACIÓN DE OLAS EXTRAÍDAS DESDE NETSUITE (CLASIFICADAS POR CORTE)",
+                                        "PRE-VISUALIZACIÓN DE OLAS EXTRAÍDAS DESDE NETSUITE (NACEN EN PENDIENTE DE PICKING)",
                                         size=13,
                                         weight=ft.FontWeight.BOLD,
                                         color=TEXT_WHITE,
@@ -2154,11 +2038,11 @@ class PickingModulo:
                             ),
                             ft.Row(
                                 [
-                                    boton_primario("PLEGAR / DESPLEGAR TABLA", ft.Icons.UNFOLD_LESS_ROUNDED, toggle_visibilidad_prev_ns, "#1E3A8A", height_val=30),
+                                    boton_primario("PLEGAR / DESPLEGAR", ft.Icons.UNFOLD_LESS_ROUNDED, toggle_visibilidad_prev_ns, "#1E3A8A", height_val=30),
                                     boton_primario("MARCAR TODAS", ft.Icons.CHECK_BOX_OUTLINED, marcar_todas_olas, "#334155", height_val=30),
                                     boton_primario("SOLO FARMACIA (-FA)", ft.Icons.MEDICAL_SERVICES_OUTLINED, marcar_solo_farmacia_olas, "#D97706", height_val=30),
                                     boton_primario("DESMARCAR TODAS", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED, desmarcar_todas_olas, "#475569", height_val=30),
-                                    boton_primario("2. LIBERAR OLAS A TERMINAL RF", ft.Icons.SEND_ROUNDED, liberar_olas_a_terminal_rf, "#047857", height_val=30),
+                                    boton_primario("2. LIBERAR OLAS A PICKING RF", ft.Icons.SEND_ROUNDED, liberar_olas_a_terminal_rf, "#047857", height_val=30),
                                 ],
                                 spacing=6,
                                 wrap=True,
@@ -2185,7 +2069,7 @@ class PickingModulo:
                                     [
                                         ft.Icon(ft.Icons.INVENTORY_2_OUTLINED, color=ACCENT_CYAN, size=18),
                                         ft.Text(
-                                            "LÍNEA DE PACKING 1: ÓRDENES DE VENTA ESTÁNDAR (OV NORMAL)",
+                                            "LÍNEA DE PACKING 1: ÓRDENES DE VENTA ESTÁNDAR (AL CERRAR PACKING PASAN A FACTURACIÓN)",
                                             size=12.5,
                                             weight=ft.FontWeight.BOLD,
                                             color=ACCENT_CYAN,
@@ -2232,8 +2116,8 @@ class PickingModulo:
                                     spacing=6,
                                 ),
                                 boton_primario(
-                                    "EXPORTAR LOTE (EXCEL + PDF)",
-                                    ft.Icons.PICTURE_AS_PDF_OUTLINED,
+                                    "EXPORTAR PACKING LISTS (EXCEL)",
+                                    ft.Icons.TABLE_VIEW_OUTLINED,
                                     lambda e: exportar_ov_farmacia_excel_pdf(None),
                                     "#B45309",
                                     height_val=26,
@@ -2261,12 +2145,67 @@ class PickingModulo:
             page.update()
 
         fila_estaciones_packing_duales = ft.ResponsiveRow(
-            [
-                col_wrapper_pack_1,
-                col_wrapper_pack_2,
-            ],
+            [col_wrapper_pack_1, col_wrapper_pack_2],
             spacing=10,
             run_spacing=10,
+        )
+
+        # SUBVISTA 4: NUEVO MÓDULO DE FACTURACIÓN (SUBIDA A NETSUITE)
+        tarjeta_modulo_facturacion = tarjeta_dark(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Row(
+                                        [
+                                            ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, color="#34D399", size=22),
+                                            ft.Text(
+                                                "4. MÓDULO DE FACTURACIÓN: ÓRDENES EMPACADAS PENDIENTES DE FACTURAR EN NETSUITE",
+                                                size=14,
+                                                weight=ft.FontWeight.W_900,
+                                                color=TEXT_WHITE,
+                                            ),
+                                        ],
+                                        spacing=8,
+                                    ),
+                                    lbl_resumen_facturacion,
+                                ],
+                                spacing=2,
+                            ),
+                            ft.Row(
+                                [
+                                    txt_buscar_facturacion,
+                                    sw_ver_ya_facturadas,
+                                    boton_primario(
+                                        "DESCARGAR EXCEL PARA SUBIR A NETSUITE (FACTURACIÓN)",
+                                        ft.Icons.CLOUD_UPLOAD_ROUNDED,
+                                        exportar_excel_facturacion_netsuite,
+                                        "#047857",
+                                        height_val=34,
+                                    ),
+                                    boton_primario(
+                                        "MARCAR SELECCIONADAS COMO FACTURADAS",
+                                        ft.Icons.DONE_ALL_ROUNDED,
+                                        marcar_ovs_como_facturadas,
+                                        ACCENT_BLUE,
+                                        height_val=34,
+                                    ),
+                                ],
+                                spacing=8,
+                                wrap=True,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
+                    ),
+                    ft.Divider(color=BORDER_COLOR, height=4),
+                    cont_tabla_facturacion,
+                ],
+                spacing=8,
+            )
         )
 
         subvista_monitor_completo = ft.Column(
@@ -2293,13 +2232,19 @@ class PickingModulo:
             spacing=10,
         )
 
+        subvista_solo_facturacion = ft.Column(
+            [
+                tarjeta_modulo_facturacion,
+            ],
+            spacing=10,
+        )
+
         contenedor_subvista_olas = ft.Container(content=subvista_monitor_completo)
 
         def toggle_kpis_superiores(e=None):
             bloque_superior_kpi_cortes.visible = not bloque_superior_kpi_cortes.visible
             page.update()
 
-        # --- 10. BARRA SUPERIOR DE CONTROL Y ACCESOS RÁPIDOS DE PANTALLA ---
         chip_tip_horario = ft.Container(
             padding=ft.Padding.symmetric(horizontal=12, vertical=6),
             bgcolor="#181E20",
@@ -2310,7 +2255,7 @@ class PickingModulo:
                     ft.Row(
                         [
                             ft.Icon(ft.Icons.ACCESS_TIME_FILLED_ROUNDED, color="#38BDF8", size=16),
-                            ft.Text("CORTES: 09:00 • 10:00 • 12:00 • 13:00  |", size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                            ft.Text("FLUJO: PICKING -> PACKING -> FACTURACIÓN  |", size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                             lbl_tip_corte,
                         ],
                         spacing=6,
@@ -2318,9 +2263,10 @@ class PickingModulo:
                     ),
                     ft.Row(
                         [
-                            boton_primario("VISTA COMPLETA", ft.Icons.VIEW_QUILT_OUTLINED, lambda e: self.sel_sub_olas(0), ACCENT_TEAL, height_val=26),
-                            boton_primario("SOLO EXTRACCIÓN", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, lambda e: self.sel_sub_olas(1), "#1E3A8A", height_val=26),
-                            boton_primario("IR DIRECTO A PACKING 1 Y 2", ft.Icons.INVENTORY_OUTLINED, lambda e: self.sel_sub_olas(2), "#047857", height_val=26),
+                            boton_primario("1. MONITOR COMPLETO", ft.Icons.VIEW_QUILT_OUTLINED, lambda e: self.sel_sub_olas(0), ACCENT_TEAL, height_val=26),
+                            boton_primario("2. EXTRACCIÓN", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, lambda e: self.sel_sub_olas(1), "#1E3A8A", height_val=26),
+                            boton_primario("3. PACKING 1 Y 2", ft.Icons.INVENTORY_OUTLINED, lambda e: self.sel_sub_olas(2), "#0F766E", height_val=26),
+                            boton_primario("4. FACTURACIÓN NETSUITE", ft.Icons.RECEIPT_LONG_ROUNDED, lambda e: self.sel_sub_olas(3), "#047857", height_val=26),
                             boton_primario("OCULTAR / VER KPIs", ft.Icons.VISIBILITY_OUTLINED, toggle_kpis_superiores, "#475569", height_val=26),
                         ],
                         spacing=6,
@@ -2345,8 +2291,8 @@ class PickingModulo:
                                 [
                                     ft.Icon(ft.Icons.VIEW_IN_AR_OUTLINED, color=ACCENT_CYAN, size=22),
                                     ft.Text(
-                                        "KPI OLAS DE PICKING & ESTACIONES DE PACKING (NORMAL / -FA)",
-                                        size=14.5,
+                                        "OLAS DE PICKING, PACKING POR BULTOS/PALLET & FACTURACIÓN NETSUITE",
+                                        size=14,
                                         weight=ft.FontWeight.W_900,
                                         color=TEXT_WHITE,
                                     ),
@@ -2364,7 +2310,7 @@ class PickingModulo:
                                     ft.IconButton(
                                         icon=ft.Icons.SYNC_ROUNDED,
                                         icon_color=ACCENT_CYAN,
-                                        tooltip="Refrescar Estaciones de Packing y Cortes",
+                                        tooltip="Refrescar Picking, Packing y Facturación",
                                         on_click=cargar_monitor_packing_dual,
                                     ),
                                 ],
@@ -2402,16 +2348,19 @@ class PickingModulo:
         self.sub_completo = subvista_monitor_completo
         self.sub_extraccion = subvista_solo_extraccion
         self.sub_estaciones = subvista_solo_estaciones
+        self.sub_facturacion = subvista_solo_facturacion
         self.cargar_monitor_packing_dual_func = cargar_monitor_packing_dual
 
     def cargar_monitor_packing_dual(self, e=None):
         self.cargar_monitor_packing_dual_func(e)
 
     def sel_sub_olas(self, idx: int):
-        self.contenedor.content = [
+        vistas = [
             self.sub_completo,
             self.sub_extraccion,
             self.sub_estaciones,
-        ][idx]
+            self.sub_facturacion,
+        ]
+        self.contenedor.content = vistas[idx if 0 <= idx < len(vistas) else 0]
         self.cargar_monitor_packing_dual_func()
         self.page.update()

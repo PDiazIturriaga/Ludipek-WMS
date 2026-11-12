@@ -412,7 +412,12 @@ def main(page: ft.Page):
             ("Dashboards", ft.Icons.MONITOR_HEART_OUTLINED, dash.vista, dash.refrescar_dashboard, dash.sel_sub_dash, [("1. Vista Integral (BI + POs)", ft.Icons.DASHBOARD_OUTLINED), ("2. Productividad & Dock-to-Stock", ft.Icons.BOLT_ROUNDED), ("3. Ocupación, Quiebres & Dead Stock", ft.Icons.PIE_CHART_OUTLINE_ROUNDED)]),
             ("Recepción\n(Ingresos PO)", ft.Icons.CHECK_BOX_OUTLINED, recep.vista, recep.cargar_lista_asns, recep.sel_sub_inb, [("1. Recepción Activa (PO)", ft.Icons.FACT_CHECK_OUTLINED), ("2. Consultas de Recepción", ft.Icons.MANAGE_SEARCH_ROUNDED), ("3. Control Calidad (QA por PO)", ft.Icons.VERIFIED_USER_OUTLINED), ("4. Modificación de PO y LPNs", ft.Icons.EDIT_NOTE_ROUNDED)]),
             ("Almacenamiento\n(Mov. LPN)", ft.Icons.ACCOUNT_TREE_OUTLINED, puta.vista, puta.cargar_inventario_ubicaciones, puta.sel_sub_put, [("1. Putaway & Mapa de Stock", ft.Icons.DOMAIN_OUTLINED), ("2. Reabastecimiento (Reserva -> N1)", ft.Icons.ARROW_DOWNWARD_ROUNDED), ("3. Vista Combinada", ft.Icons.VIEW_AGENDA_OUTLINED), ("4. Gemelo Digital 3D", ft.Icons.VIEW_IN_AR_ROUNDED)]),
-            ("Olas\n(Packing)", ft.Icons.VIEW_IN_AR_OUTLINED, pick.vista, pick.cargar_monitor_packing_dual, pick.sel_sub_olas, [("1. Monitor Completo (Olas + Packing)", ft.Icons.VIEW_QUILT_OUTLINED), ("2. Extracción Olas NetSuite", ft.Icons.CLOUD_DOWNLOAD_OUTLINED), ("3. Estaciones Packing (Normal / -FA)", ft.Icons.INVENTORY_OUTLINED)]),
+            ("Olas\n(Packing)", ft.Icons.VIEW_IN_AR_OUTLINED, pick.vista, pick.cargar_monitor_packing_dual, pick.sel_sub_olas, [
+                ("1. Monitor Completo (Olas + Packing)", ft.Icons.VIEW_QUILT_OUTLINED),
+                ("2. Extracción Olas NetSuite", ft.Icons.CLOUD_DOWNLOAD_OUTLINED),
+                ("3. Estaciones Packing (Normal / -FA)", ft.Icons.INVENTORY_OUTLINED),
+                ("4. Facturación (Subida NetSuite)", ft.Icons.RECEIPT_LONG_ROUNDED),
+            ]),
             ("Mov. Stock\n(Inventario)", ft.Icons.LIBRARY_BOOKS_OUTLINED, inv.vista, getattr(inv, "actualizar_todos_los_datos_func", None), inv.sel_sub_inventario, [
                 ("1. Pasillos y Cruce ERP", ft.Icons.RULE_ROUNDED),
                 ("2. SKU Dirigido & Ubic. Vacías", ft.Icons.TRACK_CHANGES_ROUNDED),

@@ -395,6 +395,99 @@ def generar_pdf_masivo_lpns_po(codigo_po: str, registros_recepcion: list) -> str
             pass
     return nombre_archivo
 
+def generar_pdf_etiqueta_packing_bultos_15x10(
+    lpn: str,
+    numero_ov: str,
+    cliente: str,
+    comuna: str,
+    tipo_empaque: str = "BULTO",
+    total_bultos: int = 1,
+) -> str:
+    """Genera el PDF 15x10 cm de Packing con 1 etiqueta por cada Bulto/Pallet (1 de N, 2 de N...) sin tabla de SKUs."""
+    import qrcode
+
+    os.makedirs("temp_qrs", exist_ok=True)
+    os.makedirs("reportes_recepcion", exist_ok=True)
+
+    lpn_limpio = str(lpn or "S/LPN").strip().upper()
+    ov_limpia = str(numero_ov or "S/OV").strip().upper()
+    cli_limpio = _texto_pdf_seguro(str(cliente or "SIN CLIENTE").strip().upper())
+    comuna_limpia = _texto_pdf_seguro(str(comuna or "POR CONFIRMAR").strip().upper())
+    tipo_limpio = _texto_pdf_seguro(str(tipo_empaque or "BULTO").strip().upper())
+    cant_bultos = max(1, min(int(total_bultos or 1), 200))
+    fecha_cl = formatear_fecha_hora_chile()
+
+    pdf = FPDF(orientation="L", unit="mm", format=(100, 150))
+    pdf.set_auto_page_break(auto=False, margin=0)
+
+    for num_b in range(1, cant_bultos + 1):
+        qr_data = f"{lpn_limpio}|OV:{ov_limpia}|{tipo_limpio}:{num_b}/{cant_bultos}"
+        qr_path = os.path.join("temp_qrs", f"pk_{_nombre_archivo_seguro(lpn_limpio)}_{num_b}.png")
+        qrcode.make(qr_data).save(qr_path)
+
+        pdf.add_page()
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_draw_color(0, 0, 0)
+
+        # Marco exterior
+        pdf.set_line_width(0.7)
+        pdf.rect(2, 2, 146, 96)
+
+        # 1. CABECERA: LPN + FECHA EMPAQUE + QR
+        tam_lpn = 30 if len(lpn_limpio) <= 16 else 22
+        pdf.set_font("Helvetica", "B", tam_lpn)
+        pdf.set_xy(5, 4)
+        pdf.cell(115, 13, txt=_texto_pdf_seguro(lpn_limpio), align="L")
+
+        pdf.set_font("Helvetica", "B", 9.5)
+        pdf.set_xy(5, 18)
+        pdf.cell(115, 5, txt=f"FECHA PACKING: {fecha_cl}", align="L")
+
+        pdf.image(qr_path, x=124, y=3.5, w=21, h=21)
+        pdf.set_line_width(0.5)
+        pdf.line(2, 26, 148, 26)
+
+        # 2. OV / OT EN GRANDE
+        pref_doc = "" if (ov_limpia.startswith("OV") or ov_limpia.startswith("OT")) else "OV "
+        pdf.set_font("Helvetica", "B", 28)
+        pdf.set_xy(4, 28)
+        pdf.cell(142, 13, txt=_texto_pdf_seguro(f"{pref_doc}{ov_limpia}"[:22]), border=1, align="C")
+
+        # 3. CLIENTE
+        pdf.rect(4, 43, 142, 16)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_xy(6, 44)
+        pdf.cell(138, 4.5, txt="CLIENTE / DESTINO:", align="L")
+        tam_cli = 15 if len(cli_limpio) <= 28 else 11.5
+        pdf.set_font("Helvetica", "B", tam_cli)
+        pdf.set_xy(6, 49)
+        pdf.cell(138, 8, txt=cli_limpio[:42], align="L")
+
+        # 4. COMUNA DE DESPACHO
+        pdf.rect(4, 61, 142, 15)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_xy(6, 62)
+        pdf.cell(138, 4.5, txt="COMUNA DE DESPACHO:", align="L")
+        pdf.set_font("Helvetica", "B", 17)
+        pdf.set_xy(6, 66.5)
+        pdf.cell(138, 8, txt=comuna_limpia[:32], align="L")
+
+        # 5. RECUADRO INFERIOR GIGANTE: BULTO / PALLET X DE Y
+        pdf.set_fill_color(15, 23, 42)
+        pdf.rect(4, 78, 142, 17, style="F")
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 24)
+        pdf.set_xy(4, 80.5)
+        pdf.cell(142, 12, txt=f"{tipo_limpio}: {num_b} DE {cant_bultos}", align="C")
+        pdf.set_text_color(0, 0, 0)
+
+    nombre_out = os.path.join(
+        "reportes_recepcion",
+        f"Etiqueta_Packing_{_nombre_archivo_seguro(ov_limpia)}_{_nombre_archivo_seguro(lpn_limpio)}.pdf",
+    )
+    pdf.output(nombre_out)
+    return nombre_out
+
 
 def obtener_fecha_cierre_o_recepcion(cabecera_po: dict, recepciones_lpn: list) -> str:
     """Obtiene la fecha fija de cierre de la PO o la del último LPN recepcionado."""
