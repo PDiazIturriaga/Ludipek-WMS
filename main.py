@@ -417,6 +417,7 @@ def main(page: ft.Page):
                 ("2. Extracción Olas NetSuite", ft.Icons.CLOUD_DOWNLOAD_OUTLINED),
                 ("3. Estaciones Packing (Normal / -FA)", ft.Icons.INVENTORY_OUTLINED),
                 ("4. Facturación (Subida NetSuite)", ft.Icons.RECEIPT_LONG_ROUNDED),
+                ("5. Monitor Usuarios & Cola Picking", ft.Icons.SUPERVISED_USER_CIRCLE_ROUNDED),
             ]),
             ("Mov. Stock\n(Inventario)", ft.Icons.LIBRARY_BOOKS_OUTLINED, inv.vista, getattr(inv, "actualizar_todos_los_datos_func", None), inv.sel_sub_inventario, [
                 ("1. Pasillos y Cruce ERP", ft.Icons.RULE_ROUNDED),
