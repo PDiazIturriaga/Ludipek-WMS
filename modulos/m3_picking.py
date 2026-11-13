@@ -286,9 +286,18 @@ class PickingModulo:
                 ),
             )
 
-        def texto_dark(label: str, width: int = None, expand=None, value: str = "", keyboard_type=None, on_change=None):
+        def texto_dark(
+            label: str = "",
+            width: int = None,
+            expand=None,
+            value: str = "",
+            keyboard_type=None,
+            on_change=None,
+            hint_text: str = None,
+        ):
             return ft.TextField(
                 label=label,
+                hint_text=hint_text,
                 width=width,
                 expand=expand,
                 value=value,
@@ -315,7 +324,16 @@ class PickingModulo:
                 ),
             )
 
-        def dropdown_dark(label: str, width: int = None, expand=None, value: str = None, options: list = None, on_change=None):
+        def dropdown_dark(
+            label: str = "",
+            width: int = None,
+            expand=None,
+            value: str = None,
+            options: list = None,
+            on_change=None,
+            on_select=None,
+            hint_text: str = None,
+        ):
             opts = []
             for o in (options or []):
                 if isinstance(o, ft.DropdownOption) and not o.content:
@@ -324,6 +342,7 @@ class PickingModulo:
                     opts.append(o)
             dd = ft.Dropdown(
                 label=label,
+                hint_text=hint_text,
                 width=width,
                 expand=expand,
                 value=value,
@@ -338,9 +357,10 @@ class PickingModulo:
                 content_padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                 border_radius=6,
             )
-            if on_change:
+            if on_change is not None:
                 dd.on_change = on_change
-                dd.on_select = on_change
+            if on_select is not None:
+                dd.on_select = on_select
             return dd
 
         def crear_caja_digital(txt_control: ft.Text, etiqueta_inf: str, color_borde: str = "#6366F1", ancho: int = 86, on_click=None):
