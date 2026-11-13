@@ -38,7 +38,6 @@ class PickingModulo:
         filtro_corte_activo = "TODOS"
         filtro_dia_ov_activo = "TODOS"
         filtro_canal_ov_activo = "TODOS"
-        esquemas_tablas_sb = {}
         Archivo_Meta_Despacho = "config_despacho_packing.json"
 
         def cargar_meta_despacho() -> dict:
@@ -49,15 +48,6 @@ class PickingModulo:
                 except Exception:
                     return {}
             return {}
-
-        def guardar_meta_despacho(ov_key: str, datos: dict):
-            mapa = cargar_meta_despacho()
-            mapa[str(ov_key).strip().upper()] = datos
-            try:
-                with open(Archivo_Meta_Despacho, "w", encoding="utf-8") as f:
-                    json.dump(mapa, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
 
         def boton_primario(texto: str, icono, on_click, color_bg: str, height_val: int = 30, width_val=None):
             def animar_hover(e):
@@ -290,16 +280,11 @@ class PickingModulo:
                 spacing=3,
             )
 
-        def crear_indicador_circulo_etapa(
-            estado_etapa: str,
-            texto_etapa: str,
-            on_click=None,
-            tooltip_txt: str = None,
-        ):
+        def crear_indicador_circulo_etapa(estado_etapa: str, texto_etapa: str):
             """
-            Dibuja un círculo indicador de estado para las columnas PICKING, PACKING y ENVIADO A FACTURACIÓN:
+            Indicador 100% de visualización (el estado se actualiza únicamente desde main.dart):
             - 'COMPLETADO': Círculo verde relleno (#10B981) con check blanco.
-            - 'EN_PROCESO': Círculo ámbar/celeste brillante (#F59E0B) indicando etapa activa.
+            - 'EN_PROCESO': Círculo ámbar brillante (#F59E0B) indicando etapa activa en RF.
             - 'ESPERA': Círculo gris apagado (#334155).
             """
             if estado_etapa == "COMPLETADO":
@@ -337,9 +322,6 @@ class PickingModulo:
                 bgcolor=bg_chip,
                 border_radius=16,
                 border=ft.Border.all(1, borde_circulo if estado_etapa != "ESPERA" else "#2B3537"),
-                ink=bool(on_click),
-                on_click=on_click,
-                tooltip=tooltip_txt,
                 content=ft.Row(
                     [
                         circulo,
@@ -389,7 +371,7 @@ class PickingModulo:
             else:
                 return ">13:00"
 
-        # --- 5. CONTROLES VISUALES Y CONTADORES DIGITALES ---
+        # --- 5. CONTROLES VISUALES, CALENDARIO Y CONTADORES DIGITALES ---
         hoy_str = datetime.now().strftime("%Y-%m-%d")
         txt_fecha_desde = texto_dark(label="Fecha Desde (YYYY-MM-DD)", value=hoy_str, width=150)
         txt_fecha_hasta = texto_dark(label="Fecha Hasta (YYYY-MM-DD)", value=hoy_str, width=150)
@@ -422,16 +404,80 @@ class PickingModulo:
             ],
         )
 
-        dd_dia_ov = dropdown_dark(
-            label="📅 Ver OVs por Día",
-            width=210,
-            value="TODOS",
-            options=[opt_w("TODOS", "TODOS LOS DÍAS")],
+        # SELECTOR DE CALENDARIO INTERACTIVO PARA FILTRAR EL LISTADO DE OVs POR DÍA
+        lbl_fecha_calendario_ov = ft.Text(
+            "📅 TODAS LAS FECHAS",
+            size=11,
+            weight=ft.FontWeight.BOLD,
+            color=TEXT_WHITE,
+        )
+
+        def al_elegir_fecha_calendario(e):
+            nonlocal filtro_dia_ov_activo
+            val_dt = getattr(e.control, "value", None)
+            if val_dt:
+                if hasattr(val_dt, "strftime"):
+                    filtro_dia_ov_activo = val_dt.strftime("%Y-%m-%d")
+                else:
+                    filtro_dia_ov_activo = str(val_dt)[:10]
+                lbl_fecha_calendario_ov.value = f"📅 DÍA: {filtro_dia_ov_activo}"
+                lbl_fecha_calendario_ov.color = "#34D399"
+                renderizar_monitor_cortes_y_tablas()
+
+        selector_calendario_ov = ft.DatePicker(
+            first_date=datetime(2024, 1, 1),
+            last_date=datetime(2030, 12, 31),
+            help_text="SELECCIONE EL DÍA DE LAS ÓRDENES DE VENTA",
+            cancel_text="Cancelar",
+            confirm_text="Filtrar Día",
+            on_change=al_elegir_fecha_calendario,
+        )
+        try:
+            self.page.overlay.append(selector_calendario_ov)
+        except Exception:
+            pass
+
+        def abrir_calendario_ov(e=None):
+            try:
+                self.page.open(selector_calendario_ov)
+            except Exception:
+                try:
+                    self.page.show_dialog(selector_calendario_ov)
+                except Exception:
+                    selector_calendario_ov.open = True
+                    self.page.update()
+
+        def limpiar_fecha_calendario_ov(e=None):
+            nonlocal filtro_dia_ov_activo
+            filtro_dia_ov_activo = "TODOS"
+            lbl_fecha_calendario_ov.value = "📅 TODAS LAS FECHAS"
+            lbl_fecha_calendario_ov.color = TEXT_WHITE
+            renderizar_monitor_cortes_y_tablas()
+
+        btn_abrir_calendario_ov = ft.Container(
+            padding=ft.Padding.symmetric(horizontal=12, vertical=0),
+            height=34,
+            bgcolor="#1D2426",
+            border_radius=6,
+            border=ft.Border.all(1, ACCENT_CYAN),
+            ink=True,
+            tooltip="Abrir calendario para elegir el día de las OVs",
+            on_click=abrir_calendario_ov,
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.CALENDAR_MONTH_ROUNDED, color=ACCENT_CYAN, size=16),
+                    lbl_fecha_calendario_ov,
+                    ft.Icon(ft.Icons.ARROW_DROP_DOWN_ROUNDED, color=TEXT_MUTED, size=18),
+                ],
+                spacing=6,
+                tight=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
         )
 
         dd_filtro_canal_ov = dropdown_dark(
             label="Canal OV",
-            width=170,
+            width=175,
             value="TODOS",
             options=[
                 opt_w("TODOS", "TODAS (NORMAL + FA)"),
@@ -441,7 +487,6 @@ class PickingModulo:
         )
 
         txt_buscar_ov_unificada = texto_dark(label="Buscar OV, Cliente o Comuna...", width=220)
-        fila_chips_dias_ov = ft.Row(spacing=6, wrap=True)
 
         txt_estado_erp = ft.Text(
             f"Estado ERP: {'Módulo conexion_erp activo.' if NETSUITE_CONECTADO else 'Modo Cloud Supabase activo.'}",
@@ -489,13 +534,13 @@ class PickingModulo:
             rows=[],
         )
 
-        # TABLA UNIFICADA DE ÓRDENES DE VENTA (CON CÍRCULOS DE COLOR POR ETAPA)
+        # TABLA UNIFICADA DE ÓRDENES DE VENTA (SOLO VISUALIZACIÓN DE AVANCE DESDE MAIN.DART)
         tabla_listado_unico_ovs = ft.DataTable(
             heading_row_color="#181E20",
             heading_row_height=36,
             data_row_min_height=38,
             data_row_max_height=44,
-            column_spacing=14,
+            column_spacing=16,
             horizontal_margin=10,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
@@ -506,7 +551,7 @@ class PickingModulo:
                 ft.DataColumn(ft.Text("PICKING", weight=ft.FontWeight.BOLD, size=10.5, color="#FBBF24")),
                 ft.DataColumn(ft.Text("PACKING", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("ENVIADO A FACTURACIÓN", weight=ft.FontWeight.BOLD, size=10.5, color="#34D399")),
-                ft.DataColumn(ft.Text("ACCIONES", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("CONSULTA / ETIQUETA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
             ],
             rows=[],
         )
@@ -544,9 +589,9 @@ class PickingModulo:
             rows=[],
         )
 
-        cont_tabla_prev_ns = envolver_tabla_fluida(tabla_previsualizacion_ns, 210)
-        cont_tabla_listado_unico = envolver_tabla_fluida(tabla_listado_unico_ovs, 370)
-        cont_tabla_facturacion = envolver_tabla_fluida(tabla_facturacion_ns, 370)
+        cont_tabla_prev_ns = envolver_tabla_fluida(tabla_previsualizacion_ns, 200)
+        cont_tabla_listado_unico = envolver_tabla_fluida(tabla_listado_unico_ovs, 390)
+        cont_tabla_facturacion = envolver_tabla_fluida(tabla_facturacion_ns, 390)
 
         # --- 7. CONEXIÓN Y SINCRONIZACIÓN CON SUPABASE ---
         def detectar_es_farmacia_texto(*textos) -> bool:
@@ -927,139 +972,6 @@ class PickingModulo:
             except Exception as ex:
                 notificar(f"Error generando etiquetas de bultos: {ex}", "#B91C1C")
 
-        def abrir_modal_empaque_y_pasar_a_facturacion(info_ov: dict):
-            """Abre el asistente de Packing para definir Comuna, Bulto/Pallet y Cantidad (1 de N), imprime etiquetas y marca Enviado a Facturación."""
-            ov_cod = str(info_ov.get("ov") or "").strip().upper()
-            ov_limpia = ov_cod.removesuffix("-FA").strip()
-            cli_str = str(info_ov.get("cliente") or "SIN CLIENTE").strip()
-            meta_prev = cargar_meta_despacho().get(ov_cod) or cargar_meta_despacho().get(ov_limpia) or {}
-
-            lpn_default = str(meta_prev.get("lpn") or info_ov.get("lpn") or f"LPN-PK-{ov_limpia}-{datetime.now().strftime('%H%M')}").upper()
-            comuna_default = str(meta_prev.get("comuna") or info_ov.get("comuna") or ("CONCEPCIÓN" if "CONCEPCION" in cli_str.upper() else "SANTIAGO")).upper()
-            tipo_default = str(meta_prev.get("tipo_empaque") or info_ov.get("tipo_empaque") or "BULTO").upper()
-            bultos_default = str(meta_prev.get("bultos") or info_ov.get("bultos") or 1)
-
-            txt_lpn_pk = texto_dark("LPN de Despacho", width=220, value=lpn_default)
-            txt_comuna_pk = texto_dark("Comuna de Despacho", width=240, value=comuna_default)
-            dd_tipo_pk = dropdown_dark(
-                "Modalidad de Despacho",
-                width=220,
-                value=tipo_default if tipo_default in ("BULTO", "PALLET") else "BULTO",
-                options=[
-                    opt_w("BULTO", "POR BULTO / CAJA"),
-                    opt_w("PALLET", "POR PALLET"),
-                ],
-            )
-            txt_cant_bultos_pk = texto_dark(
-                "Cantidad de Bultos / Pallets (Ej: 3 -> 1 de 3, 2 de 3, 3 de 3)",
-                width=240,
-                value=bultos_default,
-                keyboard_type=ft.KeyboardType.NUMBER,
-            )
-
-            def cerrar_m(ev=None):
-                try:
-                    page.pop_dialog()
-                except Exception:
-                    dlg_pack.open = False
-                page.update()
-
-            def confirmar_cierre_packing(ev=None):
-                comuna_f = (txt_comuna_pk.value or "SANTIAGO").strip().upper()
-                tipo_f = (dd_tipo_pk.value or "BULTO").strip().upper()
-                lpn_f = (txt_lpn_pk.value or f"LPN-PK-{ov_limpia}").strip().upper()
-                try:
-                    cant_b = max(1, int((txt_cant_bultos_pk.value or "1").strip()))
-                except Exception:
-                    cant_b = 1
-
-                datos_meta = {
-                    "lpn": lpn_f,
-                    "comuna": comuna_f,
-                    "tipo_empaque": tipo_f,
-                    "bultos": cant_b,
-                    "fecha_packing": datetime.now().strftime("%d-%m-%Y %H:%M"),
-                }
-                guardar_meta_despacho(ov_cod, datos_meta)
-                guardar_meta_despacho(ov_limpia, datos_meta)
-
-                info_ov["comuna"] = comuna_f
-                info_ov["tipo_empaque"] = tipo_f
-                info_ov["bultos"] = cant_b
-                info_ov["lpn"] = lpn_f
-
-                cerrar_m()
-
-                # 1. Cambiar estado a PENDIENTE_FACTURACION (enciende en verde Packing y Enviado a Facturación)
-                cambiar_estado_ov_db(info_ov, "PENDIENTE_FACTURACION")
-                recargar_datos_supabase()
-                renderizar_monitor_cortes_y_tablas()
-
-                # 2. Emitir etiquetas 15x10 por cada bulto/pallet (1 de N, 2 de N...)
-                try:
-                    ruta_etq = generar_pdf_etiqueta_packing_bultos_15x10(
-                        lpn=lpn_f,
-                        numero_ov=ov_cod,
-                        cliente=cli_str,
-                        comuna=comuna_f,
-                        tipo_empaque=tipo_f,
-                        total_bultos=cant_b,
-                    )
-                    descargar_archivo_web(ruta_etq, f"Etiquetas 15x10 ({cant_b} {tipo_f}) - OV {ov_cod}")
-                except Exception as ex_p:
-                    print(f"[WARN] Error generando PDF bultos: {ex_p}")
-
-            dlg_pack = ft.AlertDialog(
-                modal=True,
-                bgcolor="#1E293B",
-                title=ft.Row(
-                    [
-                        ft.Icon(ft.Icons.INVENTORY_ROUNDED, color=ACCENT_CYAN, size=22),
-                        ft.Text(f"Cerrar Packing y Enviar a Facturación (OV {ov_cod})", size=15, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ],
-                    spacing=8,
-                ),
-                content=ft.Container(
-                    width=520,
-                    content=ft.Column(
-                        [
-                            ft.Container(
-                                padding=10,
-                                bgcolor="#0F172A",
-                                border_radius=6,
-                                content=ft.Column(
-                                    [
-                                        ft.Text(f"CLIENTE: {cli_str}", size=12, weight=ft.FontWeight.BOLD, color="#34D399"),
-                                        ft.Text(
-                                            "Al confirmar, se completarán en verde los círculos de PACKING y ENVIADO A FACTURACIÓN y se descargarán las etiquetas 15x10 por bulto.",
-                                            size=11,
-                                            color=TEXT_MUTED,
-                                        ),
-                                    ],
-                                    spacing=4,
-                                ),
-                            ),
-                            ft.Row([txt_lpn_pk, txt_comuna_pk], spacing=10, wrap=True),
-                            ft.Row([dd_tipo_pk, txt_cant_bultos_pk], spacing=10, wrap=True),
-                        ],
-                        spacing=10,
-                        tight=True,
-                    ),
-                ),
-                actions=[
-                    ft.TextButton("CANCELAR", on_click=cerrar_m),
-                    boton_primario(
-                        "CONFIRMAR PACKING -> ENVIAR A FACTURACIÓN + ETIQUETAS",
-                        ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED,
-                        confirmar_cierre_packing,
-                        "#047857",
-                        height_val=36,
-                    ),
-                ],
-            )
-            page.show_dialog(dlg_pack)
-            page.update()
-
         def mostrar_modal_detalle_ov(ov_num: str, info_ov: dict):
             lineas_det = info_ov.get("lineas_detalle", [])
             filas_d = []
@@ -1420,12 +1332,6 @@ class PickingModulo:
             except Exception as ex:
                 notificar(f"Error al generar Packing List: {ex}", "#B91C1C")
 
-        def seleccionar_dia_ov_rapido(dia_sel: str):
-            nonlocal filtro_dia_ov_activo
-            filtro_dia_ov_activo = "TODOS" if filtro_dia_ov_activo == dia_sel else dia_sel
-            dd_dia_ov.value = filtro_dia_ov_activo
-            renderizar_monitor_cortes_y_tablas()
-
         def renderizar_monitor_cortes_y_tablas():
             nonlocal filtro_dia_ov_activo, filtro_canal_ov_activo
 
@@ -1442,44 +1348,7 @@ class PickingModulo:
 
             todas_ovs_unicas = list(mapa_ovs_unicas.values())
 
-            # 2. Poblar selector de Días (📅 Ver OVs por Día) y chips rápidos por fecha
-            conteo_por_dia = {}
-            for r in registros_packing_db:
-                f_d = str(r.get("fecha_ov") or "").strip()[:10]
-                if f_d:
-                    conteo_por_dia[f_d] = conteo_por_dia.get(f_d, 0) + 1
-
-            opts_dias = [opt_w("TODOS", f"TODOS LOS DÍAS ({len(registros_packing_db)} OVs)")]
-            for d_k in sorted(conteo_por_dia.keys(), reverse=True):
-                opts_dias.append(opt_w(d_k, f"📅 {d_k} ({conteo_por_dia[d_k]} OVs)"))
-            dd_dia_ov.options = opts_dias
-            if filtro_dia_ov_activo not in (["TODOS"] + list(conteo_por_dia.keys())):
-                filtro_dia_ov_activo = "TODOS"
-            dd_dia_ov.value = filtro_dia_ov_activo
-
-            fila_chips_dias_ov.controls.clear()
-            for d_k in sorted(conteo_por_dia.keys(), reverse=True)[:8]:
-                es_activo = (filtro_dia_ov_activo == d_k)
-                fila_chips_dias_ov.controls.append(
-                    ft.Container(
-                        padding=ft.Padding.symmetric(horizontal=9, vertical=4),
-                        bgcolor="#065F46" if es_activo else "#181E20",
-                        border_radius=6,
-                        border=ft.Border.all(1, "#34D399" if es_activo else BORDER_COLOR),
-                        ink=True,
-                        on_click=lambda ev, dk=d_k: seleccionar_dia_ov_rapido(dk),
-                        content=ft.Row(
-                            [
-                                ft.Icon(ft.Icons.CALENDAR_TODAY_ROUNDED, color="#34D399", size=12),
-                                ft.Text(f"{d_k} ({conteo_por_dia[d_k]} OVs)", size=10.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            ],
-                            spacing=5,
-                            tight=True,
-                        ),
-                    )
-                )
-
-            # 3. Filtrar OVs para KPIs y el Listado Único de Órdenes de Venta
+            # 2. Filtrar OVs para KPIs y el Listado Único de Órdenes de Venta
             q_busq = (txt_buscar_ov_unificada.value or "").strip().upper()
             ovs_filtradas_listado = []
             for r in registros_packing_db:
@@ -1594,14 +1463,13 @@ class PickingModulo:
                     )
                 )
 
-            # 4. CONSTRUIR LISTADO UNIFICADO DE ÓRDENES DE VENTA CON CÍRCULOS DE COLOR POR ETAPA
+            # 3. CONSTRUIR LISTADO UNIFICADO DE ÓRDENES DE VENTA (SOLO VISUALIZACIÓN DE AVANCE DESDE MAIN.DART)
             nuevas_filas_listado = []
             for r_ov in ovs_filtradas_listado:
                 ov_cod = r_ov["ov"]
                 es_fa = bool(r_ov.get("es_farmacia"))
                 est_actual = str(r_ov.get("estado") or "PENDIENTE_PICKING").upper()
 
-                # Diferenciación visual clara entre OV Normal (Celeste/Azul) y OV Farmacia (Ámbar/Dorado)
                 color_ov_texto = "#FBBF24" if es_fa else ACCENT_CYAN
                 badge_tipo_canal = (
                     crear_badge_estado("FARMACIA (-FA)", "#92400E", "#FEF3C7")
@@ -1609,7 +1477,6 @@ class PickingModulo:
                     else crear_badge_estado("OV NORMAL", "#1E3A8A", "#DBEAFE")
                 )
 
-                # Calcular el estado de cada uno de los 3 círculos: PICKING -> PACKING -> ENVIADO A FACTURACIÓN
                 if est_actual in ("PENDIENTE_PICKING", "EN_PICKING", "PREVISUALIZADA"):
                     est_col_picking = ("EN_PROCESO", "En Picking")
                     est_col_packing = ("ESPERA", "Espera")
@@ -1623,38 +1490,13 @@ class PickingModulo:
                     est_col_packing = ("COMPLETADO", "Packing Listo")
                     est_col_fact = ("COMPLETADO", "Facturado ✓")
                 else:
-                    # PENDIENTE_FACTURACION (Ya empacado y enviado a Facturación)
                     est_col_picking = ("COMPLETADO", "Picking Listo")
                     est_col_packing = ("COMPLETADO", "Packing Listo")
                     est_col_fact = ("COMPLETADO", "Enviado a Fact.")
 
-                ind_picking = crear_indicador_circulo_etapa(
-                    est_col_picking[0],
-                    est_col_picking[1],
-                    on_click=lambda ev, it=r_ov: (
-                        cambiar_estado_ov_db(it, "PENDIENTE_PACKING"),
-                        renderizar_monitor_cortes_y_tablas(),
-                    ) if it.get("estado") == "PENDIENTE_PICKING" else None,
-                    tooltip_txt="Clic para marcar Picking como completado",
-                )
-
-                ind_packing = crear_indicador_circulo_etapa(
-                    est_col_packing[0],
-                    est_col_packing[1],
-                    on_click=lambda ev, it=r_ov: abrir_modal_empaque_y_pasar_a_facturacion(it),
-                    tooltip_txt="Clic para empacar por Bulto/Pallet y enviar a Facturación",
-                )
-
-                ind_enviado_fact = crear_indicador_circulo_etapa(
-                    est_col_fact[0],
-                    est_col_fact[1],
-                    on_click=lambda ev, it=r_ov: (
-                        exportar_excel_facturacion_netsuite(solo_ov=it)
-                        if it.get("estado") in ("PENDIENTE_FACTURACION", "FACTURADO")
-                        else abrir_modal_empaque_y_pasar_a_facturacion(it)
-                    ),
-                    tooltip_txt="Clic para descargar Excel de Facturación NetSuite",
-                )
+                ind_picking = crear_indicador_circulo_etapa(est_col_picking[0], est_col_picking[1])
+                ind_packing = crear_indicador_circulo_etapa(est_col_packing[0], est_col_packing[1])
+                ind_enviado_fact = crear_indicador_circulo_etapa(est_col_fact[0], est_col_fact[1])
 
                 nuevas_filas_listado.append(
                     ft.DataRow(
@@ -1670,20 +1512,13 @@ class PickingModulo:
                                     color="#34D399",
                                 )
                             ),
-                            ft.DataCell(ft.Text(r_ov["cliente"][:30], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(r_ov["cliente"][:32], size=11, color=TEXT_WHITE)),
                             ft.DataCell(ind_picking),
                             ft.DataCell(ind_packing),
                             ft.DataCell(ind_enviado_fact),
                             ft.DataCell(
                                 ft.Row(
                                     [
-                                        boton_primario(
-                                            "EMPACAR",
-                                            ft.Icons.INVENTORY_2_OUTLINED,
-                                            lambda ev, it=r_ov: abrir_modal_empaque_y_pasar_a_facturacion(it),
-                                            "#0F766E" if es_fa else "#047857",
-                                            height_val=26,
-                                        ),
                                         boton_primario(
                                             "LPN BULTOS",
                                             ft.Icons.QR_CODE_2_ROUNDED,
@@ -1692,14 +1527,14 @@ class PickingModulo:
                                             height_val=26,
                                         ),
                                         boton_primario(
-                                            "SKUs",
+                                            "VER SKUs",
                                             ft.Icons.VISIBILITY_OUTLINED,
                                             lambda ev, it=r_ov: mostrar_modal_detalle_ov(it["ov"], it),
                                             "#334155",
                                             height_val=26,
                                         ),
                                     ],
-                                    spacing=4,
+                                    spacing=5,
                                     tight=True,
                                 )
                             ),
@@ -1709,7 +1544,7 @@ class PickingModulo:
 
             tabla_listado_unico_ovs.rows = nuevas_filas_listado
 
-            # 5. Llenar Tabla Módulo 4: FACTURACIÓN (Sin duplicados ni filas fantasma)
+            # 4. Llenar Tabla Módulo 4: FACTURACIÓN (Sin duplicados ni filas fantasma)
             ovs_en_facturacion = [
                 r for r in registros_packing_db
                 if r.get("estado") == "PENDIENTE_FACTURACION"
@@ -1815,14 +1650,6 @@ class PickingModulo:
             filtro_corte_activo = dd_filtro_corte.value or "TODOS"
             renderizar_monitor_cortes_y_tablas()
 
-        def cambiar_filtro_dia_dropdown(e=None):
-            nonlocal filtro_dia_ov_activo
-            val = dd_dia_ov.value or "TODOS"
-            if " (" in val:
-                val = val.split(" (", 1)[0].replace("📅", "").strip()
-            filtro_dia_ov_activo = val or "TODOS"
-            renderizar_monitor_cortes_y_tablas()
-
         def cambiar_filtro_canal_dropdown(e=None):
             nonlocal filtro_canal_ov_activo
             filtro_canal_ov_activo = dd_filtro_canal_ov.value or "TODOS"
@@ -1830,8 +1657,6 @@ class PickingModulo:
 
         dd_filtro_corte.on_select = cambiar_filtro_corte_dropdown
         dd_filtro_corte.on_change = cambiar_filtro_corte_dropdown
-        dd_dia_ov.on_select = cambiar_filtro_dia_dropdown
-        dd_dia_ov.on_change = cambiar_filtro_dia_dropdown
         dd_filtro_canal_ov.on_select = cambiar_filtro_canal_dropdown
         dd_filtro_canal_ov.on_change = cambiar_filtro_canal_dropdown
         txt_buscar_ov_unificada.on_change = lambda e: renderizar_monitor_cortes_y_tablas()
@@ -2162,11 +1987,11 @@ class PickingModulo:
                 liberadas_ok += 1
 
             olas_extraidas_ns[:] = [it for it in olas_extraidas_ns if it["ov"] not in ovs_liberadas_set]
-            notificar(f"¡{liberadas_ok} OVs liberadas al listado en estado PICKING!", "#047857")
+            notificar(f"¡{liberadas_ok} OVs liberadas a main.dart en estado PICKING!", "#047857")
             renderizar_tabla_previsualizacion()
             cargar_monitor_packing_dual()
 
-        # --- 9. COMPOSICIÓN DE PANELES RESPONSIVOS ---
+        # --- 9. COMPOSICIÓN DE PANELES RESPONSIVOS Y BOTÓN DE PLEGAR KPIs ---
         panel_relojes_izquierdo = tarjeta_dark(
             ft.Column(
                 [
@@ -2257,6 +2082,31 @@ class PickingModulo:
             run_spacing=10,
         )
 
+        ico_toggle_kpi = ft.Icon(ft.Icons.KEYBOARD_ARROW_UP_ROUNDED, color=ACCENT_CYAN, size=16)
+        txt_toggle_kpi = ft.Text("PLEGAR KPIs", size=10.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)
+
+        def toggle_kpis_superiores(e=None):
+            bloque_superior_kpi_cortes.visible = not bloque_superior_kpi_cortes.visible
+            if bloque_superior_kpi_cortes.visible:
+                ico_toggle_kpi.name = ft.Icons.KEYBOARD_ARROW_UP_ROUNDED
+                txt_toggle_kpi.value = "PLEGAR KPIs"
+            else:
+                ico_toggle_kpi.name = ft.Icons.KEYBOARD_ARROW_DOWN_ROUNDED
+                txt_toggle_kpi.value = "DESPLEGAR KPIs"
+            page.update()
+
+        btn_plegar_kpis = ft.Container(
+            padding=ft.Padding.symmetric(horizontal=10, vertical=0),
+            height=30,
+            bgcolor="#181E20",
+            border_radius=6,
+            border=ft.Border.all(1, BORDER_COLOR),
+            ink=True,
+            tooltip="Plegar o desplegar el panel superior de KPIs",
+            on_click=toggle_kpis_superiores,
+            content=ft.Row([ico_toggle_kpi, txt_toggle_kpi], spacing=4, tight=True),
+        )
+
         def toggle_visibilidad_prev_ns(e=None):
             cont_tabla_prev_ns.visible = not cont_tabla_prev_ns.visible
             page.update()
@@ -2300,7 +2150,7 @@ class PickingModulo:
             )
         )
 
-        # TARJETA UNIFICADA DE ÓRDENES DE VENTA (OV NORMAL EN CELESTE Y OV FARMACIA EN DORADO CON CÍRCULOS DE AVANCE)
+        # TARJETA UNIFICADA DE ÓRDENES DE VENTA (CON FILTRO DE CALENDARIO Y VISUALIZACIÓN DE AVANCE)
         tarjeta_listado_unico_ovs = tarjeta_dark(
             ft.Column(
                 [
@@ -2329,7 +2179,7 @@ class PickingModulo:
                                             ft.Text("OV Farmacia (-FA / OT)", size=10.5, color="#FBBF24", weight=ft.FontWeight.BOLD),
                                             ft.Container(width=8),
                                             ft.Container(width=10, height=10, bgcolor="#10B981", border_radius=5),
-                                            ft.Text("Etapa Completada", size=10.5, color="#34D399", weight=ft.FontWeight.BOLD),
+                                            ft.Text("Completado desde Terminal RF", size=10.5, color="#34D399", weight=ft.FontWeight.BOLD),
                                         ],
                                         spacing=5,
                                     ),
@@ -2338,22 +2188,22 @@ class PickingModulo:
                             ),
                             ft.Row(
                                 [
-                                    dd_dia_ov,
+                                    btn_abrir_calendario_ov,
+                                    boton_primario(
+                                        "VER TODAS",
+                                        ft.Icons.EVENT_REPEAT_ROUNDED,
+                                        limpiar_fecha_calendario_ov,
+                                        "#334155",
+                                        height_val=34,
+                                    ),
                                     dd_filtro_canal_ov,
                                     txt_buscar_ov_unificada,
-                                    boton_primario(
-                                        "VER TODOS LOS DÍAS",
-                                        ft.Icons.CALENDAR_MONTH_ROUNDED,
-                                        lambda e: seleccionar_dia_ov_rapido("TODOS"),
-                                        "#475569",
-                                        height_val=32,
-                                    ),
                                     boton_primario(
                                         "EXPORTAR PACKING (EXCEL)",
                                         ft.Icons.TABLE_VIEW_OUTLINED,
                                         lambda e: exportar_ov_farmacia_excel_pdf(None),
                                         "#B45309",
-                                        height_val=32,
+                                        height_val=34,
                                     ),
                                 ],
                                 spacing=8,
@@ -2364,7 +2214,6 @@ class PickingModulo:
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         wrap=True,
                     ),
-                    fila_chips_dias_ov,
                     ft.Divider(color=BORDER_COLOR, height=2),
                     cont_tabla_listado_unico,
                 ],
@@ -2463,7 +2312,7 @@ class PickingModulo:
 
         contenedor_subvista_olas = ft.Container(content=subvista_monitor_completo)
 
-        # BARRA SUPERIOR LIMPIA (SIN EL CARTEL DE FLUJO NI SUS BOTONES)
+        # BARRA SUPERIOR CON BOTÓN PEQUEÑO PARA PLEGAR / DESPLEGAR KPIs
         barra_titulo_monitor = ft.Container(
             padding=ft.Padding.symmetric(horizontal=14, vertical=10),
             bgcolor="#222A2C",
@@ -2480,8 +2329,9 @@ class PickingModulo:
                                 weight=ft.FontWeight.W_900,
                                 color=TEXT_WHITE,
                             ),
+                            btn_plegar_kpis,
                         ],
-                        spacing=8,
+                        spacing=10,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     ft.Row(
