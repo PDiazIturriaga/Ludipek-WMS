@@ -403,13 +403,13 @@ def generar_pdf_etiqueta_packing_bultos_15x10(
     tipo_empaque: str = "BULTO",
     total_bultos: int = 1,
 ) -> str:
-    """Genera el PDF 15x10 cm de Packing con 1 etiqueta por cada Bulto/Pallet (1 de N, 2 de N...) sin tabla de SKUs."""
+    """Genera el PDF 15x10 cm de Packing con 1 etiqueta y LPN correlativo por cada Bulto/Pallet (1 de N, 2 de N...)."""
     import qrcode
 
     os.makedirs("temp_qrs", exist_ok=True)
     os.makedirs("reportes_recepcion", exist_ok=True)
 
-    lpn_limpio = str(lpn or "S/LPN").strip().upper()
+    lpn_limpio = str(lpn or "S/LPN").strip().upper().split(" (")[0].strip()
     ov_limpia = str(numero_ov or "S/OV").strip().upper()
     cli_limpio = _texto_pdf_seguro(str(cliente or "SIN CLIENTE").strip().upper())
     comuna_limpia = _texto_pdf_seguro(str(comuna or "POR CONFIRMAR").strip().upper())
@@ -421,23 +421,23 @@ def generar_pdf_etiqueta_packing_bultos_15x10(
     pdf.set_auto_page_break(auto=False, margin=0)
 
     for num_b in range(1, cant_bultos + 1):
-        qr_data = f"{lpn_limpio}|OV:{ov_limpia}|{tipo_limpio}:{num_b}/{cant_bultos}"
-        qr_path = os.path.join("temp_qrs", f"pk_{_nombre_archivo_seguro(lpn_limpio)}_{num_b}.png")
+        lpn_bulto = f"{lpn_limpio}-B{num_b}" if cant_bultos > 1 else lpn_limpio
+        qr_data = f"{lpn_bulto}|OV:{ov_limpia}|{tipo_limpio}:{num_b}/{cant_bultos}"
+        qr_path = os.path.join("temp_qrs", f"pk_{_nombre_archivo_seguro(lpn_bulto)}.png")
         qrcode.make(qr_data).save(qr_path)
 
         pdf.add_page()
         pdf.set_text_color(0, 0, 0)
         pdf.set_draw_color(0, 0, 0)
 
-        # Marco exterior
         pdf.set_line_width(0.7)
         pdf.rect(2, 2, 146, 96)
 
-        # 1. CABECERA: LPN + FECHA EMPAQUE + QR
-        tam_lpn = 30 if len(lpn_limpio) <= 16 else 22
+        # 1. CABECERA: LPN POR BULTO + FECHA EMPAQUE + QR
+        tam_lpn = 26 if len(lpn_bulto) <= 18 else 20
         pdf.set_font("Helvetica", "B", tam_lpn)
         pdf.set_xy(5, 4)
-        pdf.cell(115, 13, txt=_texto_pdf_seguro(lpn_limpio), align="L")
+        pdf.cell(115, 13, txt=_texto_pdf_seguro(lpn_bulto), align="L")
 
         pdf.set_font("Helvetica", "B", 9.5)
         pdf.set_xy(5, 18)
