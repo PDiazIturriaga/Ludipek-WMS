@@ -194,8 +194,8 @@ def preparar_assets_visuales():
         except Exception as ex_ico:
             print(f"[WARN] No se pudieron generar los iconos web: {ex_ico}")
 
+    # Sprites del gato guardián (Ida hacia la derecha y vuelta hacia la izquierda)
     try:
-        frames_caminata = []
         for idx_f in range(6):
             ruta_f = os.path.join("assets", f"cat_walk_{idx_f}.png")
             if not os.path.exists(ruta_f):
@@ -203,23 +203,16 @@ def preparar_assets_visuales():
                 im_f.save(ruta_f, format="PNG")
             else:
                 im_f = Image.open(ruta_f).convert("RGBA")
-            frames_caminata.append(im_f)
+
+            ruta_left = os.path.join("assets", f"cat_walk_left_{idx_f}.png")
+            if not os.path.exists(ruta_left):
+                im_left = im_f.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+                im_left.save(ruta_left, format="PNG")
 
         ruta_sit = os.path.join("assets", "cat_sit.png")
         if not os.path.exists(ruta_sit):
             im_s = dibujar_frame_gato_realista(phase=0.0, sitting=True)
             im_s.save(ruta_sit, format="PNG")
-
-        ruta_gif = os.path.join("assets", "cat_walk_loop.gif")
-        if not os.path.exists(ruta_gif) and frames_caminata:
-            frames_caminata[0].save(
-                ruta_gif,
-                save_all=True,
-                append_images=frames_caminata[1:],
-                duration=85,
-                loop=0,
-                disposal=2,
-            )
     except Exception as ex_cat:
         print(f"[WARN] No se pudieron generar los sprites realistas del gato: {ex_cat}")
 
@@ -1059,7 +1052,6 @@ def main(page: ft.Page):
         actor_gato = ft.Container(
             visible=True,
             margin=ft.Margin.only(left=0),
-            animate_margin=ft.Animation(duration=3200, curve=ft.AnimationCurve.LINEAR),
             on_click=lambda e: (
                 setattr(img_gato_realista, "src", "/cat_sit.png"),
                 setattr(burbuja_miau, "visible", not burbuja_miau.visible),
@@ -1080,11 +1072,11 @@ def main(page: ft.Page):
         paseo_en_curso = False
 
         def dormir_interrumpible(segundos: float) -> bool:
-            pasos = max(1, int(segundos / 0.2))
+            pasos = max(1, int(segundos / 0.1))
             for _ in range(pasos):
                 if not sesion_activa or indice_modulo_activo != -1:
                     return False
-                time.sleep(0.2)
+                time.sleep(0.1)
             return True
 
         def pasear_gatito_sync():
@@ -1093,44 +1085,65 @@ def main(page: ft.Page):
                 return
             paseo_en_curso = True
             try:
-                ancho_max = max(520, int((page.width or 1280) - 480))
-                mitad = ancho_max // 2
-
-                actor_gato.animate_margin = None
-                actor_gato.margin = ft.Margin.only(left=0)
                 actor_gato.visible = True
                 burbuja_miau.visible = False
-                img_gato_realista.src = src_caminata_gato
-                page.update()
-                time.sleep(0.08)
+                ancho_max = max(520, int((page.width or 1280) - 480))
+                mitad = ancho_max // 2
+                paso = 0
+                ya_saludo = False
+                tiene_sprites_izq = os.path.exists(os.path.join("assets", "cat_walk_left_0.png"))
 
-                actor_gato.animate_margin = ft.Animation(duration=3200, curve=ft.AnimationCurve.LINEAR)
-                actor_gato.margin = ft.Margin.only(left=mitad)
-                page.update()
+                # 1. CAMINATA DE IDA (IZQUIERDA -> DERECHA)
+                for pos_x in range(0, ancho_max + 1, 8):
+                    if not sesion_activa or indice_modulo_activo != -1:
+                        break
 
-                if not dormir_interrumpible(3.2):
-                    return
+                    paso += 1
+                    actor_gato.margin = ft.Margin.only(left=pos_x)
 
-                if os.path.exists(os.path.join("assets", "cat_sit.png")):
-                    img_gato_realista.src = "/cat_sit.png"
-                burbuja_miau.visible = True
-                page.update()
+                    if tiene_sprites_gato:
+                        img_gato_realista.src = f"/cat_walk_{paso % 6}.png"
 
-                if not dormir_interrumpible(2.6):
-                    return
+                    # Detenerse a la mitad para sentarse y mostrar el saludo
+                    if not ya_saludo and abs(pos_x - mitad) <= 8:
+                        ya_saludo = True
+                        if os.path.exists(os.path.join("assets", "cat_sit.png")):
+                            img_gato_realista.src = "/cat_sit.png"
+                        burbuja_miau.visible = True
+                        page.update()
 
-                burbuja_miau.visible = False
-                img_gato_realista.src = src_caminata_gato
-                actor_gato.margin = ft.Margin.only(left=ancho_max)
-                page.update()
+                        if not dormir_interrumpible(2.6):
+                            break
 
-                if not dormir_interrumpible(3.2):
-                    return
+                        burbuja_miau.visible = False
+                    else:
+                        page.update()
+                        time.sleep(0.06)
 
-                actor_gato.visible = False
-                actor_gato.animate_margin = None
-                actor_gato.margin = ft.Margin.only(left=0)
-                page.update()
+                # 2. DAR LA VUELTA Y CAMINAR DE REGRESO (DERECHA -> IZQUIERDA)
+                if sesion_activa and indice_modulo_activo == -1:
+                    time.sleep(0.25)
+                    for pos_x in range(ancho_max, -1, -8):
+                        if not sesion_activa or indice_modulo_activo != -1:
+                            break
+
+                        paso += 1
+                        actor_gato.margin = ft.Margin.only(left=pos_x)
+
+                        if tiene_sprites_izq:
+                            img_gato_realista.src = f"/cat_walk_left_{paso % 6}.png"
+                        elif tiene_sprites_gato:
+                            img_gato_realista.src = f"/cat_walk_{paso % 6}.png"
+
+                        page.update()
+                        time.sleep(0.06)
+
+                # Al terminar el recorrido de regreso, quedar sentado en su lugar inicial
+                if sesion_activa and indice_modulo_activo == -1:
+                    actor_gato.margin = ft.Margin.only(left=0)
+                    if os.path.exists(os.path.join("assets", "cat_sit.png")):
+                        img_gato_realista.src = "/cat_sit.png"
+                    page.update()
             except Exception:
                 pass
             finally:
