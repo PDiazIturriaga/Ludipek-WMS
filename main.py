@@ -6,8 +6,7 @@ import threading
 import traceback
 import flet as ft
 from dependencias import *
-from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion
-
+from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion
 os.environ["TZ"] = "America/Santiago"
 if hasattr(time, "tzset"):
     time.tzset()
@@ -771,6 +770,7 @@ def main(page: ft.Page):
         inv = m4_inventario.InventarioModulo(page, tarjetas_adaptables, kpis_adaptables)
         mae = m5_maestra.MaestraModulo(page, tarjetas_adaptables, kpis_adaptables)
         imp = m6_impresion.ImpresionModulo(page, tarjetas_adaptables, kpis_adaptables)
+        ruteo = m7_ruteo_facturacion.RuteoFacturacionModulo(page, tarjetas_adaptables, kpis_adaptables)
 
         tablas_scroll_sesion = list(TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:])
         del TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:]
@@ -864,6 +864,19 @@ def main(page: ft.Page):
                 ],
             ),
             (
+                "Ruteo & Fact.\n(Drivin / SLA)",
+                _ico("LOCAL_SHIPPING_OUTLINED", "ALL_INBOX_OUTLINED"),
+                ruteo.vista,
+                ruteo.cargar_datos_ruteo,
+                ruteo.sel_sub_ruteo,
+                [
+                    ("1. Mesa Facturación & Cruce NS", _ico("RECEIPT_LONG_ROUNDED", "ALL_INBOX_OUTLINED")),
+                    ("2. Ruteo Drivin & 24 Arenas", _ico("LOCAL_SHIPPING_OUTLINED", "INVENTORY_2_OUTLINED")),
+                    ("3. Entregas & SLA 36h / 72h", _ico("CENTER_FOCUS_STRONG_OUTLINED", "VERIFIED_OUTLINED")),
+                    ("4. Maestra de Flota & Camiones", _ico("PRECISION_MANUFACTURING_OUTLINED", "BADGE_OUTLINED")),
+                ],
+            ),
+            (
                 "Etiquetas\n(Impresión)",
                 _ico("QR_CODE_SCANNER_OUTLINED", "QR_CODE_SCANNER", "QR_CODE_2_ROUNDED"),
                 imp.vista,
@@ -944,10 +957,12 @@ def main(page: ft.Page):
                 "PC_INVENTARIO",
                 "PC_ADMIN_MAESTRA",
                 "PC_IMPRESION",
+                "PC_RUTEO",
             ]
             rol_usr = str(getattr(page, "rol_actual", "")).upper()
             permisos_str = str(getattr(page, "modulos_pc_usuario", "")).upper()
-            if "ADMIN" not in rol_usr and permisos_str and codigos_mod[idx_sel] not in permisos_str:
+            cod_req = codigos_mod[idx_sel] if idx_sel < len(codigos_mod) else "PC_RUTEO"
+            if "ADMIN" not in rol_usr and permisos_str and cod_req not in permisos_str:
                 notificar_global(page, "Acceso restringido: tu perfil no tiene permisos para este módulo.", "#B91C1C")
                 return
 
@@ -1579,7 +1594,7 @@ def main(page: ft.Page):
             if panel_submenus.content and hasattr(panel_submenus.content, "width"):
                 panel_submenus.content.width = ancho_menu
 
-            for mod_obj in (dash, recep, puta, pick, mon_cola, inv, mae, imp):
+            for mod_obj in (dash, recep, puta, pick, mon_cola, inv, mae, imp, ruteo):
                 mod_obj.vista.padding = ft.Padding.only(
                     left=pad_vista, top=pad_vista, right=pad_vista + 6, bottom=pad_vista
                 )
