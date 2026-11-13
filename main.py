@@ -788,105 +788,113 @@ def main(page: ft.Page):
         tablas_scroll_sesion = list(TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:])
         del TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:]
 
+        def _ico(*nombres_candidatos):
+            """Devuelve el primer icono compatible en la versión instalada de Flet sin arrojar error."""
+            for nom in nombres_candidatos:
+                val = getattr(ft.Icons, nom, None)
+                if val is not None:
+                    return val
+            return ft.Icons.WIDGETS_OUTLINED
+
         vistas_mapa = [
             (
                 "Dashboards",
-                ft.Icons.TOKEN_OUTLINED,
+                _ico("TOKEN_OUTLINED", "HEXAGON_OUTLINED", "DASHBOARD_OUTLINED"),
                 dash.vista,
                 dash.refrescar_dashboard,
                 dash.sel_sub_dash,
                 [
-                    ("1. Vista Integral (BI + POs)", ft.Icons.DEPLOYED_CODE_OUTLINED),
-                    ("2. Productividad & Dock-to-Stock", ft.Icons.PRECISION_MANUFACTURING_OUTLINED),
-                    ("3. Ocupación, Quiebres & Dead Stock", ft.Icons.CATEGORY_OUTLINED),
+                    ("1. Vista Integral (BI + POs)", _ico("VIEW_IN_AR_OUTLINED", "DASHBOARD_OUTLINED")),
+                    ("2. Productividad & Dock-to-Stock", _ico("PRECISION_MANUFACTURING_OUTLINED", "BOLT_ROUNDED")),
+                    ("3. Ocupación, Quiebres & Dead Stock", _ico("CATEGORY_OUTLINED", "PIE_CHART_OUTLINE_ROUNDED")),
                 ],
             ),
             (
                 "Recepción\n(Ingresos PO)",
-                ft.Icons.ALL_INBOX_OUTLINED,
+                _ico("ALL_INBOX_OUTLINED", "INVENTORY_2_OUTLINED"),
                 recep.vista,
                 recep.cargar_lista_asns,
                 recep.sel_sub_inb,
                 [
-                    ("1. Recepción Activa (PO)", ft.Icons.INVENTORY_2_OUTLINED),
-                    ("2. Consultas de Recepción", ft.Icons.QR_CODE_SCANNER_OUTLINED),
-                    ("3. Control Calidad (QA por PO)", ft.Icons.CENTER_FOCUS_STRONG_OUTLINED),
-                    ("4. Modificación de PO y LPNs", ft.Icons.CROP_FREE_OUTLINED),
+                    ("1. Recepción Activa (PO)", _ico("INVENTORY_2_OUTLINED", "FACT_CHECK_OUTLINED")),
+                    ("2. Consultas de Recepción", _ico("QR_CODE_SCANNER_OUTLINED", "QR_CODE_SCANNER", "MANAGE_SEARCH_ROUNDED")),
+                    ("3. Control Calidad (QA por PO)", _ico("CENTER_FOCUS_STRONG_OUTLINED", "VERIFIED_USER_OUTLINED")),
+                    ("4. Modificación de PO y LPNs", _ico("CROP_FREE_OUTLINED", "CROP_FREE", "EDIT_NOTE_ROUNDED")),
                 ],
             ),
             (
                 "Almacenamiento\n(Mov. LPN)",
-                ft.Icons.DEPLOYED_CODE_OUTLINED,
+                _ico("VIEW_IN_AR_OUTLINED", "WIDGETS_OUTLINED"),
                 puta.vista,
                 puta.cargar_inventario_ubicaciones,
                 puta.sel_sub_put,
                 [
-                    ("1. Putaway & Mapa de Stock", ft.Icons.ALL_INBOX_OUTLINED),
-                    ("2. Reabastecimiento (Reserva -> N1)", ft.Icons.INVENTORY_2_OUTLINED),
-                    ("3. Vista Combinada", ft.Icons.CATEGORY_OUTLINED),
-                    ("4. Gemelo Digital 3D", ft.Icons.TOKEN_OUTLINED),
+                    ("1. Putaway & Mapa de Stock", _ico("ALL_INBOX_OUTLINED", "DOMAIN_OUTLINED")),
+                    ("2. Reabastecimiento (Reserva -> N1)", _ico("INVENTORY_2_OUTLINED", "ARROW_DOWNWARD_ROUNDED")),
+                    ("3. Vista Combinada", _ico("CATEGORY_OUTLINED", "VIEW_AGENDA_OUTLINED")),
+                    ("4. Gemelo Digital 3D", _ico("TOKEN_OUTLINED", "VIEW_IN_AR_ROUNDED")),
                 ],
             ),
             (
                 "Olas\n(Packing)",
-                ft.Icons.INVENTORY_2_OUTLINED,
+                _ico("INVENTORY_2_OUTLINED", "VIEW_IN_AR_OUTLINED"),
                 pick.vista,
                 pick.cargar_monitor_packing_dual,
                 pick.sel_sub_olas,
                 [
-                    ("1. Monitor Completo (Olas + Packing)", ft.Icons.DEPLOYED_CODE_OUTLINED),
-                    ("2. Extracción Olas NetSuite", ft.Icons.ALL_INBOX_OUTLINED),
-                    ("3. Listado Órdenes de Venta", ft.Icons.INVENTORY_2_OUTLINED),
-                    ("4. Facturación (Subida NetSuite)", ft.Icons.CENTER_FOCUS_STRONG_OUTLINED),
+                    ("1. Monitor Completo (Olas + Packing)", _ico("VIEW_IN_AR_OUTLINED", "VIEW_QUILT_OUTLINED")),
+                    ("2. Extracción Olas NetSuite", _ico("ALL_INBOX_OUTLINED", "CLOUD_DOWNLOAD_OUTLINED")),
+                    ("3. Listado Órdenes de Venta", _ico("INVENTORY_2_OUTLINED", "INVENTORY_OUTLINED")),
+                    ("4. Facturación (Subida NetSuite)", _ico("CENTER_FOCUS_STRONG_OUTLINED", "RECEIPT_LONG_ROUNDED")),
                 ],
             ),
             (
                 "Monitor Usuarios\n& Cola Picking",
-                ft.Icons.PRECISION_MANUFACTURING_OUTLINED,
+                _ico("PRECISION_MANUFACTURING_OUTLINED", " Engineering_OUTLINED", " HUB_OUTLINED"),
                 mon_cola.vista,
                 mon_cola.refrescar,
                 mon_cola.sel_sub_monitor,
                 [
-                    ("1. Monitor Operadores & Cola en Vivo", ft.Icons.CENTER_FOCUS_STRONG_OUTLINED),
-                    ("2. Cola Activa de Picking", ft.Icons.ALL_INBOX_OUTLINED),
-                    ("3. Operadores y Rendimiento RF", ft.Icons.PRECISION_MANUFACTURING_OUTLINED),
+                    ("1. Monitor Operadores & Cola en Vivo", _ico("CENTER_FOCUS_STRONG_OUTLINED", "VISIBILITY_OUTLINED")),
+                    ("2. Cola Activa de Picking", _ico("ALL_INBOX_OUTLINED", "INVENTORY_2_OUTLINED")),
+                    ("3. Operadores y Rendimiento RF", _ico("PRECISION_MANUFACTURING_OUTLINED", "BOLT_ROUNDED")),
                 ],
             ),
             (
                 "Mov. Stock\n(Inventario)",
-                ft.Icons.CENTER_FOCUS_STRONG_OUTLINED,
+                _ico("CENTER_FOCUS_STRONG_OUTLINED", "LIBRARY_BOOKS_OUTLINED"),
                 inv.vista,
                 getattr(inv, "actualizar_todos_los_datos_func", None),
                 inv.sel_sub_inventario,
                 [
-                    ("1. Pasillos y Cruce ERP", ft.Icons.DEPLOYED_CODE_OUTLINED),
-                    ("2. SKU Dirigido & Ubic. Vacías", ft.Icons.CENTER_FOCUS_WEAK_OUTLINED),
-                    ("3. Trazabilidad LPN / Rack", ft.Icons.QR_CODE_SCANNER_OUTLINED),
-                    ("4. Alertas y Desvíos (RF)", ft.Icons.CROP_FREE_OUTLINED),
+                    ("1. Pasillos y Cruce ERP", _ico("VIEW_IN_AR_OUTLINED", "RULE_ROUNDED")),
+                    ("2. SKU Dirigido & Ubic. Vacías", _ico("CENTER_FOCUS_WEAK_OUTLINED", "TRACK_CHANGES_ROUNDED")),
+                    ("3. Trazabilidad LPN / Rack", _ico("QR_CODE_SCANNER_OUTLINED", "QR_CODE_SCANNER", "HISTORY_ROUNDED")),
+                    ("4. Alertas y Desvíos (RF)", _ico("CROP_FREE_OUTLINED", "CROP_FREE", "WARNING_AMBER_ROUNDED")),
                 ],
             ),
             (
                 "Admin & Maestra\n(Usuarios / SKU)",
-                ft.Icons.CATEGORY_OUTLINED,
+                _ico("CATEGORY_OUTLINED", "ADMIN_PANEL_SETTINGS_OUTLINED"),
                 mae.vista,
                 mae.cargar_maestra_skus,
                 mae.sel_sub_maestra,
                 [
-                    ("1. Usuarios y Accesos (PC / RF)", ft.Icons.CENTER_FOCUS_STRONG_OUTLINED),
-                    ("2. Catálogo Maestro y Enrolamiento", ft.Icons.INVENTORY_2_OUTLINED),
+                    ("1. Usuarios y Accesos (PC / RF)", _ico("CENTER_FOCUS_STRONG_OUTLINED", "MANAGE_ACCOUNTS_ROUNDED")),
+                    ("2. Catálogo Maestro y Enrolamiento", _ico("INVENTORY_2_OUTLINED", "INVENTORY_2_ROUNDED")),
                 ],
             ),
             (
                 "Etiquetas\n(Impresión)",
-                ft.Icons.QR_CODE_SCANNER_OUTLINED,
+                _ico("QR_CODE_SCANNER_OUTLINED", "QR_CODE_SCANNER", "QR_CODE_2_ROUNDED"),
                 imp.vista,
                 None,
                 imp.sel_sub_imp,
                 [
-                    ("1. Imprimir LPN", ft.Icons.QR_CODE_SCANNER_OUTLINED),
-                    ("2. Ubicación / Tótem", ft.Icons.CROP_FREE_OUTLINED),
-                    ("3. Etiquetas Cencosud", ft.Icons.INVENTORY_2_OUTLINED),
-                    ("4. Etiquetas Mercado Libre", ft.Icons.ALL_INBOX_OUTLINED),
+                    ("1. Imprimir LPN", _ico("QR_CODE_SCANNER_OUTLINED", "QR_CODE_2_ROUNDED")),
+                    ("2. Ubicación / Tótem", _ico("CROP_FREE_OUTLINED", "CROP_FREE", "LOCATION_ON_OUTLINED")),
+                    ("3. Etiquetas Cencosud", _ico("INVENTORY_2_OUTLINED", "LOCAL_MALL_OUTLINED")),
+                    ("4. Etiquetas Mercado Libre", _ico("ALL_INBOX_OUTLINED", "LOCAL_SHIPPING_OUTLINED")),
                 ],
             ),
         ]
@@ -1302,7 +1310,7 @@ def main(page: ft.Page):
                 elif tab_activa_izq == "FAVORITES":
                     favoritos_fijos = [
                         (ft.Icons.FACT_CHECK_OUTLINED, "Recepción 3-Way Match", "Conciliar PO vs Andén RF", 1, 0),
-                        (ft.Icons.DEPLOYED_CODE_OUTLINED, "Gemelo Digital 3D", "Mapa interactivo de Racks", 2, 3),
+                        (ft.Icons.VIEW_IN_AR_OUTLINED, "Gemelo Digital 3D", "Mapa interactivo de Racks", 2, 3),
                         (ft.Icons.QR_CODE_2_ROUNDED, "Imprimir LPN 15x10", "Etiquetas térmicas de pallet", 6, 0),
                     ]
                     for ico_f, tit_f, sub_f, m_f, s_f in favoritos_fijos:
