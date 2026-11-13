@@ -228,6 +228,385 @@ def preparar_assets_visuales():
 
 preparar_assets_visuales()
 
+class MonitorUsuariosColaModulo:
+    """Módulo principal independiente para supervisar Operadores RF/PC activos y la Cola de Picking en vivo."""
+
+    def __init__(self, page: ft.Page, tarjetas_adaptables: list, kpis_adaptables: list):
+        self.page = page
+        self.tarjetas_adaptables = tarjetas_adaptables
+        self.kpis_adaptables = kpis_adaptables
+
+        BG_MODULO = "#1B2122"
+        BG_CARD = "#262E30"
+        BG_INPUT = "#1D2426"
+        BG_DIGITAL = "#121718"
+        BORDER_COLOR = "#3B484B"
+        ACCENT_TEAL = "#527976"
+        ACCENT_CYAN = "#38BDF8"
+        ACCENT_BLUE = "#0284C7"
+        TEXT_WHITE = "#FFFFFF"
+        TEXT_MUTED = "#94A3B8"
+
+        lbl_kpi_usr_activos = ft.Text("0", size=18, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
+        lbl_kpi_cola_pend = ft.Text("0", size=18, weight=ft.FontWeight.W_900, color="#FBBF24", font_family="Consolas")
+        lbl_kpi_en_pack = ft.Text("0", size=18, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
+        lbl_kpi_movs_hoy = ft.Text("0", size=18, weight=ft.FontWeight.W_900, color=TEXT_WHITE, font_family="Consolas")
+
+        txt_buscar_cola = ft.TextField(
+            label="Filtrar Operador, N° OV o Cliente...",
+            width=260,
+            dense=True,
+            text_size=12,
+            color=TEXT_WHITE,
+            bgcolor=BG_INPUT,
+            border_color=BORDER_COLOR,
+            focused_border_color=ACCENT_CYAN,
+            label_style=ft.TextStyle(size=11, color=TEXT_MUTED),
+            content_padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+            border_radius=6,
+        )
+
+        def caja_kpi(txt_ctrl: ft.Text, titulo: str, color_borde: str):
+            return ft.Container(
+                width=145,
+                height=64,
+                bgcolor=BG_DIGITAL,
+                border_radius=8,
+                border=ft.Border.all(1.5, color_borde),
+                padding=8,
+                content=ft.Column(
+                    [
+                        txt_ctrl,
+                        ft.Text(titulo, size=10, color=TEXT_MUTED, weight=ft.FontWeight.BOLD),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=2,
+                ),
+            )
+
+        tabla_usuarios_rf = ft.DataTable(
+            heading_row_color="#181E20",
+            heading_row_height=34,
+            data_row_min_height=36,
+            data_row_max_height=42,
+            column_spacing=16,
+            horizontal_margin=10,
+            data_text_style=ft.TextStyle(color=TEXT_WHITE),
+            columns=[
+                ft.DataColumn(ft.Text("OPERADOR / USUARIO", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("ROL", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("BODEGA", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+                ft.DataColumn(ft.Text("ESTADO EN PISO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("ÚLTIMA ACCIÓN / ORDEN", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
+                ft.DataColumn(ft.Text("MOVIMIENTOS", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("UNID. PROCESADAS", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+            ],
+            rows=[],
+        )
+
+        tabla_cola_picking = ft.DataTable(
+            heading_row_color="#181E20",
+            heading_row_height=34,
+            data_row_min_height=36,
+            data_row_max_height=42,
+            column_spacing=16,
+            horizontal_margin=10,
+            data_text_style=ft.TextStyle(color=TEXT_WHITE),
+            columns=[
+                ft.DataColumn(ft.Text("PRIORIDAD / CORTE", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
+                ft.DataColumn(ft.Text("OV / OT EN COLA", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("CANAL", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
+                ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+                ft.DataColumn(ft.Text("CLIENTE / DESTINO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("ETAPA EN COLA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("OPERADOR RF", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+            ],
+            rows=[],
+        )
+
+        cont_tabla_usuarios = envolver_tabla_scroll(tabla_usuarios_rf, 250)
+        cont_tabla_cola = envolver_tabla_scroll(tabla_cola_picking, 310)
+
+        def refrescar_monitor_usuarios_y_cola(e=None):
+            bodega_act = obtener_bodega_activa(self.page)
+            q_filtro = (txt_buscar_cola.value or "").strip().upper()
+
+            try:
+                # 1. Leer usuarios de wms_usuarios
+                res_u = supabase.table("wms_usuarios").select("*").order("id", desc=False).execute()
+                usuarios_lista = [
+                    u for u in (res_u.data or [])
+                    if u.get("activo", True)
+                    and (
+                        coincide_bodega(u, bodega_act)
+                        or "AMBAS" in str(u.get("bodega") or "").upper()
+                        or "TODAS" in str(u.get("bodega") or "").upper()
+                    )
+                ]
+
+                # 2. Leer últimos movimientos de historial_movimientos y wms_packing_lists_fa
+                mapa_actividad_usr = {}
+                movs_totales = 0
+                try:
+                    res_h = supabase.table("historial_movimientos").select("*").order("id", desc=True).limit(300).execute()
+                    for m in (res_h.data or []):
+                        if not coincide_bodega(m, bodega_act):
+                            continue
+                        movs_totales += 1
+                        usr_k = str(m.get("usuario") or "APP_RF").strip().upper()
+                        if usr_k not in mapa_actividad_usr:
+                            mapa_actividad_usr[usr_k] = {
+                                "ultimo_mov": f"{m.get('tipo_movimiento', 'MOV')} • SKU {m.get('sku', '-')}",
+                                "conteo": 0,
+                                "unidades": 0,
+                            }
+                        mapa_actividad_usr[usr_k]["conteo"] += 1
+                        mapa_actividad_usr[usr_k]["unidades"] += int(float(m.get("unidades_afectadas") or 0))
+                except Exception:
+                    pass
+
+                mapa_op_por_ov = {}
+                try:
+                    res_pl = supabase.table("wms_packing_lists_fa").select("*").order("id", desc=True).limit(200).execute()
+                    for pl in (res_pl.data or []):
+                        if not coincide_bodega(pl, bodega_act):
+                            continue
+                        ov_k = str(pl.get("numero_ov") or "").split("(")[0].strip().upper().removesuffix("-FA").strip()
+                        op_k = str(pl.get("usuario_picking") or "").strip().upper()
+                        if ov_k and op_k and ov_k not in mapa_op_por_ov:
+                            mapa_op_por_ov[ov_k] = op_k
+                        if op_k:
+                            if op_k not in mapa_actividad_usr:
+                                mapa_actividad_usr[op_k] = {
+                                    "ultimo_mov": f"PACKING OV {ov_k}",
+                                    "conteo": 0,
+                                    "unidades": 0,
+                                }
+                            mapa_actividad_usr[op_k]["conteo"] += 1
+                except Exception:
+                    pass
+
+                # 3. Construir filas de tabla_usuarios_rf
+                filas_u = []
+                for u in usuarios_lista:
+                    cod_u = str(u.get("usuario") or "").strip().upper()
+                    nom_u = str(u.get("nombre_completo") or cod_u).strip().upper()
+                    rol_u = str(u.get("rol") or "OPERADOR").strip().upper()
+                    bod_u = str(u.get("bodega") or bodega_act).strip()
+
+                    if q_filtro and not any(q_filtro in x for x in (cod_u, nom_u, rol_u)):
+                        continue
+
+                    inf_act = mapa_actividad_usr.get(cod_u) or mapa_actividad_usr.get(nom_u) or {}
+                    cnt_m = inf_act.get("conteo", 0)
+                    unid_m = inf_act.get("unidades", 0)
+                    ult_txt = inf_act.get("ultimo_mov", "EN LÍNEA / DISPONIBLE")
+
+                    badge_est = (
+                        crear_badge_estado("ACTIVO EN PISO", "#065F46", "#D1FAE5")
+                        if cnt_m > 0
+                        else crear_badge_estado("HABILITADO", "#1E3A8A", "#DBEAFE")
+                    )
+
+                    filas_u.append(
+                        ft.DataRow(
+                            cells=[
+                                ft.DataCell(ft.Text(f"{nom_u} ({cod_u})", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                                ft.DataCell(ft.Text(rol_u, size=10.5, color=TEXT_WHITE)),
+                                ft.DataCell(ft.Text(bod_u, size=10.5, color="#34D399")),
+                                ft.DataCell(badge_est),
+                                ft.DataCell(ft.Text(ult_txt[:38], size=10.5, color="#FBBF24")),
+                                ft.DataCell(ft.Text(f"{cnt_m} movs", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                                ft.DataCell(ft.Text(f"{unid_m} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                            ]
+                        )
+                    )
+                tabla_usuarios_rf.rows = filas_u
+
+                # 4. Leer Cola de Picking desde netsuite_ordenes_venta
+                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(400).execute()
+                filas_cola = []
+                ovs_vistas = set()
+                cnt_pend_pick = 0
+                cnt_pend_pack = 0
+
+                for r in (res_ov.data or []):
+                    if not coincide_bodega(r, bodega_act):
+                        continue
+                    ov_raw = str(r.get("numero_ov") or "").strip().upper()
+                    ov_base = ov_raw.removesuffix("-FA").strip()
+                    if not ov_base or ov_base in ovs_vistas:
+                        continue
+
+                    est_ov = str(r.get("estado_ns") or r.get("estado") or "PENDIENTE_PICKING").strip().upper()
+                    if est_ov in ("PENDIENTE_FACTURACION", "FACTURADO", "EMPACADO", "COMPLETADO", "DESPACHADO", "ANULADO"):
+                        continue
+
+                    ovs_vistas.add(ov_base)
+                    if est_ov == "PENDIENTE_PACKING":
+                        cnt_pend_pack += 1
+                    else:
+                        cnt_pend_pick += 1
+
+                    cli_str = str(r.get("cliente_nombre") or r.get("cliente") or "CLIENTE").strip()
+                    canal_str = str(r.get("canal_venta") or "").upper()
+                    es_fa = ov_raw.endswith("-FA") or "FARM" in canal_str or ov_raw.startswith("OT-")
+                    fecha_s = str(r.get("fecha_emision_ns") or r.get("created_at") or "")[:10]
+                    op_asig = str(r.get("operador_asignado") or mapa_op_por_ov.get(ov_base) or "EN COLA GENERAL").upper()
+
+                    if q_filtro and not any(q_filtro in x for x in (ov_raw, cli_str.upper(), op_asig)):
+                        continue
+
+                    badge_canal = (
+                        crear_badge_estado("FARMACIA (-FA)", "#92400E", "#FEF3C7")
+                        if es_fa
+                        else crear_badge_estado("OV NORMAL", "#1E3A8A", "#DBEAFE")
+                    )
+                    badge_etapa = (
+                        crear_badge_estado("EN PACKING", "#0369A1", "#E0F2FE")
+                        if est_ov == "PENDIENTE_PACKING"
+                        else crear_badge_estado("EN COLA PICKING", "#92400E", "#FEF3C7")
+                    )
+
+                    filas_cola.append(
+                        ft.DataRow(
+                            color="#2A2419" if es_fa else None,
+                            cells=[
+                                ft.DataCell(ft.Text("ALTA (-FA)" if es_fa else "NORMAL", weight=ft.FontWeight.BOLD, size=10.5, color="#FBBF24" if es_fa else "#A78BFA")),
+                                ft.DataCell(ft.Text(ov_raw, weight=ft.FontWeight.W_900, size=11.5, color="#FBBF24" if es_fa else ACCENT_CYAN)),
+                                ft.DataCell(badge_canal),
+                                ft.DataCell(ft.Text(fecha_s, size=11, color="#34D399")),
+                                ft.DataCell(ft.Text(cli_str[:32], size=11, color=TEXT_WHITE)),
+                                ft.DataCell(badge_etapa),
+                                ft.DataCell(ft.Text(op_asig, weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
+                            ],
+                        )
+                    )
+
+                tabla_cola_picking.rows = filas_cola
+                lbl_kpi_usr_activos.value = str(len(usuarios_lista))
+                lbl_kpi_cola_pend.value = str(cnt_pend_pick)
+                lbl_kpi_en_pack.value = str(cnt_pend_pack)
+                lbl_kpi_movs_hoy.value = str(movs_totales)
+                self.page.update()
+            except Exception as ex:
+                print(f"[WARN] Error refrescando Monitor Usuarios y Cola: {ex}")
+
+        txt_buscar_cola.on_change = refrescar_monitor_usuarios_y_cola
+
+        barra_superior = ft.Container(
+            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+            bgcolor="#222A2C",
+            border_radius=8,
+            border=ft.Border.all(1, BORDER_COLOR),
+            content=ft.Row(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.PRECISION_MANUFACTURING_OUTLINED, color=ACCENT_CYAN, size=22),
+                            ft.Text(
+                                "MONITOR DE USUARIOS RF & COLA DE PICKING EN VIVO",
+                                size=14.5,
+                                weight=ft.FontWeight.W_900,
+                                color=TEXT_WHITE,
+                            ),
+                        ],
+                        spacing=10,
+                    ),
+                    ft.Row(
+                        [
+                            txt_buscar_cola,
+                            boton_primario(
+                                "ACTUALIZAR EN VIVO",
+                                ft.Icons.SYNC_ROUNDED,
+                                refrescar_monitor_usuarios_y_cola,
+                                ACCENT_BLUE,
+                                height_val=34,
+                            ),
+                        ],
+                        spacing=8,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                wrap=True,
+            ),
+        )
+
+        fila_kpis = ft.Row(
+            [
+                caja_kpi(lbl_kpi_usr_activos, "Operadores Activos", "#10B981"),
+                caja_kpi(lbl_kpi_cola_pend, "OVs en Cola Picking", "#F59E0B"),
+                caja_kpi(lbl_kpi_en_pack, "OVs en Packing", ACCENT_CYAN),
+                caja_kpi(lbl_kpi_movs_hoy, "Movimientos RF", "#8B5CF6"),
+            ],
+            spacing=12,
+            wrap=True,
+        )
+
+        tarjeta_usuarios = ft.Container(
+            padding=12,
+            bgcolor=BG_CARD,
+            border_radius=8,
+            border=ft.Border.all(1, BORDER_COLOR),
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.CENTER_FOCUS_STRONG_OUTLINED, color=ACCENT_CYAN, size=18),
+                            ft.Text("1. MONITOR DE OPERADORES RF / PC Y ACTIVIDAD EN PISO", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Divider(color=BORDER_COLOR, height=2),
+                    cont_tabla_usuarios,
+                ],
+                spacing=8,
+            ),
+        )
+
+        tarjeta_cola = ft.Container(
+            padding=12,
+            bgcolor=BG_CARD,
+            border_radius=8,
+            border=ft.Border.all(1, BORDER_COLOR),
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.ALL_INBOX_OUTLINED, color="#FBBF24", size=18),
+                            ft.Text("2. COLA ACTIVA DE PICKING Y PACKING (PRIORIDAD NORMAL VS FARMACIA -FA)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Divider(color=BORDER_COLOR, height=2),
+                    cont_tabla_cola,
+                ],
+                spacing=8,
+            ),
+        )
+
+        self.sub_completo = ft.Column([fila_kpis, tarjeta_usuarios, tarjeta_cola], spacing=10)
+        self.sub_solo_cola = ft.Column([fila_kpis, tarjeta_cola], spacing=10)
+        self.sub_solo_usuarios = ft.Column([fila_kpis, tarjeta_usuarios], spacing=10)
+        self.contenedor = ft.Container(content=self.sub_completo)
+
+        self.vista = ft.Container(
+            padding=12,
+            bgcolor=BG_MODULO,
+            expand=True,
+            content=ft.Column([barra_superior, self.contenedor], spacing=10, scroll=ft.ScrollMode.ALWAYS, expand=True),
+        )
+        self.refrescar_func = refrescar_monitor_usuarios_y_cola
+
+    def refrescar(self, e=None):
+        self.refrescar_func(e)
+
+    def sel_sub_monitor(self, idx: int):
+        vistas = [self.sub_completo, self.sub_solo_cola, self.sub_solo_usuarios]
+        self.contenedor.content = vistas[idx if 0 <= idx < len(vistas) else 0]
+        self.refrescar_func()
+        self.page.update()
 
 def main(page: ft.Page):
     page.title = "LUDIPEK WMS | Cloud Planning"
@@ -401,6 +780,7 @@ def main(page: ft.Page):
         recep = m1_recepcion.RecepcionModulo(page, tarjetas_adaptables, kpis_adaptables, get_indice_activo)
         puta = m2_putaway.PutawayModulo(page, tarjetas_adaptables, kpis_adaptables)
         pick = m3_picking.PickingModulo(page, tarjetas_adaptables, kpis_adaptables)
+        mon_cola = MonitorUsuariosColaModulo(page, tarjetas_adaptables, kpis_adaptables)
         inv = m4_inventario.InventarioModulo(page, tarjetas_adaptables, kpis_adaptables)
         mae = m5_maestra.MaestraModulo(page, tarjetas_adaptables, kpis_adaptables)
         imp = m6_impresion.ImpresionModulo(page, tarjetas_adaptables, kpis_adaptables)
@@ -409,27 +789,106 @@ def main(page: ft.Page):
         del TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:]
 
         vistas_mapa = [
-            ("Dashboards", ft.Icons.MONITOR_HEART_OUTLINED, dash.vista, dash.refrescar_dashboard, dash.sel_sub_dash, [("1. Vista Integral (BI + POs)", ft.Icons.DASHBOARD_OUTLINED), ("2. Productividad & Dock-to-Stock", ft.Icons.BOLT_ROUNDED), ("3. Ocupación, Quiebres & Dead Stock", ft.Icons.PIE_CHART_OUTLINE_ROUNDED)]),
-            ("Recepción\n(Ingresos PO)", ft.Icons.CHECK_BOX_OUTLINED, recep.vista, recep.cargar_lista_asns, recep.sel_sub_inb, [("1. Recepción Activa (PO)", ft.Icons.FACT_CHECK_OUTLINED), ("2. Consultas de Recepción", ft.Icons.MANAGE_SEARCH_ROUNDED), ("3. Control Calidad (QA por PO)", ft.Icons.VERIFIED_USER_OUTLINED), ("4. Modificación de PO y LPNs", ft.Icons.EDIT_NOTE_ROUNDED)]),
-            ("Almacenamiento\n(Mov. LPN)", ft.Icons.ACCOUNT_TREE_OUTLINED, puta.vista, puta.cargar_inventario_ubicaciones, puta.sel_sub_put, [("1. Putaway & Mapa de Stock", ft.Icons.DOMAIN_OUTLINED), ("2. Reabastecimiento (Reserva -> N1)", ft.Icons.ARROW_DOWNWARD_ROUNDED), ("3. Vista Combinada", ft.Icons.VIEW_AGENDA_OUTLINED), ("4. Gemelo Digital 3D", ft.Icons.VIEW_IN_AR_ROUNDED)]),
-            ("Olas\n(Packing)", ft.Icons.VIEW_IN_AR_OUTLINED, pick.vista, pick.cargar_monitor_packing_dual, pick.sel_sub_olas, [
-                ("1. Monitor Completo (Olas + Packing)", ft.Icons.VIEW_QUILT_OUTLINED),
-                ("2. Extracción Olas NetSuite", ft.Icons.CLOUD_DOWNLOAD_OUTLINED),
-                ("3. Estaciones Packing (Normal / -FA)", ft.Icons.INVENTORY_OUTLINED),
-                ("4. Facturación (Subida NetSuite)", ft.Icons.RECEIPT_LONG_ROUNDED),
-                ("5. Monitor Usuarios & Cola Picking", ft.Icons.SUPERVISED_USER_CIRCLE_ROUNDED),
-            ]),
-            ("Mov. Stock\n(Inventario)", ft.Icons.LIBRARY_BOOKS_OUTLINED, inv.vista, getattr(inv, "actualizar_todos_los_datos_func", None), inv.sel_sub_inventario, [
-                ("1. Pasillos y Cruce ERP", ft.Icons.RULE_ROUNDED),
-                ("2. SKU Dirigido & Ubic. Vacías", ft.Icons.TRACK_CHANGES_ROUNDED),
-                ("3. Trazabilidad LPN / Rack", ft.Icons.HISTORY_ROUNDED),
-                ("4. Alertas y Desvíos (RF)", ft.Icons.WARNING_AMBER_ROUNDED),
-            ]),
-            ("Admin & Maestra\n(Usuarios / SKU)", ft.Icons.ADMIN_PANEL_SETTINGS_OUTLINED, mae.vista, mae.cargar_maestra_skus, mae.sel_sub_maestra, [
-                ("1. Usuarios y Accesos (PC / RF)", ft.Icons.MANAGE_ACCOUNTS_ROUNDED),
-                ("2. Catálogo Maestro y Enrolamiento", ft.Icons.INVENTORY_2_OUTLINED),
-            ]),
-            ("Etiquetas\n(Impresión)", ft.Icons.HANDYMAN_OUTLINED, imp.vista, None, imp.sel_sub_imp, [("1. Imprimir LPN", ft.Icons.QR_CODE_2_ROUNDED), ("2. Ubicación / Tótem", ft.Icons.LOCATION_ON_OUTLINED), ("3. Etiquetas Cencosud", ft.Icons.LOCAL_MALL_OUTLINED), ("4. Etiquetas Mercado Libre", ft.Icons.LOCAL_SHIPPING_OUTLINED)]),
+            (
+                "Dashboards",
+                ft.Icons.TOKEN_OUTLINED,
+                dash.vista,
+                dash.refrescar_dashboard,
+                dash.sel_sub_dash,
+                [
+                    ("1. Vista Integral (BI + POs)", ft.Icons.DEPLOYED_CODE_OUTLINED),
+                    ("2. Productividad & Dock-to-Stock", ft.Icons.PRECISION_MANUFACTURING_OUTLINED),
+                    ("3. Ocupación, Quiebres & Dead Stock", ft.Icons.CATEGORY_OUTLINED),
+                ],
+            ),
+            (
+                "Recepción\n(Ingresos PO)",
+                ft.Icons.ALL_INBOX_OUTLINED,
+                recep.vista,
+                recep.cargar_lista_asns,
+                recep.sel_sub_inb,
+                [
+                    ("1. Recepción Activa (PO)", ft.Icons.INVENTORY_2_OUTLINED),
+                    ("2. Consultas de Recepción", ft.Icons.QR_CODE_SCANNER_OUTLINED),
+                    ("3. Control Calidad (QA por PO)", ft.Icons.CENTER_FOCUS_STRONG_OUTLINED),
+                    ("4. Modificación de PO y LPNs", ft.Icons.CROP_FREE_OUTLINED),
+                ],
+            ),
+            (
+                "Almacenamiento\n(Mov. LPN)",
+                ft.Icons.DEPLOYED_CODE_OUTLINED,
+                puta.vista,
+                puta.cargar_inventario_ubicaciones,
+                puta.sel_sub_put,
+                [
+                    ("1. Putaway & Mapa de Stock", ft.Icons.ALL_INBOX_OUTLINED),
+                    ("2. Reabastecimiento (Reserva -> N1)", ft.Icons.INVENTORY_2_OUTLINED),
+                    ("3. Vista Combinada", ft.Icons.CATEGORY_OUTLINED),
+                    ("4. Gemelo Digital 3D", ft.Icons.TOKEN_OUTLINED),
+                ],
+            ),
+            (
+                "Olas\n(Packing)",
+                ft.Icons.INVENTORY_2_OUTLINED,
+                pick.vista,
+                pick.cargar_monitor_packing_dual,
+                pick.sel_sub_olas,
+                [
+                    ("1. Monitor Completo (Olas + Packing)", ft.Icons.DEPLOYED_CODE_OUTLINED),
+                    ("2. Extracción Olas NetSuite", ft.Icons.ALL_INBOX_OUTLINED),
+                    ("3. Listado Órdenes de Venta", ft.Icons.INVENTORY_2_OUTLINED),
+                    ("4. Facturación (Subida NetSuite)", ft.Icons.CENTER_FOCUS_STRONG_OUTLINED),
+                ],
+            ),
+            (
+                "Monitor Usuarios\n& Cola Picking",
+                ft.Icons.PRECISION_MANUFACTURING_OUTLINED,
+                mon_cola.vista,
+                mon_cola.refrescar,
+                mon_cola.sel_sub_monitor,
+                [
+                    ("1. Monitor Operadores & Cola en Vivo", ft.Icons.CENTER_FOCUS_STRONG_OUTLINED),
+                    ("2. Cola Activa de Picking", ft.Icons.ALL_INBOX_OUTLINED),
+                    ("3. Operadores y Rendimiento RF", ft.Icons.PRECISION_MANUFACTURING_OUTLINED),
+                ],
+            ),
+            (
+                "Mov. Stock\n(Inventario)",
+                ft.Icons.CENTER_FOCUS_STRONG_OUTLINED,
+                inv.vista,
+                getattr(inv, "actualizar_todos_los_datos_func", None),
+                inv.sel_sub_inventario,
+                [
+                    ("1. Pasillos y Cruce ERP", ft.Icons.DEPLOYED_CODE_OUTLINED),
+                    ("2. SKU Dirigido & Ubic. Vacías", ft.Icons.CENTER_FOCUS_WEAK_OUTLINED),
+                    ("3. Trazabilidad LPN / Rack", ft.Icons.QR_CODE_SCANNER_OUTLINED),
+                    ("4. Alertas y Desvíos (RF)", ft.Icons.CROP_FREE_OUTLINED),
+                ],
+            ),
+            (
+                "Admin & Maestra\n(Usuarios / SKU)",
+                ft.Icons.CATEGORY_OUTLINED,
+                mae.vista,
+                mae.cargar_maestra_skus,
+                mae.sel_sub_maestra,
+                [
+                    ("1. Usuarios y Accesos (PC / RF)", ft.Icons.CENTER_FOCUS_STRONG_OUTLINED),
+                    ("2. Catálogo Maestro y Enrolamiento", ft.Icons.INVENTORY_2_OUTLINED),
+                ],
+            ),
+            (
+                "Etiquetas\n(Impresión)",
+                ft.Icons.QR_CODE_SCANNER_OUTLINED,
+                imp.vista,
+                None,
+                imp.sel_sub_imp,
+                [
+                    ("1. Imprimir LPN", ft.Icons.QR_CODE_SCANNER_OUTLINED),
+                    ("2. Ubicación / Tótem", ft.Icons.CROP_FREE_OUTLINED),
+                    ("3. Etiquetas Cencosud", ft.Icons.INVENTORY_2_OUTLINED),
+                    ("4. Etiquetas Mercado Libre", ft.Icons.ALL_INBOX_OUTLINED),
+                ],
+            ),
         ]
 
         COLOR_BG_PORTAL = "#527976"
@@ -493,6 +952,7 @@ def main(page: ft.Page):
                 "PC_DASHBOARD",
                 "PC_RECEPCION",
                 "PC_ALMACENAMIENTO",
+                "PC_OLAS",
                 "PC_OLAS",
                 "PC_INVENTARIO",
                 "PC_ADMIN_MAESTRA",
@@ -842,7 +1302,7 @@ def main(page: ft.Page):
                 elif tab_activa_izq == "FAVORITES":
                     favoritos_fijos = [
                         (ft.Icons.FACT_CHECK_OUTLINED, "Recepción 3-Way Match", "Conciliar PO vs Andén RF", 1, 0),
-                        (ft.Icons.VIEW_IN_AR_ROUNDED, "Gemelo Digital 3D", "Mapa interactivo de Racks", 2, 3),
+                        (ft.Icons.DEPLOYED_CODE_OUTLINED, "Gemelo Digital 3D", "Mapa interactivo de Racks", 2, 3),
                         (ft.Icons.QR_CODE_2_ROUNDED, "Imprimir LPN 15x10", "Etiquetas térmicas de pallet", 6, 0),
                     ]
                     for ico_f, tit_f, sub_f, m_f, s_f in favoritos_fijos:

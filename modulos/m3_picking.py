@@ -2987,7 +2987,7 @@ class PickingModulo:
                 [
                     ft.Row(
                         [
-                            ft.Icon(ft.Icons.VIEW_IN_AR_OUTLINED, color=ACCENT_CYAN, size=22),
+                            ft.Icon(ft.Icons.DEPLOYED_CODE_OUTLINED, color=ACCENT_CYAN, size=22),
                             ft.Text(
                                 "MONITOR DE ÓRDENES DE VENTA, USUARIOS & FACTURACIÓN",
                                 size=14,
