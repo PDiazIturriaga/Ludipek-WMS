@@ -26,6 +26,8 @@ class PickingModulo:
         ACCENT_CYAN = "#38BDF8"
         ACCENT_BLUE = "#0284C7"
         ACCENT_PURPLE = "#8B5CF6"
+        ACCENT_AMBER = "#F59E0B"
+        ACCENT_GREEN = "#10B981"
         TEXT_WHITE = "#FFFFFF"
         TEXT_MUTED = "#94A3B8"
 
@@ -35,10 +37,12 @@ class PickingModulo:
         checks_facturacion = {}
         registros_packing_db = []
         registros_locales_mem = []
+        usuarios_picking_db = []
         filtro_corte_activo = "TODOS"
         filtro_dia_ov_activo = "TODOS"
         filtro_canal_ov_activo = "TODOS"
         Archivo_Meta_Despacho = "config_despacho_packing.json"
+        Archivo_Destinacion_Usuarios = "config_usuarios_picking.json"
 
         def cargar_meta_despacho() -> dict:
             if os.path.exists(Archivo_Meta_Despacho):
@@ -48,6 +52,84 @@ class PickingModulo:
                 except Exception:
                     return {}
             return {}
+
+        def cargar_destinacion_usuarios() -> dict:
+            if os.path.exists(Archivo_Destinacion_Usuarios):
+                try:
+                    with open(Archivo_Destinacion_Usuarios, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    return {}
+            return {}
+
+        def guardar_destinacion_usuario(usr_key: str, canal_dest: str):
+            mapa = cargar_destinacion_usuarios()
+            mapa[str(usr_key).strip().upper()] = canal_dest
+            try:
+                with open(Archivo_Destinacion_Usuarios, "w", encoding="utf-8") as f:
+                    json.dump(mapa, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+        # --- CODIFICADOR / DECODIFICADOR DE ASIGNACIÓN Y PRIORIDAD EN CANAL_VENTA ---
+        def parsear_meta_canal_venta(canal_raw: str, ov_val: str = "") -> dict:
+            txt = str(canal_raw or "").strip().upper()
+            es_fa = ("FARM" in txt) or ("-FA" in txt) or str(ov_val).upper().endswith("-FA") or str(ov_val).upper().startswith("OT-")
+            prio = "NORMAL"
+            corte = ""
+            usr = "LIBRE"
+            usr_pickeo = ""
+
+            for parte in txt.split("|"):
+                p = parte.strip()
+                if p.startswith("PRIO:"):
+                    prio = p.replace("PRIO:", "").strip() or "NORMAL"
+                elif p.startswith("CORTE:"):
+                    corte = p.replace("CORTE:", "").strip()
+                elif p.startswith("USR:"):
+                    usr = p.replace("USR:", "").strip() or "LIBRE"
+                elif p.startswith("PICKBY:"):
+                    usr_pickeo = p.replace("PICKBY:", "").strip()
+
+            if prio not in ("URGENTE", "ALTA", "NORMAL"):
+                prio = "NORMAL"
+            return {
+                "es_farmacia": es_fa,
+                "prioridad": prio,
+                "corte": corte,
+                "usuario_asignado": usr,
+                "usuario_pickeo": usr_pickeo,
+            }
+
+        def construir_string_canal_venta(es_fa: bool, prioridad: str, corte: str, usuario_asignado: str, usuario_pickeo: str = "") -> str:
+            base = "FARMACIA (-FA)" if es_fa else "ESTANDAR"
+            prio_clean = str(prioridad or "NORMAL").strip().upper()
+            if prio_clean not in ("URGENTE", "ALTA", "NORMAL"):
+                prio_clean = "NORMAL"
+            corte_clean = str(corte or "09:00").strip()
+            usr_clean = str(usuario_asignado or "LIBRE").strip().upper()
+            partes = [base, f"PRIO:{prio_clean}", f"CORTE:{corte_clean}", f"USR:{usr_clean}"]
+            if usuario_pickeo:
+                partes.append(f"PICKBY:{str(usuario_pickeo).strip().upper()}")
+            return "|".join(partes)
+
+        def prioridad_a_numero(prio_str: str) -> int:
+            p = str(prio_str or "NORMAL").strip().upper()
+            if p == "URGENTE":
+                return 1
+            if p == "ALTA":
+                return 2
+            return 3
+
+        def corte_a_numero(corte_str: str) -> int:
+            orden = {"09:00": 1, "10:00": 2, "12:00": 3, "13:00": 4, ">13:00": 5}
+            return orden.get(str(corte_str or "09:00").strip(), 5)
+
+        def normalizar_cliente_clave(cli_raw: str) -> str:
+            s = " ".join(str(cli_raw or "").strip().upper().split())
+            if s in ("", "-", "NONE", "NULL", "CLIENTE", "SIN CLIENTE", "CLIENTE REGISTRADO", "CLIENTE FARMACIA"):
+                return ""
+            return s
 
         def boton_primario(texto: str, icono, on_click, color_bg: str, height_val: int = 30, width_val=None):
             def animar_hover(e):
@@ -79,7 +161,6 @@ class PickingModulo:
             notificar_global(self.page, texto, color)
 
         def descargar_archivo_web(ruta_archivo: str, titulo_doc: str = "Documento Generado"):
-            """Publica el Excel o PDF en /descargas/, lanza la descarga automática y abre ventana con botón directo."""
             if not ruta_archivo or not os.path.exists(ruta_archivo):
                 notificar("No se encontró el archivo generado en el servidor.", "#B91C1C")
                 return
@@ -234,14 +315,14 @@ class PickingModulo:
                 ),
             )
 
-        def dropdown_dark(label: str, width: int = None, expand=None, value: str = None, options: list = None):
+        def dropdown_dark(label: str, width: int = None, expand=None, value: str = None, options: list = None, on_change=None):
             opts = []
             for o in (options or []):
                 if isinstance(o, ft.DropdownOption) and not o.content:
                     opts.append(opt_w(o.key, o.text))
                 else:
                     opts.append(o)
-            return ft.Dropdown(
+            dd = ft.Dropdown(
                 label=label,
                 width=width,
                 expand=expand,
@@ -257,8 +338,12 @@ class PickingModulo:
                 content_padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                 border_radius=6,
             )
+            if on_change:
+                dd.on_change = on_change
+                dd.on_select = on_change
+            return dd
 
-        def crear_caja_digital(txt_control: ft.Text, etiqueta_inf: str, color_borde: str = "#6366F1", ancho: int = 82, on_click=None):
+        def crear_caja_digital(txt_control: ft.Text, etiqueta_inf: str, color_borde: str = "#6366F1", ancho: int = 86, on_click=None):
             return ft.Column(
                 [
                     ft.Container(
@@ -281,12 +366,6 @@ class PickingModulo:
             )
 
         def crear_indicador_circulo_etapa(estado_etapa: str, texto_etapa: str):
-            """
-            Indicador 100% de visualización (el estado se actualiza únicamente desde main.dart):
-            - 'COMPLETADO': Círculo verde relleno (#10B981) con check blanco.
-            - 'EN_PROCESO': Círculo ámbar brillante (#F59E0B) indicando etapa activa en RF.
-            - 'ESPERA': Círculo gris apagado (#334155).
-            """
             if estado_etapa == "COMPLETADO":
                 bg_circulo = "#10B981"
                 borde_circulo = "#34D399"
@@ -371,14 +450,14 @@ class PickingModulo:
             else:
                 return ">13:00"
 
-        # --- 5. CONTROLES VISUALES, CALENDARIO Y CONTADORES DIGITALES ---
+        # --- 5. CONTROLES VISUALES, CALENDARIO Y CONTADORES DEL DASHBOARD PLEGABLE ---
         hoy_str = datetime.now().strftime("%Y-%m-%d")
-        txt_fecha_desde = texto_dark(label="Fecha Desde (YYYY-MM-DD)", value=hoy_str, width=150)
-        txt_fecha_hasta = texto_dark(label="Fecha Hasta (YYYY-MM-DD)", value=hoy_str, width=150)
+        txt_fecha_desde = texto_dark(label="Fecha Desde (YYYY-MM-DD)", value=hoy_str, width=145)
+        txt_fecha_hasta = texto_dark(label="Fecha Hasta (YYYY-MM-DD)", value=hoy_str, width=145)
 
         dd_corte_asignar = dropdown_dark(
             label="Corte al Liberar Ola",
-            width=155,
+            width=150,
             value="AUTO",
             options=[
                 opt_w("AUTO", "AUTO (Por Hora OV)"),
@@ -392,7 +471,7 @@ class PickingModulo:
 
         dd_filtro_corte = dropdown_dark(
             label="Filtrar por Corte",
-            width=165,
+            width=160,
             value="TODOS",
             options=[
                 opt_w("TODOS", "TODOS LOS CORTES"),
@@ -404,7 +483,6 @@ class PickingModulo:
             ],
         )
 
-        # SELECTOR DE CALENDARIO INTERACTIVO PARA FILTRAR EL LISTADO DE OVs POR DÍA
         lbl_fecha_calendario_ov = ft.Text(
             "📅 TODAS LAS FECHAS",
             size=11,
@@ -499,10 +577,11 @@ class PickingModulo:
         lbl_corte_12 = ft.Text("00", size=22, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
         lbl_corte_13 = ft.Text("00", size=22, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
 
-        lbl_kpi_total_ovs = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color=TEXT_WHITE, font_family="Consolas")
-        lbl_kpi_ov_normal = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#38BDF8", font_family="Consolas")
-        lbl_kpi_ov_farma = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#FBBF24", font_family="Consolas")
-        lbl_kpi_pend_fact = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
+        # KPIs DEL DASHBOARD PLEGABLE (Total OVs, Picking Normal, Picking Farmacia, Cuántos van Pickeados)
+        lbl_kpi_total_ovs = ft.Text("0", size=19, weight=ft.FontWeight.W_900, color=TEXT_WHITE, font_family="Consolas")
+        lbl_kpi_ov_normal = ft.Text("0", size=19, weight=ft.FontWeight.W_900, color="#38BDF8", font_family="Consolas")
+        lbl_kpi_ov_farma = ft.Text("0", size=19, weight=ft.FontWeight.W_900, color="#FBBF24", font_family="Consolas")
+        lbl_kpi_van_pickeados = ft.Text("0", size=19, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
 
         fila_barras_cortes = ft.Row(
             spacing=14,
@@ -534,13 +613,12 @@ class PickingModulo:
             rows=[],
         )
 
-        # TABLA UNIFICADA DE ÓRDENES DE VENTA (SOLO VISUALIZACIÓN DE AVANCE DESDE MAIN.DART)
         tabla_listado_unico_ovs = ft.DataTable(
             heading_row_color="#181E20",
             heading_row_height=36,
             data_row_min_height=38,
             data_row_max_height=44,
-            column_spacing=16,
+            column_spacing=14,
             horizontal_margin=10,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
@@ -548,10 +626,61 @@ class PickingModulo:
                 ft.DataColumn(ft.Text("TIPO / CANAL", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("DÍA OV / CORTE", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
                 ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("OPERADOR RF", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
                 ft.DataColumn(ft.Text("PICKING", weight=ft.FontWeight.BOLD, size=10.5, color="#FBBF24")),
                 ft.DataColumn(ft.Text("PACKING", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("ENVIADO A FACTURACIÓN", weight=ft.FontWeight.BOLD, size=10.5, color="#34D399")),
                 ft.DataColumn(ft.Text("CONSULTA / ETIQUETA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+            ],
+            rows=[],
+        )
+
+        # TABLAS DEL NUEVO MÓDULO 5: MONITOR DE USUARIOS Y COLA DE ASIGNACIÓN AUTOMÁTICA
+        lbl_resumen_monitor_usuarios = ft.Text(
+            "Asignación automática activa: envía siempre la OV más antigua (por prioridad y corte) al main.dart y agrupa las OVs del mismo cliente.",
+            size=11.5,
+            weight=ft.FontWeight.BOLD,
+            color="#34D399",
+        )
+
+        tabla_monitor_usuarios_rf = ft.DataTable(
+            heading_row_color="#181E20",
+            heading_row_height=34,
+            data_row_min_height=36,
+            data_row_max_height=44,
+            column_spacing=14,
+            horizontal_margin=10,
+            data_text_style=ft.TextStyle(color=TEXT_WHITE),
+            columns=[
+                ft.DataColumn(ft.Text("USUARIO (MAIN.DART)", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("DESTINADO A PICKEAR", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
+                ft.DataColumn(ft.Text("OV(s) ASIGNADA(S) EN CURSO", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+                ft.DataColumn(ft.Text("CLIENTE EN PREPARACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("AVANCE UNIDADES", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("PICKEADAS HOY", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
+                ft.DataColumn(ft.Text("CONTROL DE ASIGNACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+            ],
+            rows=[],
+        )
+
+        tabla_cola_prioridad_ovs = ft.DataTable(
+            heading_row_color="#181E20",
+            heading_row_height=34,
+            data_row_min_height=36,
+            data_row_max_height=44,
+            column_spacing=12,
+            horizontal_margin=10,
+            data_text_style=ft.TextStyle(color=TEXT_WHITE),
+            columns=[
+                ft.DataColumn(ft.Text("ORDEN COLA", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+                ft.DataColumn(ft.Text("OV / OT", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("CANAL", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("FECHA / ANTIGÜEDAD", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
+                ft.DataColumn(ft.Text("CLIENTE (AGRUPACIÓN AUTO)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
+                ft.DataColumn(ft.Text("PRIORIDAD", weight=ft.FontWeight.BOLD, size=10, color="#F87171")),
+                ft.DataColumn(ft.Text("CORTE HORARIO", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
+                ft.DataColumn(ft.Text("ASIGNADO A (BLOQUEO RF)", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
             ],
             rows=[],
         )
@@ -592,6 +721,8 @@ class PickingModulo:
         cont_tabla_prev_ns = envolver_tabla_fluida(tabla_previsualizacion_ns, 200)
         cont_tabla_listado_unico = envolver_tabla_fluida(tabla_listado_unico_ovs, 390)
         cont_tabla_facturacion = envolver_tabla_fluida(tabla_facturacion_ns, 390)
+        cont_tabla_usuarios_rf = envolver_tabla_fluida(tabla_monitor_usuarios_rf, 230)
+        cont_tabla_cola_prio = envolver_tabla_fluida(tabla_cola_prioridad_ovs, 310)
 
         # --- 7. CONEXIÓN Y SINCRONIZACIÓN CON SUPABASE ---
         def detectar_es_farmacia_texto(*textos) -> bool:
@@ -646,17 +777,20 @@ class PickingModulo:
             if est_val in ("EMPACADO", "COMPLETADO"):
                 est_val = "PENDIENTE_FACTURACION"
 
-            canal_val = str(r.get("canal_venta") or r.get("tipo_ola") or r.get("canal") or "").strip().upper()
+            canal_raw = str(r.get("canal_venta") or r.get("tipo_ola") or r.get("canal") or "").strip()
+            meta_canal = parsear_meta_canal_venta(canal_raw, ov_val)
 
             es_fa = (
                 bool(r.get("es_farmacia"))
-                or detectar_es_farmacia_texto(ov_val, canal_val, r.get("sku"), r.get("descripcion"))
+                or meta_canal["es_farmacia"]
+                or detectar_es_farmacia_texto(ov_val, canal_raw, r.get("sku"), r.get("descripcion"))
             )
             if es_fa and not ov_val.endswith("-FA") and not ov_val.startswith("OT-"):
                 ov_val = f"{ov_val}-FA"
 
             ts_val = (
-                r.get("corte_horario")
+                meta_canal["corte"]
+                or r.get("corte_horario")
                 or r.get("hora_corte")
                 or r.get("corte")
                 or r.get("fecha_emision_ns")
@@ -678,13 +812,18 @@ class PickingModulo:
             bultos_cnt = int(meta_ov.get("bultos") or 1)
             lpn_str = str(meta_ov.get("lpn") or f"LPN-PK-{ov_limpia}").strip().upper()
 
+            usr_asig = str(r.get("usuario_asignado") or meta_canal["usuario_asignado"] or "LIBRE").strip().upper()
+            prio_ov = str(r.get("prioridad") or meta_canal["prioridad"] or "NORMAL").strip().upper()
+
             return {
                 "raw": r,
                 "id": r.get("id"),
                 "ov": ov_val,
                 "ov_base": ov_limpia,
                 "fecha_ov": fecha_ov_str,
+                "fecha_hora_raw": raw_fecha_ov,
                 "cliente": cli_val,
+                "cliente_key": normalizar_cliente_clave(cli_val),
                 "comuna": comuna_str,
                 "tipo_empaque": tipo_emp_str,
                 "bultos": bultos_cnt,
@@ -692,14 +831,55 @@ class PickingModulo:
                 "estado": est_val,
                 "es_farmacia": es_fa,
                 "corte": corte_str,
+                "prioridad": prio_ov,
+                "usuario_asignado": usr_asig,
+                "usuario_pickeo": meta_canal["usuario_pickeo"],
                 "unidades": unid_val,
                 "unidades_pickeadas": int(float(r.get("unidades_pickeadas") or r.get("cantidad_pickeada") or 0)),
                 "lineas_detalle": [],
                 "tabla_origen": r.get("_tabla_origen") or "netsuite_ordenes_venta",
             }
 
+        def cargar_usuarios_operativos_bodega():
+            nonlocal usuarios_picking_db
+            bodega_act = obtener_bodega_activa(self.page)
+            mapa_dest = cargar_destinacion_usuarios()
+            lista_u = []
+            try:
+                res_u = supabase.table("wms_usuarios").select("*").order("id").execute()
+                for row in (res_u.data or []):
+                    if row.get("activo") is False:
+                        continue
+                    u_log = str(row.get("usuario") or "").strip().upper()
+                    if not u_log:
+                        continue
+                    rol_u = str(row.get("rol") or "OPERADOR").strip().upper()
+                    bod_u = str(row.get("bodega") or "Bodega Santiago").strip()
+                    es_global = ("ADMIN" in rol_u) or ("AMBAS" in bod_u.upper()) or ("TODAS" in bod_u.upper())
+                    if not es_global and bod_u.upper() != bodega_act.upper():
+                        continue
+                    dest_guardada = mapa_dest.get(u_log)
+                    if not dest_guardada:
+                        pas_raw = str(row.get("pasillo_asignado") or "").strip().upper()
+                        if pas_raw in ("NORMAL", "FARMACIA", "AMBOS", "PAUSADO"):
+                            dest_guardada = pas_raw
+                        else:
+                            dest_guardada = "AMBOS"
+                    lista_u.append({
+                        "id": row.get("id"),
+                        "usuario": u_log,
+                        "nombre": str(row.get("nombre_completo") or u_log).strip().upper(),
+                        "rol": rol_u,
+                        "bodega": bod_u,
+                        "destinacion": dest_guardada,
+                    })
+            except Exception:
+                pass
+            usuarios_picking_db = lista_u
+
         def recargar_datos_supabase():
             nonlocal registros_packing_db
+            cargar_usuarios_operativos_bodega()
             agrupado_por_ov = {}
             mapa_meta_desp = cargar_meta_despacho()
 
@@ -710,13 +890,7 @@ class PickingModulo:
                     s_k = str(m.get("sku") or "").strip().upper()
                     if not s_k:
                         continue
-                    ean_val = (
-                        m.get("codigo_barras")
-                        or m.get("ean")
-                        or m.get("ean_base")
-                        or m.get("gtin")
-                        or ""
-                    )
+                    ean_val = m.get("codigo_barras") or m.get("ean") or m.get("ean_base") or m.get("gtin") or ""
                     info_sku_m = {
                         "descripcion": str(m.get("descripcion") or m.get("nombre") or "").strip(),
                         "ean": str(ean_val or "").strip(),
@@ -746,10 +920,7 @@ class PickingModulo:
             bodega_act = obtener_bodega_activa(self.page)
             try:
                 res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=False).limit(600).execute()
-                filas_ov = [
-                    r for r in (res_ov.data or [])
-                    if coincide_bodega(r, bodega_act)
-                ]
+                filas_ov = [r for r in (res_ov.data or []) if coincide_bodega(r, bodega_act)]
                 for r in filas_ov:
                     r_copia = dict(r)
                     r_copia["_tabla_origen"] = "netsuite_ordenes_venta"
@@ -885,6 +1056,175 @@ class PickingModulo:
                 key=lambda x: (str(x.get("fecha_ov") or ""), int(x.get("id") or 0)),
                 reverse=True,
             )
+
+        # --- MOTOR DE BLOQUEO, PRIORIDAD Y AGRUPACIÓN POR CLIENTE ---
+        def guardar_meta_asignacion_ov_supabase(ov_item: dict, nuevo_usr: str = None, nueva_prio: str = None, nuevo_corte: str = None):
+            """Actualiza en Supabase el usuario asignado, prioridad y corte de una OV y sincroniza todas las OVs pendientes del mismo cliente."""
+            usr_final = str(nuevo_usr if nuevo_usr is not None else ov_item.get("usuario_asignado", "LIBRE")).strip().upper()
+            prio_final = str(nueva_prio if nueva_prio is not None else ov_item.get("prioridad", "NORMAL")).strip().upper()
+            corte_final = str(nuevo_corte if nuevo_corte is not None else ov_item.get("corte", "09:00")).strip()
+            cli_key = ov_item.get("cliente_key") or normalizar_cliente_clave(ov_item.get("cliente", ""))
+            es_fa_base = bool(ov_item.get("es_farmacia"))
+
+            # Si hay otras OVs en PENDIENTE_PICKING con el MISMO CLIENTE y mismo canal, se actualizan juntas siempre
+            objetivos = [ov_item]
+            if cli_key:
+                for otra in registros_packing_db:
+                    if otra is ov_item:
+                        continue
+                    if otra.get("estado") == "PENDIENTE_PICKING" and bool(otra.get("es_farmacia")) == es_fa_base:
+                        if (otra.get("cliente_key") or normalizar_cliente_clave(otra.get("cliente", ""))) == cli_key:
+                            objetivos.append(otra)
+
+            for obj in objetivos:
+                obj["usuario_asignado"] = usr_final
+                obj["prioridad"] = prio_final
+                obj["corte"] = corte_final
+                canal_codificado = construir_string_canal_venta(
+                    bool(obj.get("es_farmacia")),
+                    prio_final,
+                    corte_final,
+                    usr_final,
+                    obj.get("usuario_pickeo", ""),
+                )
+                ov_cod = str(obj.get("ov") or "").strip().upper()
+                ov_sin_fa = ov_cod.removesuffix("-FA").strip()
+                try:
+                    if obj.get("id") is not None:
+                        supabase.table("netsuite_ordenes_venta").update({"canal_venta": canal_codificado}).eq("id", obj["id"]).execute()
+                    else:
+                        supabase.table("netsuite_ordenes_venta").update({"canal_venta": canal_codificado}).or_(
+                            f"numero_ov.eq.{ov_cod},numero_ov.eq.{ov_sin_fa}"
+                        ).execute()
+                except Exception:
+                    pass
+            return len(objetivos)
+
+        def obtener_cola_ordenada_picking() -> list:
+            """Devuelve todas las OVs en PENDIENTE_PICKING ordenadas por: 1° Prioridad -> 2° Corte Horario -> 3° OV Más Antigua."""
+            pendientes = [
+                r for r in registros_packing_db
+                if str(r.get("estado") or "").upper() in ("PENDIENTE_PICKING", "EN_PICKING")
+            ]
+
+            def clave_orden_fifo(item: dict):
+                prio_n = prioridad_a_numero(item.get("prioridad", "NORMAL"))
+                corte_n = corte_a_numero(item.get("corte", "09:00"))
+                fecha_s = str(item.get("fecha_ov") or "2099-12-31")
+                ov_num_str = "".join(c for c in str(item.get("ov_base") or item.get("ov") or "9999999") if c.isdigit())
+                ov_num = int(ov_num_str) if ov_num_str else 9999999
+                id_num = int(item.get("id") or 9999999)
+                return (prio_n, corte_n, fecha_s, ov_num, id_num)
+
+            return sorted(pendientes, key=clave_orden_fifo)
+
+        def asignar_siguiente_ov_mas_antigua_a_usuario(usr_codigo: str, notificar_ui: bool = True) -> list:
+            """Busca la OV libre más antigua compatible con el canal del usuario, agrupa todas las OVs del mismo cliente y se las bloquea."""
+            usr_up = str(usr_codigo or "").strip().upper()
+            if not usr_up or usr_up == "LIBRE":
+                return []
+
+            info_u = next((u for u in usuarios_picking_db if u["usuario"] == usr_up), None)
+            dest_u = info_u["destinacion"] if info_u else "AMBOS"
+            if dest_u == "PAUSADO":
+                if notificar_ui:
+                    notificar(f"El usuario {usr_up} está en modo PAUSADO. Cambie su destinación para asignarle OVs.", "#D97706")
+                return []
+
+            # Verificar si el usuario ya tiene OVs asignadas en curso en PENDIENTE_PICKING
+            ya_asignadas = [
+                r for r in registros_packing_db
+                if r.get("estado") == "PENDIENTE_PICKING" and str(r.get("usuario_asignado") or "").upper() == usr_up
+            ]
+            if ya_asignadas:
+                # Asegurar que si hay otra OV del mismo cliente libre, también se una a su grupo
+                primera = ya_asignadas[0]
+                guardar_meta_asignacion_ov_supabase(primera, nuevo_usr=usr_up)
+                if notificar_ui:
+                    ovs_txt = " + ".join(x["ov"] for x in ya_asignadas)
+                    notificar(f"{usr_up} ya tiene asignada en curso: {ovs_txt} ({primera.get('cliente', '')[:24]}).", ACCENT_BLUE)
+                return ya_asignadas
+
+            cola = obtener_cola_ordenada_picking()
+            candidata = None
+            for item in cola:
+                usr_act = str(item.get("usuario_asignado") or "LIBRE").upper()
+                if usr_act not in ("LIBRE", "", "NONE", "NULL", "SIN ASIGNAR"):
+                    continue
+                es_fa = bool(item.get("es_farmacia"))
+                if dest_u == "NORMAL" and es_fa:
+                    continue
+                if dest_u == "FARMACIA" and not es_fa:
+                    continue
+                candidata = item
+                break
+
+            if not candidata:
+                if notificar_ui:
+                    notificar(f"No hay OVs libres pendientes para el canal [{dest_u}] de {usr_up}.", "#D97706")
+                return []
+
+            cant_agrupadas = guardar_meta_asignacion_ov_supabase(candidata, nuevo_usr=usr_up)
+            asignadas_ahora = [
+                r for r in registros_packing_db
+                if r.get("estado") == "PENDIENTE_PICKING" and str(r.get("usuario_asignado") or "").upper() == usr_up
+            ]
+            if notificar_ui:
+                ovs_nomes = " + ".join(x["ov"] for x in asignadas_ahora)
+                extra_cli = f" ({cant_agrupadas} OVs juntas del mismo cliente)" if cant_agrupadas > 1 else ""
+                notificar(f"Asignada a {usr_up}: {ovs_nomes}{extra_cli} -> Enviada directo a su main.dart.", "#047857")
+            renderizar_monitor_cortes_y_tablas()
+            return asignadas_ahora
+
+        def auto_asignar_toda_la_cola_a_operadores_libres(e=None):
+            """Reparte automáticamente las OVs más antiguas a todos los operadores activos que estén libres."""
+            recargar_datos_supabase()
+            total_operadores_asignados = 0
+            for u in usuarios_picking_db:
+                if u["destinacion"] == "PAUSADO":
+                    continue
+                usr_log = u["usuario"]
+                tiene_activa = any(
+                    r.get("estado") == "PENDIENTE_PICKING" and str(r.get("usuario_asignado") or "").upper() == usr_log
+                    for r in registros_packing_db
+                )
+                if not tiene_activa:
+                    res_asig = asignar_siguiente_ov_mas_antigua_a_usuario(usr_log, notificar_ui=False)
+                    if res_asig:
+                        total_operadores_asignados += 1
+
+            renderizar_monitor_cortes_y_tablas()
+            if total_operadores_asignados > 0:
+                notificar(
+                    f"Asignación automática completada: {total_operadores_asignados} operador(es) recibieron la OV más antigua (agrupando mismo cliente).",
+                    "#047857",
+                )
+            else:
+                notificar("Todos los operadores activos ya tienen OV asignada en curso o no hay OVs libres.", ACCENT_BLUE)
+
+        def liberar_ovs_de_usuario(usr_codigo: str):
+            usr_up = str(usr_codigo or "").strip().upper()
+            liberadas = 0
+            for r in registros_packing_db:
+                if r.get("estado") == "PENDIENTE_PICKING" and str(r.get("usuario_asignado") or "").upper() == usr_up:
+                    guardar_meta_asignacion_ov_supabase(r, nuevo_usr="LIBRE")
+                    liberadas += 1
+            if liberadas > 0:
+                notificar(f"Se liberaron las OVs de {usr_up} para que otro operador pueda tomarlas.", "#D97706")
+            renderizar_monitor_cortes_y_tablas()
+
+        def cambiar_destinacion_operador(usr_codigo: str, nueva_dest: str):
+            usr_up = str(usr_codigo or "").strip().upper()
+            guardar_destinacion_usuario(usr_up, nueva_dest)
+            for u in usuarios_picking_db:
+                if u["usuario"] == usr_up:
+                    u["destinacion"] = nueva_dest
+            try:
+                supabase.table("wms_usuarios").update({"pasillo_asignado": nueva_dest}).eq("usuario", usr_up).execute()
+            except Exception:
+                pass
+            notificar(f"Usuario {usr_up} destinado a: {nueva_dest}.", "#047857")
+            renderizar_monitor_cortes_y_tablas()
 
         def cambiar_filtro_estado_interno(corte_sel: str):
             nonlocal filtro_corte_activo
@@ -1043,7 +1383,6 @@ class PickingModulo:
             page.update()
 
         def exportar_excel_facturacion_netsuite(e=None, solo_ov: dict = None):
-            """Genera y descarga en el navegador el Excel (.xlsx) para subir a NetSuite y facturar."""
             import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -1362,7 +1701,7 @@ class PickingModulo:
                     continue
                 if q_busq and not any(
                     q_busq in str(r.get(c_k, "")).upper()
-                    for c_k in ("ov", "cliente", "comuna", "fecha_ov")
+                    for c_k in ("ov", "cliente", "comuna", "fecha_ov", "usuario_asignado")
                 ):
                     continue
                 ovs_filtradas_listado.append(r)
@@ -1384,14 +1723,15 @@ class PickingModulo:
 
             normales_cnt = sum(1 for r in ovs_filtradas_listado if not r.get("es_farmacia"))
             farmacias_cnt = sum(1 for r in ovs_filtradas_listado if r.get("es_farmacia"))
-            enviadas_fact_cnt = sum(
-                1 for r in ovs_filtradas_listado if r.get("estado") in ("PENDIENTE_FACTURACION", "FACTURADO")
+            ya_pickeadas_cnt = sum(
+                1 for r in ovs_filtradas_listado
+                if str(r.get("estado") or "").upper() in ("PENDIENTE_PACKING", "PENDIENTE_FACTURACION", "FACTURADO")
             )
 
             lbl_kpi_total_ovs.value = str(len(ovs_filtradas_listado))
             lbl_kpi_ov_normal.value = str(normales_cnt)
             lbl_kpi_ov_farma.value = str(farmacias_cnt)
-            lbl_kpi_pend_fact.value = str(enviadas_fact_cnt)
+            lbl_kpi_van_pickeados.value = str(ya_pickeadas_cnt)
 
             fila_barras_cortes.controls.clear()
             col_detalle_ovs_por_corte.controls.clear()
@@ -1399,7 +1739,7 @@ class PickingModulo:
 
             for c_label in cortes_orden:
                 lista_c = agrupado_cortes[c_label]
-                listas_c = sum(1 for x in lista_c if x.get("estado") in ("PENDIENTE_FACTURACION", "FACTURADO"))
+                listas_c = sum(1 for x in lista_c if str(x.get("estado") or "").upper() in ("PENDIENTE_PACKING", "PENDIENTE_FACTURACION", "FACTURADO"))
                 fila_barras_cortes.controls.append(
                     construir_barra_corte(
                         c_label,
@@ -1413,14 +1753,14 @@ class PickingModulo:
                 if lista_c:
                     chips_ov = []
                     for x_ov in lista_c[:12]:
-                        es_env_f = x_ov.get("estado") in ("PENDIENTE_FACTURACION", "FACTURADO")
+                        es_pick_ok = str(x_ov.get("estado") or "").upper() in ("PENDIENTE_PACKING", "PENDIENTE_FACTURACION", "FACTURADO")
                         es_fa = x_ov.get("es_farmacia")
                         chips_ov.append(
                             ft.Container(
                                 padding=ft.Padding.symmetric(horizontal=7, vertical=2),
-                                bgcolor="#065F46" if es_env_f else ("#78350F" if es_fa else "#1E3A8A"),
+                                bgcolor="#065F46" if es_pick_ok else ("#78350F" if es_fa else "#1E3A8A"),
                                 border_radius=4,
-                                border=ft.Border.all(1, "#34D399" if es_env_f else ("#FBBF24" if es_fa else "#38BDF8")),
+                                border=ft.Border.all(1, "#34D399" if es_pick_ok else ("#FBBF24" if es_fa else "#38BDF8")),
                                 tooltip=f"OV {x_ov['ov']} | {x_ov['cliente']} | {x_ov['estado']}",
                                 on_click=lambda ev, ov_s=x_ov["ov"], inf=x_ov: mostrar_modal_detalle_ov(ov_s, inf),
                                 content=ft.Text(
@@ -1448,7 +1788,7 @@ class PickingModulo:
                                     [
                                         ft.Text(f"⏱️ CORTE {c_label} HRS", size=11, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
                                         ft.Text(
-                                            f"{len(lista_c)} OVs ({listas_c} Enviadas a Fact.)",
+                                            f"{len(lista_c)} OVs ({listas_c} Pickeadas)",
                                             size=10,
                                             weight=ft.FontWeight.W_600,
                                             color="#34D399" if listas_c > 0 else TEXT_MUTED,
@@ -1463,12 +1803,13 @@ class PickingModulo:
                     )
                 )
 
-            # 3. CONSTRUIR LISTADO UNIFICADO DE ÓRDENES DE VENTA (SOLO VISUALIZACIÓN DE AVANCE DESDE MAIN.DART)
+            # 3. CONSTRUIR LISTADO UNIFICADO DE ÓRDENES DE VENTA (VISUALIZACIÓN DE AVANCE DESDE MAIN.DART)
             nuevas_filas_listado = []
             for r_ov in ovs_filtradas_listado:
                 ov_cod = r_ov["ov"]
                 es_fa = bool(r_ov.get("es_farmacia"))
                 est_actual = str(r_ov.get("estado") or "PENDIENTE_PICKING").upper()
+                usr_asig = str(r_ov.get("usuario_asignado") or "LIBRE").upper()
 
                 color_ov_texto = "#FBBF24" if es_fa else ACCENT_CYAN
                 badge_tipo_canal = (
@@ -1498,6 +1839,12 @@ class PickingModulo:
                 ind_packing = crear_indicador_circulo_etapa(est_col_packing[0], est_col_packing[1])
                 ind_enviado_fact = crear_indicador_circulo_etapa(est_col_fact[0], est_col_fact[1])
 
+                badge_usr = (
+                    crear_badge_estado(f"🔒 {usr_asig}", "#581C87", "#F3E8FF")
+                    if usr_asig not in ("LIBRE", "", "NONE")
+                    else crear_badge_estado("COLA AUTO", "#334155", "#1E293B")
+                )
+
                 nuevas_filas_listado.append(
                     ft.DataRow(
                         color="#2A2419" if es_fa else None,
@@ -1512,7 +1859,8 @@ class PickingModulo:
                                     color="#34D399",
                                 )
                             ),
-                            ft.DataCell(ft.Text(r_ov["cliente"][:32], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(r_ov["cliente"][:28], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(badge_usr),
                             ft.DataCell(ind_picking),
                             ft.DataCell(ind_packing),
                             ft.DataCell(ind_enviado_fact),
@@ -1544,7 +1892,211 @@ class PickingModulo:
 
             tabla_listado_unico_ovs.rows = nuevas_filas_listado
 
-            # 4. Llenar Tabla Módulo 4: FACTURACIÓN (Sin duplicados ni filas fantasma)
+            # 4. RENDERIZAR MÓDULO 5: MONITOR DE USUARIOS Y COLA DE ASIGNACIÓN AUTOMÁTICA
+            filas_usuarios = []
+            for u in usuarios_picking_db:
+                usr_log = u["usuario"]
+                dest_act = u["destinacion"]
+
+                ovs_en_curso_u = [
+                    r for r in registros_packing_db
+                    if r.get("estado") == "PENDIENTE_PICKING" and str(r.get("usuario_asignado") or "").upper() == usr_log
+                ]
+                ovs_terminadas_u = [
+                    r for r in registros_packing_db
+                    if str(r.get("estado") or "").upper() in ("PENDIENTE_PACKING", "PENDIENTE_FACTURACION", "FACTURADO")
+                    and (str(r.get("usuario_asignado") or "").upper() == usr_log or str(r.get("usuario_pickeo") or "").upper() == usr_log)
+                ]
+
+                if ovs_en_curso_u:
+                    txt_ovs_act = " + ".join(x["ov"] for x in ovs_en_curso_u)
+                    if len(ovs_en_curso_u) > 1:
+                        txt_ovs_act += f" ({len(ovs_en_curso_u)} JUNTAS)"
+                    cli_act = ovs_en_curso_u[0].get("cliente", "-")[:28]
+                    unid_sol = sum(int(x.get("unidades") or 0) for x in ovs_en_curso_u)
+                    unid_pk = sum(int(x.get("unidades_pickeadas") or 0) for x in ovs_en_curso_u)
+                    txt_avance = f"{unid_pk} / {unid_sol} UN"
+                    badge_ov_curso = crear_badge_estado(txt_ovs_act, "#065F46", "#D1FAE5")
+                else:
+                    cli_act = "Disponible para recibir OV automática"
+                    txt_avance = "Esperando OV"
+                    badge_ov_curso = crear_badge_estado("LIBRE (SIN OV ACTIVA)", "#1E3A8A", "#DBEAFE")
+
+                dd_dest_u = dropdown_dark(
+                    width=165,
+                    value=dest_act if dest_act in ("AMBOS", "NORMAL", "FARMACIA", "PAUSADO") else "AMBOS",
+                    options=[
+                        opt_w("AMBOS", "AMBOS CANALES"),
+                        opt_w("NORMAL", "SOLO PICKING NORMAL"),
+                        opt_w("FARMACIA", "SOLO FARMACIA (-FA)"),
+                        opt_w("PAUSADO", "PAUSADO / NO ASIGNAR"),
+                    ],
+                    on_change=lambda ev, u_k=usr_log: cambiar_destinacion_operador(
+                        u_k, getattr(ev.control, "value", "AMBOS")
+                    ),
+                )
+
+                filas_usuarios.append(
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(
+                                ft.Row(
+                                    [
+                                        ft.Icon(ft.Icons.PERSON_PIN_CIRCLE_ROUNDED, color=ACCENT_CYAN, size=18),
+                                        ft.Column(
+                                            [
+                                                ft.Text(usr_log, weight=ft.FontWeight.W_900, size=11.5, color=TEXT_WHITE),
+                                                ft.Text(u["nombre"][:22], size=9.5, color=TEXT_MUTED),
+                                            ],
+                                            spacing=1,
+                                            alignment=ft.MainAxisAlignment.CENTER,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                )
+                            ),
+                            ft.DataCell(dd_dest_u),
+                            ft.DataCell(badge_ov_curso),
+                            ft.DataCell(ft.Text(cli_act, size=11, color=TEXT_WHITE if ovs_en_curso_u else TEXT_MUTED)),
+                            ft.DataCell(ft.Text(txt_avance, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(f"{len(ovs_terminadas_u)} OVs listas", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                            ft.DataCell(
+                                ft.Row(
+                                    [
+                                        boton_primario(
+                                            "ASIGNAR OV MÁS ANTIGUA",
+                                            ft.Icons.PLAY_FOR_WORK_ROUNDED,
+                                            lambda ev, u_k=usr_log: asignar_siguiente_ov_mas_antigua_a_usuario(u_k, True),
+                                            "#047857",
+                                            height_val=26,
+                                        ),
+                                        boton_primario(
+                                            "LIBERAR",
+                                            ft.Icons.LOCK_OPEN_ROUNDED,
+                                            lambda ev, u_k=usr_log: liberar_ovs_de_usuario(u_k),
+                                            "#B91C1C" if ovs_en_curso_u else "#334155",
+                                            height_val=26,
+                                        ),
+                                    ],
+                                    spacing=5,
+                                    tight=True,
+                                )
+                            ),
+                        ]
+                    )
+                )
+
+            tabla_monitor_usuarios_rf.rows = filas_usuarios
+
+            # Construir tabla de Cola Ordenada de Picking (con agrupación por mismo cliente)
+            cola_ordenada = obtener_cola_ordenada_picking()
+            conteo_por_cliente = {}
+            for r_c in cola_ordenada:
+                ck = r_c.get("cliente_key") or ""
+                if ck:
+                    conteo_por_cliente[(ck, bool(r_c.get("es_farmacia")))] = conteo_por_cliente.get((ck, bool(r_c.get("es_farmacia"))), 0) + 1
+
+            opciones_usr_cola = [opt_w("LIBRE", "🔓 LIBRE (COLA AUTO)")] + [
+                opt_w(u["usuario"], f"🔒 {u['usuario']}") for u in usuarios_picking_db
+            ]
+
+            filas_cola = []
+            for pos_idx, item_c in enumerate(cola_ordenada[:150], start=1):
+                ov_c = item_c["ov"]
+                es_fa = bool(item_c.get("es_farmacia"))
+                ck = item_c.get("cliente_key") or ""
+                cant_mismo_cli = conteo_por_cliente.get((ck, es_fa), 1) if ck else 1
+                prio_act = str(item_c.get("prioridad") or "NORMAL").upper()
+                corte_act = str(item_c.get("corte") or "09:00")
+                usr_act = str(item_c.get("usuario_asignado") or "LIBRE").upper()
+                if usr_act not in [o.key for o in opciones_usr_cola]:
+                    opciones_usr_cola.append(opt_w(usr_act, f"🔒 {usr_act}"))
+
+                dd_prio_fila = dropdown_dark(
+                    width=130,
+                    value=prio_act if prio_act in ("URGENTE", "ALTA", "NORMAL") else "NORMAL",
+                    options=[
+                        opt_w("URGENTE", "🔥 1. URGENTE"),
+                        opt_w("ALTA", "⚡ 2. ALTA"),
+                        opt_w("NORMAL", "⏱️ 3. NORMAL"),
+                    ],
+                    on_change=lambda ev, it=item_c: (
+                        guardar_meta_asignacion_ov_supabase(it, nueva_prio=getattr(ev.control, "value", "NORMAL")),
+                        renderizar_monitor_cortes_y_tablas(),
+                    ),
+                )
+
+                dd_corte_fila = dropdown_dark(
+                    width=110,
+                    value=corte_act if corte_act in ("09:00", "10:00", "12:00", "13:00", ">13:00") else "09:00",
+                    options=[
+                        opt_w("09:00", "09:00 hrs"),
+                        opt_w("10:00", "10:00 hrs"),
+                        opt_w("12:00", "12:00 hrs"),
+                        opt_w("13:00", "13:00 hrs"),
+                        opt_w(">13:00", ">13:00 hrs"),
+                    ],
+                    on_change=lambda ev, it=item_c: (
+                        guardar_meta_asignacion_ov_supabase(it, nuevo_corte=getattr(ev.control, "value", "09:00")),
+                        renderizar_monitor_cortes_y_tablas(),
+                    ),
+                )
+
+                dd_usr_fila = dropdown_dark(
+                    width=165,
+                    value=usr_act,
+                    options=list(opciones_usr_cola),
+                    on_change=lambda ev, it=item_c: (
+                        guardar_meta_asignacion_ov_supabase(it, nuevo_usr=getattr(ev.control, "value", "LIBRE")),
+                        renderizar_monitor_cortes_y_tablas(),
+                    ),
+                )
+
+                cli_texto = item_c["cliente"][:26]
+                if cant_mismo_cli > 1:
+                    cli_widget = ft.Row(
+                        [
+                            ft.Text(cli_texto, size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                            crear_badge_estado(f"🔗 {cant_mismo_cli} OVs JUNTAS", "#065F46", "#D1FAE5"),
+                        ],
+                        spacing=6,
+                        tight=True,
+                    )
+                else:
+                    cli_widget = ft.Text(cli_texto, size=11, color=TEXT_WHITE)
+
+                filas_cola.append(
+                    ft.DataRow(
+                        color="#2A2419" if es_fa else None,
+                        cells=[
+                            ft.DataCell(ft.Text(f"#{pos_idx}", weight=ft.FontWeight.W_900, size=11.5, color="#34D399")),
+                            ft.DataCell(ft.Text(ov_c, weight=ft.FontWeight.W_900, size=11.5, color="#FBBF24" if es_fa else ACCENT_CYAN)),
+                            ft.DataCell(
+                                crear_badge_estado("FARMACIA (-FA)", "#92400E", "#FEF3C7")
+                                if es_fa
+                                else crear_badge_estado("OV NORMAL", "#1E3A8A", "#DBEAFE")
+                            ),
+                            ft.DataCell(ft.Text(str(item_c.get("fecha_ov") or "-"), size=11, weight=ft.FontWeight.BOLD, color="#34D399")),
+                            ft.DataCell(cli_widget),
+                            ft.DataCell(dd_prio_fila),
+                            ft.DataCell(dd_corte_fila),
+                            ft.DataCell(dd_usr_fila),
+                            ft.DataCell(
+                                boton_primario(
+                                    "VER SKUs",
+                                    ft.Icons.VISIBILITY_OUTLINED,
+                                    lambda ev, it=item_c: mostrar_modal_detalle_ov(it["ov"], it),
+                                    "#334155",
+                                    height_val=26,
+                                )
+                            ),
+                        ],
+                    )
+                )
+
+            tabla_cola_prioridad_ovs.rows = filas_cola
+
+            # 5. Llenar Tabla Módulo 4: FACTURACIÓN
             ovs_en_facturacion = [
                 r for r in registros_packing_db
                 if r.get("estado") == "PENDIENTE_FACTURACION"
@@ -1919,8 +2471,12 @@ class PickingModulo:
                 ov_sin_fa = ov_final.removesuffix("-FA").strip()
 
                 cli_nom = str(item.get("cliente") or "CLIENTE REGISTRADO").strip()
-                canal_str = "FARMACIA (-FA)" if es_fa else "ESTANDAR"
+                canal_str = construir_string_canal_venta(es_fa, "NORMAL", corte_final, "LIBRE")
                 id_ext_str = str(item.get("id_externo_ns") or item.get("ov_original") or ov_final).strip()
+
+                fecha_ov_iso = str(item.get("fecha_ov") or datetime.now().strftime("%Y-%m-%d"))
+                if len(fecha_ov_iso) == 10:
+                    fecha_ov_iso = f"{fecha_ov_iso}T08:00:00"
 
                 payload_ov = {
                     "bodega": bodega_act,
@@ -1928,7 +2484,7 @@ class PickingModulo:
                     "numero_ov": ov_final,
                     "cliente_nombre": cli_nom,
                     "canal_venta": canal_str,
-                    "fecha_emision_ns": datetime.now().isoformat(),
+                    "fecha_emision_ns": fecha_ov_iso,
                     "estado_ns": "PENDIENTE_PICKING",
                 }
 
@@ -1987,11 +2543,11 @@ class PickingModulo:
                 liberadas_ok += 1
 
             olas_extraidas_ns[:] = [it for it in olas_extraidas_ns if it["ov"] not in ovs_liberadas_set]
-            notificar(f"¡{liberadas_ok} OVs liberadas a main.dart en estado PICKING!", "#047857")
+            notificar(f"¡{liberadas_ok} OVs liberadas a la cola automática de main.dart!", "#047857")
             renderizar_tabla_previsualizacion()
             cargar_monitor_packing_dual()
 
-        # --- 9. COMPOSICIÓN DE PANELES RESPONSIVOS Y BOTÓN DE PLEGAR KPIs ---
+        # --- 9. DASHBOARD SUPERIOR PLEGABLE / DESPLEGABLE ---
         panel_relojes_izquierdo = tarjeta_dark(
             ft.Column(
                 [
@@ -2007,13 +2563,13 @@ class PickingModulo:
                         wrap=True,
                     ),
                     ft.Divider(color=BORDER_COLOR, height=8),
-                    ft.Text("Resumen de Órdenes de Venta", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ft.Text("Dashboard General: Total OVs, Normal, Farmacia y Pickeados", size=11.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                     ft.Row(
                         [
-                            crear_caja_digital(lbl_kpi_total_ovs, "Total OVs", ACCENT_TEAL, 82, lambda e: aplicar_filtro_corte_rapido("TODOS")),
-                            crear_caja_digital(lbl_kpi_ov_normal, "OV Normal", ACCENT_BLUE, 82),
-                            crear_caja_digital(lbl_kpi_ov_farma, "OV Farmacia", "#D97706", 82),
-                            crear_caja_digital(lbl_kpi_pend_fact, "Enviadas Fact.", "#10B981", 82, lambda e: self.sel_sub_olas(3)),
+                            crear_caja_digital(lbl_kpi_total_ovs, "Total OVs", ACCENT_TEAL, 86, lambda e: aplicar_filtro_corte_rapido("TODOS")),
+                            crear_caja_digital(lbl_kpi_ov_normal, "Picking Normal", ACCENT_BLUE, 86),
+                            crear_caja_digital(lbl_kpi_ov_farma, "Picking Farma", "#D97706", 86),
+                            crear_caja_digital(lbl_kpi_van_pickeados, "Van Pickeados", "#10B981", 86),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_AROUND,
                         wrap=True,
@@ -2032,11 +2588,11 @@ class PickingModulo:
                             ft.Row(
                                 [
                                     ft.Container(width=10, height=10, bgcolor=ACCENT_BLUE, border_radius=2),
-                                    ft.Text("OV Normal", size=10, color=TEXT_MUTED),
+                                    ft.Text("Picking Normal", size=10, color=TEXT_MUTED),
                                     ft.Container(width=10, height=10, bgcolor="#FBBF24", border_radius=2),
-                                    ft.Text("OV Farmacia (-FA)", size=10, color=TEXT_MUTED),
+                                    ft.Text("Farmacia (-FA)", size=10, color=TEXT_MUTED),
                                     ft.Container(width=10, height=10, bgcolor="#10B981", border_radius=2),
-                                    ft.Text("Enviado a Facturación", size=10, color=TEXT_MUTED),
+                                    ft.Text("Ya Pickeado", size=10, color=TEXT_MUTED),
                                 ],
                                 spacing=6,
                             ),
@@ -2083,16 +2639,16 @@ class PickingModulo:
         )
 
         ico_toggle_kpi = ft.Icon(ft.Icons.KEYBOARD_ARROW_UP_ROUNDED, color=ACCENT_CYAN, size=16)
-        txt_toggle_kpi = ft.Text("PLEGAR KPIs", size=10.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)
+        txt_toggle_kpi = ft.Text("PLEGAR DASHBOARD", size=10.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)
 
         def toggle_kpis_superiores(e=None):
             bloque_superior_kpi_cortes.visible = not bloque_superior_kpi_cortes.visible
             if bloque_superior_kpi_cortes.visible:
                 ico_toggle_kpi.name = ft.Icons.KEYBOARD_ARROW_UP_ROUNDED
-                txt_toggle_kpi.value = "PLEGAR KPIs"
+                txt_toggle_kpi.value = "PLEGAR DASHBOARD"
             else:
                 ico_toggle_kpi.name = ft.Icons.KEYBOARD_ARROW_DOWN_ROUNDED
-                txt_toggle_kpi.value = "DESPLEGAR KPIs"
+                txt_toggle_kpi.value = "DESPLEGAR DASHBOARD"
             page.update()
 
         btn_plegar_kpis = ft.Container(
@@ -2102,7 +2658,7 @@ class PickingModulo:
             border_radius=6,
             border=ft.Border.all(1, BORDER_COLOR),
             ink=True,
-            tooltip="Plegar o desplegar el panel superior de KPIs",
+            tooltip="Plegar o desplegar el Dashboard superior de OVs",
             on_click=toggle_kpis_superiores,
             content=ft.Row([ico_toggle_kpi, txt_toggle_kpi], spacing=4, tight=True),
         )
@@ -2150,7 +2706,7 @@ class PickingModulo:
             )
         )
 
-        # TARJETA UNIFICADA DE ÓRDENES DE VENTA (CON FILTRO DE CALENDARIO Y VISUALIZACIÓN DE AVANCE)
+        # TARJETA UNIFICADA DE ÓRDENES DE VENTA
         tarjeta_listado_unico_ovs = tarjeta_dark(
             ft.Column(
                 [
@@ -2199,6 +2755,13 @@ class PickingModulo:
                                     dd_filtro_canal_ov,
                                     txt_buscar_ov_unificada,
                                     boton_primario(
+                                        "MONITOR USUARIOS & ASIGNACIÓN",
+                                        ft.Icons.SUPERVISED_USER_CIRCLE_ROUNDED,
+                                        lambda e: self.sel_sub_olas(4),
+                                        ACCENT_PURPLE,
+                                        height_val=34,
+                                    ),
+                                    boton_primario(
                                         "EXPORTAR PACKING (EXCEL)",
                                         ft.Icons.TABLE_VIEW_OUTLINED,
                                         lambda e: exportar_ov_farmacia_excel_pdf(None),
@@ -2219,6 +2782,103 @@ class PickingModulo:
                 ],
                 spacing=8,
             )
+        )
+
+        # SUBVISTA 5: MONITOR DE USUARIOS Y COLA DE ASIGNACIÓN AUTOMÁTICA
+        tarjeta_monitor_usuarios_y_cola = ft.Column(
+            [
+                tarjeta_dark(
+                    ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Column(
+                                        [
+                                            ft.Row(
+                                                [
+                                                    ft.Icon(ft.Icons.SUPERVISED_USER_CIRCLE_ROUNDED, color=ACCENT_CYAN, size=22),
+                                                    ft.Text(
+                                                        "5.1 MONITOR DE USUARIOS EN PISO: DESTINACIÓN A PICKING Y OVs EN CURSO (MAIN.DART)",
+                                                        size=13.5,
+                                                        weight=ft.FontWeight.W_900,
+                                                        color=TEXT_WHITE,
+                                                    ),
+                                                ],
+                                                spacing=8,
+                                            ),
+                                            lbl_resumen_monitor_usuarios,
+                                        ],
+                                        spacing=2,
+                                    ),
+                                    ft.Row(
+                                        [
+                                            boton_primario(
+                                                "⚡ AUTO-ASIGNAR OVs MÁS ANTIGUAS A OPERADORES LIBRES",
+                                                ft.Icons.BOLT_ROUNDED,
+                                                auto_asignar_toda_la_cola_a_operadores_libres,
+                                                "#047857",
+                                                height_val=34,
+                                            ),
+                                            boton_primario(
+                                                "VER LISTADO OVs",
+                                                ft.Icons.LIST_ALT_ROUNDED,
+                                                lambda e: self.sel_sub_olas(0),
+                                                ACCENT_TEAL,
+                                                height_val=34,
+                                            ),
+                                        ],
+                                        spacing=8,
+                                        wrap=True,
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                wrap=True,
+                            ),
+                            ft.Divider(color=BORDER_COLOR, height=4),
+                            cont_tabla_usuarios_rf,
+                        ],
+                        spacing=8,
+                    )
+                ),
+                tarjeta_dark(
+                    ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Column(
+                                        [
+                                            ft.Row(
+                                                [
+                                                    ft.Icon(ft.Icons.LOW_PRIORITY_ROUNDED, color="#FBBF24", size=20),
+                                                    ft.Text(
+                                                        "5.2 COLA CONSECUTIVA DE PICKING: PRIORIDAD, CORTE HORARIO Y AGRUPACIÓN MISMO CLIENTE",
+                                                        size=13,
+                                                        weight=ft.FontWeight.W_900,
+                                                        color=TEXT_WHITE,
+                                                    ),
+                                                ],
+                                                spacing=8,
+                                            ),
+                                            ft.Text(
+                                                "Las OVs se envían a main.dart en este orden estricto (1° Prioridad -> 2° Corte -> 3° Más Antigua). Si un cliente tiene 2 o más OVs, se agrupan y asignan juntas automáticamente.",
+                                                size=11,
+                                                color=TEXT_MUTED,
+                                            ),
+                                        ],
+                                        spacing=2,
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                wrap=True,
+                            ),
+                            ft.Divider(color=BORDER_COLOR, height=4),
+                            cont_tabla_cola_prio,
+                        ],
+                        spacing=8,
+                    )
+                ),
+            ],
+            spacing=10,
         )
 
         # SUBVISTA 4: MÓDULO DE FACTURACIÓN (SUBIDA A NETSUITE)
@@ -2281,7 +2941,6 @@ class PickingModulo:
 
         subvista_monitor_completo = ft.Column(
             [
-                bloque_superior_kpi_cortes,
                 tarjeta_extraccion_netsuite,
                 tarjeta_listado_unico_ovs,
             ],
@@ -2290,7 +2949,6 @@ class PickingModulo:
 
         subvista_solo_extraccion = ft.Column(
             [
-                bloque_superior_kpi_cortes,
                 tarjeta_extraccion_netsuite,
             ],
             spacing=10,
@@ -2310,9 +2968,16 @@ class PickingModulo:
             spacing=10,
         )
 
+        subvista_monitor_usuarios = ft.Column(
+            [
+                tarjeta_monitor_usuarios_y_cola,
+            ],
+            spacing=10,
+        )
+
         contenedor_subvista_olas = ft.Container(content=subvista_monitor_completo)
 
-        # BARRA SUPERIOR CON BOTÓN PEQUEÑO PARA PLEGAR / DESPLEGAR KPIs
+        # BARRA SUPERIOR CON BOTÓN PARA PLEGAR / DESPLEGAR DASHBOARD Y ACCESO AL MONITOR DE USUARIOS
         barra_titulo_monitor = ft.Container(
             padding=ft.Padding.symmetric(horizontal=14, vertical=10),
             bgcolor="#222A2C",
@@ -2324,14 +2989,21 @@ class PickingModulo:
                         [
                             ft.Icon(ft.Icons.VIEW_IN_AR_OUTLINED, color=ACCENT_CYAN, size=22),
                             ft.Text(
-                                "MONITOR DE ÓRDENES DE VENTA: PICKING, PACKING & FACTURACIÓN",
-                                size=14.5,
+                                "MONITOR DE ÓRDENES DE VENTA, USUARIOS & FACTURACIÓN",
+                                size=14,
                                 weight=ft.FontWeight.W_900,
                                 color=TEXT_WHITE,
                             ),
                             btn_plegar_kpis,
+                            boton_primario(
+                                "MONITOR USUARIOS",
+                                ft.Icons.SUPERVISED_USER_CIRCLE_ROUNDED,
+                                lambda e: self.sel_sub_olas(4),
+                                ACCENT_PURPLE,
+                                height_val=30,
+                            ),
                         ],
-                        spacing=10,
+                        spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     ft.Row(
@@ -2344,7 +3016,7 @@ class PickingModulo:
                             ft.IconButton(
                                 icon=ft.Icons.SYNC_ROUNDED,
                                 icon_color=ACCENT_CYAN,
-                                tooltip="Refrescar Listado de OVs y Estados",
+                                tooltip="Refrescar Dashboard, Usuarios y Listado de OVs",
                                 on_click=cargar_monitor_packing_dual,
                             ),
                         ],
@@ -2361,6 +3033,7 @@ class PickingModulo:
         col_principal_picking = ft.Column(
             [
                 barra_titulo_monitor,
+                bloque_superior_kpi_cortes,
                 contenedor_subvista_olas,
             ],
             spacing=10,
@@ -2379,6 +3052,7 @@ class PickingModulo:
         self.sub_extraccion = subvista_solo_extraccion
         self.sub_estaciones = subvista_solo_estaciones
         self.sub_facturacion = subvista_solo_facturacion
+        self.sub_usuarios = subvista_monitor_usuarios
         self.cargar_monitor_packing_dual_func = cargar_monitor_packing_dual
 
     def cargar_monitor_packing_dual(self, e=None):
@@ -2390,6 +3064,7 @@ class PickingModulo:
             self.sub_extraccion,
             self.sub_estaciones,
             self.sub_facturacion,
+            self.sub_usuarios,
         ]
         self.contenedor.content = vistas[idx if 0 <= idx < len(vistas) else 0]
         self.cargar_monitor_packing_dual_func()
