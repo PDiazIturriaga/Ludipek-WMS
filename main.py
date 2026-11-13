@@ -13,14 +13,22 @@ if hasattr(time, "tzset"):
     time.tzset()
 
 
+def _ico(*nombres_candidatos):
+    """Devuelve siempre un icono válido en la versión instalada de Flet sin arrojar error."""
+    for nom in nombres_candidatos:
+        limpio = str(nom or "").replace("ft.Icons.", "").replace("Icons.", "").strip()
+        val = getattr(ft.Icons, limpio, None)
+        if val is not None:
+            return val
+    return ft.Icons.WIDGETS_OUTLINED
+
+
 def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
     from PIL import Image, ImageDraw, ImageFilter
 
-    # Renderizado a 4x (440x260) con suavizado LANCZOS para lograr bordes e iluminación realistas
     W, H = 440, 260
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 
-    # Sombra proyectada en el piso con desenfoque gaussiano
     shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     sdraw = ImageDraw.Draw(shadow)
     if not sitting:
@@ -32,7 +40,6 @@ def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
 
     draw = ImageDraw.Draw(img)
 
-    # Paleta realista (Gato Tuxedo / Gris Carbón Satinado con pecho y guantes blancos y ojos esmeralda)
     FUR_DARK = (38, 46, 56, 255)
     FUR_MID = (58, 69, 82, 255)
     FUR_LIGHT = (82, 96, 112, 255)
@@ -84,11 +91,9 @@ def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
                 mid_y = (hip_y + foot_y) * 0.5 + 4 - lift * 8
             return [(hip_x, hip_y), (mid_x, mid_y), (foot_x, foot_y)]
 
-        # Patas en segundo plano (sombreadas para dar profundidad 3D)
         draw_limb(leg_kinematics(138, 138 + bob, math.pi, False), [20, 13, 9], FUR_SHADOW, WHITE_SHADE)
         draw_limb(leg_kinematics(272, 142 + bob, math.pi * 1.5, True), [18, 12, 8.5], FUR_SHADOW, WHITE_SHADE)
 
-        # Cola con curva en S dinámica
         tail_pts = []
         for t_i in range(25):
             t = t_i / 24.0
@@ -102,7 +107,6 @@ def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
             draw.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], fill=FUR_DARK)
             draw.line([x0, y0, x1, y1], fill=FUR_DARK, width=int(r * 2))
 
-        # Torso anatómico felino con brillo dorsal y pecho blanco
         draw.ellipse([105, 92 + bob, 215, 172 + bob], fill=FUR_DARK)
         draw.ellipse([215, 96 + bob, 312, 178 + bob], fill=FUR_DARK)
         draw.polygon([(155, 93 + bob), (275, 97 + bob), (285, 174 + bob), (145, 168 + bob)], fill=FUR_DARK)
@@ -110,13 +114,11 @@ def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
         draw.chord([125, 94 + bob, 290, 145 + bob], start=185, end=355, fill=FUR_MID)
         draw.chord([145, 96 + bob, 270, 128 + bob], start=190, end=350, fill=FUR_LIGHT)
 
-        # Patas en primer plano
         draw_limb(leg_kinematics(144, 138 + bob, 0.0, False), [22, 14, 9.5], FUR_DARK, WHITE_FUR)
         draw_limb(leg_kinematics(278, 142 + bob, math.pi * 0.5, True), [19, 12.5, 9], FUR_DARK, WHITE_FUR)
 
         head_cx, head_cy = 315, 92 + bob * 0.7
     else:
-        # Pose sentada elegante cuando se detiene a saludar
         draw.arc([95, 185, 235, 236], start=110, end=290, fill=FUR_DARK, width=22)
         draw.ellipse([145, 118, 255, 226], fill=FUR_DARK)
         draw.polygon([(175, 130), (265, 95), (295, 175), (215, 224)], fill=FUR_DARK)
@@ -126,7 +128,6 @@ def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
         draw_limb([(274, 152), (282, 192), (288, 224)], [18, 13, 9.5], FUR_DARK, WHITE_FUR)
         head_cx, head_cy = 292, 78
 
-    # Collar corporativo Ludipek + cascabel dorado
     draw.polygon(
         [(head_cx - 32, head_cy + 22), (head_cx + 12, head_cy + 36), (head_cx + 6, head_cy + 46), (head_cx - 38, head_cy + 31)],
         fill=COLLAR_TEAL,
@@ -134,7 +135,6 @@ def dibujar_frame_gato_realista(phase: float, sitting: bool = False):
     bx, by = head_cx + 8, head_cy + 44
     draw.ellipse([bx - 8, by - 8, bx + 8, by + 8], fill=GOLD_BELL, outline=(161, 98, 7, 255), width=2)
 
-    # Cabeza, orejas perfiladas, hocico blanco, nariz, ojos esmeralda con reflejo y bigotes
     draw.polygon([(head_cx + 2, head_cy - 28), (head_cx + 24, head_cy - 62), (head_cx + 34, head_cy - 20)], fill=FUR_SHADOW)
     draw.polygon([(head_cx + 8, head_cy - 28), (head_cx + 22, head_cy - 54), (head_cx + 29, head_cy - 22)], fill=PINK_EAR)
 
@@ -173,7 +173,6 @@ def preparar_assets_visuales():
         except Exception:
             pass
 
-    # Generar automáticamente Favicon y Pantalla de Carga Web desde logo.png
     if os.path.exists(ruta_logo_assets):
         try:
             with Image.open(ruta_logo_assets).convert("RGBA") as im_logo:
@@ -195,7 +194,6 @@ def preparar_assets_visuales():
         except Exception as ex_ico:
             print(f"[WARN] No se pudieron generar los iconos web: {ex_ico}")
 
-    # Sprites del gato guardián + bucle GIF optimizado
     try:
         frames_caminata = []
         for idx_f in range(6):
@@ -228,6 +226,7 @@ def preparar_assets_visuales():
 
 preparar_assets_visuales()
 
+
 class MonitorUsuariosColaModulo:
     """Módulo principal independiente para supervisar Operadores RF/PC activos y la Cola de Picking en vivo."""
 
@@ -241,7 +240,6 @@ class MonitorUsuariosColaModulo:
         BG_INPUT = "#1D2426"
         BG_DIGITAL = "#121718"
         BORDER_COLOR = "#3B484B"
-        ACCENT_TEAL = "#527976"
         ACCENT_CYAN = "#38BDF8"
         ACCENT_BLUE = "#0284C7"
         TEXT_WHITE = "#FFFFFF"
@@ -268,7 +266,7 @@ class MonitorUsuariosColaModulo:
 
         def caja_kpi(txt_ctrl: ft.Text, titulo: str, color_borde: str):
             return ft.Container(
-                width=145,
+                width=155,
                 height=64,
                 bgcolor=BG_DIGITAL,
                 border_radius=8,
@@ -314,7 +312,7 @@ class MonitorUsuariosColaModulo:
             horizontal_margin=10,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
-                ft.DataColumn(ft.Text("PRIORIDAD / CORTE", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
+                ft.DataColumn(ft.Text("PRIORIDAD", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
                 ft.DataColumn(ft.Text("OV / OT EN COLA", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("CANAL", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
                 ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
@@ -333,7 +331,6 @@ class MonitorUsuariosColaModulo:
             q_filtro = (txt_buscar_cola.value or "").strip().upper()
 
             try:
-                # 1. Leer usuarios de wms_usuarios
                 res_u = supabase.table("wms_usuarios").select("*").order("id", desc=False).execute()
                 usuarios_lista = [
                     u for u in (res_u.data or [])
@@ -345,7 +342,6 @@ class MonitorUsuariosColaModulo:
                     )
                 ]
 
-                # 2. Leer últimos movimientos de historial_movimientos y wms_packing_lists_fa
                 mapa_actividad_usr = {}
                 movs_totales = 0
                 try:
@@ -387,7 +383,6 @@ class MonitorUsuariosColaModulo:
                 except Exception:
                     pass
 
-                # 3. Construir filas de tabla_usuarios_rf
                 filas_u = []
                 for u in usuarios_lista:
                     cod_u = str(u.get("usuario") or "").strip().upper()
@@ -424,7 +419,6 @@ class MonitorUsuariosColaModulo:
                     )
                 tabla_usuarios_rf.rows = filas_u
 
-                # 4. Leer Cola de Picking desde netsuite_ordenes_venta
                 res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(400).execute()
                 filas_cola = []
                 ovs_vistas = set()
@@ -504,7 +498,7 @@ class MonitorUsuariosColaModulo:
                 [
                     ft.Row(
                         [
-                            ft.Icon(ft.Icons.PRECISION_MANUFACTURING_OUTLINED, color=ACCENT_CYAN, size=22),
+                            ft.Icon(_ico("PRECISION_MANUFACTURING_OUTLINED", "HUB_OUTLINED"), color=ACCENT_CYAN, size=22),
                             ft.Text(
                                 "MONITOR DE USUARIOS RF & COLA DE PICKING EN VIVO",
                                 size=14.5,
@@ -519,7 +513,7 @@ class MonitorUsuariosColaModulo:
                             txt_buscar_cola,
                             boton_primario(
                                 "ACTUALIZAR EN VIVO",
-                                ft.Icons.SYNC_ROUNDED,
+                                _ico("SYNC_ROUNDED", "REFRESH_ROUNDED"),
                                 refrescar_monitor_usuarios_y_cola,
                                 ACCENT_BLUE,
                                 height_val=34,
@@ -553,7 +547,7 @@ class MonitorUsuariosColaModulo:
                 [
                     ft.Row(
                         [
-                            ft.Icon(ft.Icons.CENTER_FOCUS_STRONG_OUTLINED, color=ACCENT_CYAN, size=18),
+                            ft.Icon(_ico("CENTER_FOCUS_STRONG_OUTLINED", "PERSON_SEARCH_OUTLINED"), color=ACCENT_CYAN, size=18),
                             ft.Text("1. MONITOR DE OPERADORES RF / PC Y ACTIVIDAD EN PISO", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                         ],
                         spacing=8,
@@ -574,7 +568,7 @@ class MonitorUsuariosColaModulo:
                 [
                     ft.Row(
                         [
-                            ft.Icon(ft.Icons.ALL_INBOX_OUTLINED, color="#FBBF24", size=18),
+                            ft.Icon(_ico("ALL_INBOX_OUTLINED", "INVENTORY_2_OUTLINED"), color="#FBBF24", size=18),
                             ft.Text("2. COLA ACTIVA DE PICKING Y PACKING (PRIORIDAD NORMAL VS FARMACIA -FA)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                         ],
                         spacing=8,
@@ -608,6 +602,7 @@ class MonitorUsuariosColaModulo:
         self.refrescar_func()
         self.page.update()
 
+
 def main(page: ft.Page):
     page.title = "LUDIPEK WMS | Cloud Planning"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -616,7 +611,6 @@ def main(page: ft.Page):
     page.overlay.clear()
     page.bodega_actual = "Bodega Santiago"
 
-    # PANTALLA DE LOGIN INICIAL CON SELECTOR DE BODEGA
     txt_login_user = ft.TextField(label="Usuario / RUT", width=300, prefix_icon=ft.Icons.PERSON)
     txt_login_pass = ft.TextField(
         label="Contraseña",
@@ -788,14 +782,6 @@ def main(page: ft.Page):
         tablas_scroll_sesion = list(TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:])
         del TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:]
 
-        def _ico(*nombres_candidatos):
-            """Devuelve el primer icono compatible en la versión instalada de Flet sin arrojar error."""
-            for nom in nombres_candidatos:
-                val = getattr(ft.Icons, nom, None)
-                if val is not None:
-                    return val
-            return ft.Icons.WIDGETS_OUTLINED
-
         vistas_mapa = [
             (
                 "Dashboards",
@@ -850,7 +836,7 @@ def main(page: ft.Page):
             ),
             (
                 "Monitor Usuarios\n& Cola Picking",
-                _ico("PRECISION_MANUFACTURING_OUTLINED", " Engineering_OUTLINED", " HUB_OUTLINED"),
+                _ico("PRECISION_MANUFACTURING_OUTLINED", "HUB_OUTLINED"),
                 mon_cola.vista,
                 mon_cola.refrescar,
                 mon_cola.sel_sub_monitor,
@@ -1015,11 +1001,11 @@ def main(page: ft.Page):
                     content=ft.Column(
                         [
                             ft.Icon(icono_mod, size=55, color=ft.Colors.WHITE),
-                            ft.Text(texto_mod, size=14, weight=ft.FontWeight.W_500, color=ft.Colors.WHITE, text_align=ft.TextAlign.CENTER)
+                            ft.Text(texto_mod, size=13.5, weight=ft.FontWeight.W_500, color=ft.Colors.WHITE, text_align=ft.TextAlign.CENTER)
                         ],
                         alignment=ft.MainAxisAlignment.CENTER,
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=15
+                        spacing=12
                     )
                 )
             )
@@ -1242,7 +1228,7 @@ def main(page: ft.Page):
                     cod_top = po_top.get("numero_oc") or po_top.get("codigo_asn") or "PO"
                     anuncios_items.append(
                         crear_item_panel_izq(
-                            ft.Icons.LOCAL_SHIPPING_OUTLINED,
+                            _ico("ALL_INBOX_OUTLINED", "LOCAL_SHIPPING_OUTLINED"),
                             f"{len(pos_activas)} POs en Recepción Activa",
                             f"Última: {cod_top} ({str(po_top.get('proveedor',''))[:18]})",
                             "#38BDF8",
@@ -1280,7 +1266,7 @@ def main(page: ft.Page):
                         for r in ultimos_lpns[:3]:
                             col_contenido_tab_izq.controls.append(
                                 crear_item_panel_izq(
-                                    ft.Icons.QR_CODE_2_ROUNDED,
+                                    _ico("QR_CODE_SCANNER_OUTLINED", "QR_CODE_2_ROUNDED"),
                                     f"{r.get('lpn', 'LPN')} • {r.get('sku', '')}",
                                     f"Recibido: {r.get('unidades_totales', 0)} UN en andén",
                                     "#38BDF8",
@@ -1309,9 +1295,9 @@ def main(page: ft.Page):
                         )
                 elif tab_activa_izq == "FAVORITES":
                     favoritos_fijos = [
-                        (ft.Icons.FACT_CHECK_OUTLINED, "Recepción 3-Way Match", "Conciliar PO vs Andén RF", 1, 0),
-                        (ft.Icons.VIEW_IN_AR_OUTLINED, "Gemelo Digital 3D", "Mapa interactivo de Racks", 2, 3),
-                        (ft.Icons.QR_CODE_2_ROUNDED, "Imprimir LPN 15x10", "Etiquetas térmicas de pallet", 6, 0),
+                        (_ico("ALL_INBOX_OUTLINED", "FACT_CHECK_OUTLINED"), "Recepción 3-Way Match", "Conciliar PO vs Andén RF", 1, 0),
+                        (_ico("TOKEN_OUTLINED", "VIEW_IN_AR_ROUNDED"), "Gemelo Digital 3D", "Mapa interactivo de Racks", 2, 3),
+                        (_ico("PRECISION_MANUFACTURING_OUTLINED", "HUB_OUTLINED"), "Monitor Usuarios & Cola", "Operadores y OVs en vivo", 4, 0),
                     ]
                     for ico_f, tit_f, sub_f, m_f, s_f in favoritos_fijos:
                         col_contenido_tab_izq.controls.append(
@@ -1413,12 +1399,12 @@ def main(page: ft.Page):
                 panel_perfil,
                 ft.Container(
                     expand=True,
-                    padding=ft.Padding.only(left=80, top=55, right=60, bottom=20),
+                    padding=ft.Padding.only(left=70, top=50, right=50, bottom=20),
                     alignment=ft.Alignment.TOP_LEFT,
                     content=ft.Column(
                         [
-                            ft.Row(botones_grid, wrap=True, spacing=40, run_spacing=45, alignment=ft.MainAxisAlignment.START),
-                            ft.Container(height=55),
+                            ft.Row(botones_grid, wrap=True, spacing=36, run_spacing=40, alignment=ft.MainAxisAlignment.START),
+                            ft.Container(height=45),
                             ft.Container(
                                 height=85,
                                 alignment=ft.Alignment.CENTER_LEFT,
@@ -1437,7 +1423,7 @@ def main(page: ft.Page):
         menu_apps_rapido = ft.PopupMenuButton(
             icon=ft.Icons.APPS_ROUNDED,
             icon_color=ft.Colors.WHITE,
-            tooltip="Acceso rápido a los 7 módulos WMS",
+            tooltip="Acceso rápido a los 8 módulos WMS",
             items=[
                 ft.PopupMenuItem(
                     content=ft.Text("🏠 Portal de Inicio (Home)"),
@@ -1580,7 +1566,7 @@ def main(page: ft.Page):
             if panel_submenus.content and hasattr(panel_submenus.content, "width"):
                 panel_submenus.content.width = ancho_menu
 
-            for mod_obj in (dash, recep, puta, pick, inv, mae, imp):
+            for mod_obj in (dash, recep, puta, pick, mon_cola, inv, mae, imp):
                 mod_obj.vista.padding = ft.Padding.only(
                     left=pad_vista, top=pad_vista, right=pad_vista + 6, bottom=pad_vista
                 )
@@ -1597,12 +1583,6 @@ def main(page: ft.Page):
                 card_k.padding = 8 if es_notebook else 12
                 box_ico.padding = 6 if es_notebook else 10
                 txt_val.size = 15 if es_notebook else 20
-
-            if hasattr(pick, "ajustar_layout_packing"):
-                try:
-                    pick.ajustar_layout_packing(ancho_w, alto_h)
-                except Exception:
-                    pass
 
             page.update()
 
