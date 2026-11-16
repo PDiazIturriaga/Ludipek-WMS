@@ -155,7 +155,7 @@ class PickingModulo:
             except Exception as ex:
                 notificar(f"Error procesando Excel de traslado: {ex}", "#B91C1C")
 
-        # Función asíncrona para procesar el archivo seleccionado
+        # Función asíncrona para procesar el archivo Excel de traslado SCL->CCP
         async def al_seleccionar_excel_traslado(e):
             archivos = getattr(e, "files", None)
             if not archivos:
@@ -179,6 +179,27 @@ class PickingModulo:
                         procesar_excel_traslado_scl_ccp(ruta_destino)
                 except Exception as ex_up:
                     notificar(f"Error cargando archivo en web: {ex_up}", "#B91C1C")
+
+        # Manejador asíncrono requerido por Flet >= 0.25.0
+        async def on_result_traslado_event(e):
+            await al_seleccionar_excel_traslado(e)
+
+        sig_fp_tr = inspect.signature(ft.FilePicker.__init__).parameters
+        kwargs_fp_tr = {}
+        if "on_result" in sig_fp_tr:
+            kwargs_fp_tr["on_result"] = on_result_traslado_event
+
+        picker_excel_traslado = ft.FilePicker(**kwargs_fp_tr)
+        try:
+            if hasattr(ft, "Service") and isinstance(picker_excel_traslado, ft.Service) and hasattr(self.page, "services"):
+                self.page.services.append(picker_excel_traslado)
+            else:
+                self.page.overlay.append(picker_excel_traslado)
+        except Exception:
+            try:
+                self.page.overlay.append(picker_excel_traslado)
+            except Exception:
+                pass
 
         # IMPORTANTE: Debe ser 'async def' para satisfacer a Flet
         async def on_result_traslado_event(e):
