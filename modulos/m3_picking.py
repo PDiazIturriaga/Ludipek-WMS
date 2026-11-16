@@ -28,7 +28,7 @@ class PickingModulo:
         TEXT_WHITE = "#FFFFFF"
         TEXT_MUTED = "#94A3B8"
 
-        # --- 2. VARIABLES DE ESTADO Y FUNCIONES AUXILIARES BASE ---
+        # --- 2. VARIABLES DE ESTADO Y AUXILIARES ---
         olas_extraidas_ns = []
         checks_liberacion = {}
         checks_facturacion = {}
@@ -43,7 +43,6 @@ class PickingModulo:
             from dependencias import notificar_global
             notificar_global(self.page, texto, color)
 
-        # DEFINICIÓN PRIMORDIAL DE boton_primario ANTES DE SU USO
         def boton_primario(texto: str, icono, on_click, color_bg: str, height_val: int = 30, width_val=None):
             def animar_hover(e):
                 e.control.opacity = 0.85 if e.data == "true" else 1.0
@@ -78,22 +77,21 @@ class PickingModulo:
                     return {}
             return {}
 
-        # --- 3. PRUEBA CONTROLADA: EXCEL TRASLADO -> PACKING RF ---
-        # Temporal: permite validar la subida del Excel y Packing sin modificar el resto del WMS.
-        MODO_PRUEBA_EXCEL_A_PACKING = True
+        # --- 3. PROCESAMIENTO ROBUSTO DE EXCEL TRASLADO (SCL a CCP) ---
         def procesar_excel_traslado_scl_ccp(ruta_excel: str):
-            """Crea una OT trazable en Supabase y la deja disponible para Picking RF."""
             id_ot_db = None
             try:
-                df_tras = pd.read_excel(ruta_excel, sheet_name="Traslado", header=2)
+                xls_file = pd.ExcelFile(ruta_excel)
+                hoja_real = next((s for s in xls_file.sheet_names if s.strip().lower() == "traslado"), "Traslado")
+                df_tras = pd.read_excel(ruta_excel, sheet_name=hoja_real, header=2)
 
-                # Consolidar SKU repetidos para no crear dos líneas RF del mismo artículo.
                 lineas_por_sku = {}
                 for _, row in df_tras.iterrows():
                     sku_raw = row.get("Artículo")
                     if pd.isna(sku_raw):
                         continue
                     sku = str(sku_raw).strip().upper()
+                    # Omitir nulos, celdas vacías o la fila resumen de total general
                     if not sku or sku == "NAN" or "TOTAL" in sku:
                         continue
                     try:
@@ -114,8 +112,6 @@ class PickingModulo:
                     return
 
                 bodega_act = obtener_bodega_activa(self.page)
-
-                # Número legible y único. Se verifica en Supabase por si hay dos cargas simultáneas.
                 base_ot = f"OT-SCL-CCP-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
                 num_ot = base_ot
                 correlativo = 1
@@ -130,15 +126,14 @@ class PickingModulo:
                     correlativo += 1
                     num_ot = f"{base_ot}-{correlativo:02d}"
 
-                # Asignación automática al operador RF activo con menor carga en la bodega.
                 operador_elegido = "SIN ASIGNAR"
                 carga = {}
                 try:
                     usuarios = supabase.table("wms_usuarios").select("*").eq("activo", True).execute()
                     for u in (usuarios.data or []):
-                        codigo = str(u.get("usuario") or "").strip().upper()
                         bodega_u = str(u.get("bodega") or "").strip().upper()
-                        if codigo and (coincide_bodega(u, bodega_act) or bodega_u in ("AMBAS", "TODAS")):
+                        codigo = str(u.get("usuario") or "").strip().upper()
+                        if codigo and (coincide_bodega(u, bodega_act) or "AMBAS" in bodega_u or "TODAS" in bodega_u):
                             carga[codigo] = 0
                     pendientes = (supabase.table("netsuite_ordenes_venta")
                                   .select("operador_asignado,bodega")
@@ -152,7 +147,6 @@ class PickingModulo:
                     if carga:
                         operador_elegido = min(carga, key=carga.get)
                 except Exception:
-                    # La OT sigue visible para asignación manual aunque no se pueda balancear.
                     pass
 
                 payload_ot = {
@@ -162,8 +156,7 @@ class PickingModulo:
                     "cliente_nombre": "BODEGA CONCEPCION (TRASLADO SCL-CCP)",
                     "canal_venta": "TRASLADO SCL-CCP",
                     "fecha_emision_ns": datetime.now().isoformat(),
-                    # En esta prueba se omite Picking para validar directamente Packing móvil.
-                    "estado_ns": "PENDIENTE_PACKING" if MODO_PRUEBA_EXCEL_A_PACKING else "PENDIENTE_PICKING",
+                    "estado_ns": "PENDIENTE_PICKING",
                     "operador_asignado": operador_elegido,
                 }
                 res_ins = supabase.table("netsuite_ordenes_venta").insert(payload_ot).execute()
@@ -180,9 +173,9 @@ class PickingModulo:
                     "sku": lin["sku"],
                     "cantidad_pedida": int(lin["cantidad"]),
                     "cantidad_comprometida": int(lin["cantidad"]),
-                    "cantidad_pickeada": int(lin["cantidad"]) if MODO_PRUEBA_EXCEL_A_PACKING else 0,
+                    "cantidad_pickeada": 0,
                     "lote_asignado": "",
-                    "estado_linea": "PICKEADO" if MODO_PRUEBA_EXCEL_A_PACKING else "PENDIENTE",
+                    "estado_linea": "PENDIENTE",
                     "lotes_pickeados": "",
                 } for idx, lin in enumerate(lineas_ot, start=1)]
 
@@ -190,61 +183,67 @@ class PickingModulo:
                 if not res_det.data:
                     raise RuntimeError("No se pudieron registrar las líneas de la OT")
 
-                destino_prueba = "PACKING RF" if MODO_PRUEBA_EXCEL_A_PACKING else "PICKING RF"
                 notificar(
-                    f"OT {num_ot} creada y lista en {destino_prueba}: "
-                    f"{len(lineas_ot)} SKU(s), {total_unidades} UN. "
-                    f"Busque este número exacto en el celular.",
+                    f"¡Orden de Traslado {num_ot} creada con éxito! "
+                    f"({len(lineas_ot)} SKUs | {total_unidades} UN) asignada a {operador_elegido}.",
                     "#047857",
                 )
-                cargar_monitor_packing_dual()
+                self.cargar_monitor_packing_dual()
 
             except Exception as ex:
-                # Compensación: evita dejar una cabecera huérfana si fallan sus líneas.
                 if id_ot_db is not None:
                     try:
                         supabase.table("netsuite_detalle_ov").delete().eq("orden_id", id_ot_db).execute()
                         supabase.table("netsuite_ordenes_venta").delete().eq("id", id_ot_db).execute()
                     except Exception:
                         pass
-                notificar(f"Error creando OT de traslado en Supabase: {ex}", "#B91C1C")
+                notificar(f"Error procesando Excel de traslado: {ex}", "#B91C1C")
 
-        # Función asíncrona para procesar el archivo Excel de traslado SCL->CCP
-        async def al_seleccionar_excel_traslado(e):
-            archivos = getattr(e, "files", None)
-            if not archivos:
-                notificar("Selección de archivo cancelada.", "#D97706")
+        # --- 4. PATRÓN SEGURO FILEPICKER (IDÉNTICO A M6_IMPRESION.PY) ---
+        async def manejar_archivo_traslado_seleccionado(archivos_lista):
+            if not archivos_lista:
                 return
-            
-            f_obj = archivos[0]
-            ruta_local = getattr(f_obj, "path", None)
-            
-            if ruta_local and os.path.exists(ruta_local):
-                procesar_excel_traslado_scl_ccp(ruta_local)
-            else:
-                try:
-                    nombre_f = f_obj.name
-                    os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
-                    ruta_destino = os.path.join("assets", "uploads", nombre_f)
-                    datos_bytes = getattr(f_obj, "bytes", None)
-                    if datos_bytes:
-                        with open(ruta_destino, "wb") as f_out:
-                            f_out.write(bytes(datos_bytes))
-                        procesar_excel_traslado_scl_ccp(ruta_destino)
-                    else:
-                        raise RuntimeError("Flet no entregó ruta ni bytes del archivo seleccionado")
-                except Exception as ex_up:
-                    notificar(f"Error cargando archivo en web: {ex_up}", "#B91C1C")
+            f_obj = archivos_lista[0]
+            nombre_limpio = os.path.basename(getattr(f_obj, "name", "traslado.xlsx"))
+            os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
+            ruta_destino = os.path.join("assets", "uploads", nombre_limpio)
 
-        # Compatibilidad entre versiones antiguas y nuevas de Flet.
-        async def on_result_traslado_event(e):
-            await al_seleccionar_excel_traslado(e)
+            datos_bytes = getattr(f_obj, "bytes", None)
+            if datos_bytes:
+                with open(ruta_destino, "wb") as f_out:
+                    f_out.write(bytes(datos_bytes))
+                procesar_excel_traslado_scl_ccp(ruta_destino)
+                return
+
+            ruta_local_pc = getattr(f_obj, "path", None)
+            if ruta_local_pc and os.path.exists(ruta_local_pc):
+                procesar_excel_traslado_scl_ccp(ruta_local_pc)
+                return
+
+            upload_url = self.page.get_upload_url(nombre_limpio, 600)
+            sig_up = inspect.signature(ft.FilePickerUploadFile.__init__).parameters
+            kwargs_up = {"upload_url": upload_url}
+            if "name" in sig_up:
+                kwargs_up["name"] = nombre_limpio
+            if "id" in sig_up and hasattr(f_obj, "id"):
+                kwargs_up["id"] = f_obj.id
+
+            arch_up = ft.FilePickerUploadFile(**kwargs_up)
+            res_u = picker_excel_traslado.upload([arch_up])
+            if inspect.iscoroutine(res_u):
+                await res_u
+            procesar_excel_traslado_scl_ccp(ruta_destino)
+
+        def on_result_traslado_event(e):
+            archivos = getattr(e, "files", None)
+            self.page.run_task(lambda: manejar_archivo_traslado_seleccionado(archivos))
 
         sig_fp_tr = inspect.signature(ft.FilePicker.__init__).parameters
-        usa_evento_on_result = "on_result" in sig_fp_tr
-        kwargs_fp_tr = {"on_result": on_result_traslado_event} if usa_evento_on_result else {}
-        picker_excel_traslado = ft.FilePicker(**kwargs_fp_tr)
+        kwargs_fp_tr = {}
+        if "on_result" in sig_fp_tr:
+            kwargs_fp_tr["on_result"] = on_result_traslado_event
 
+        picker_excel_traslado = ft.FilePicker(**kwargs_fp_tr)
         try:
             if hasattr(ft, "Service") and isinstance(picker_excel_traslado, ft.Service) and hasattr(self.page, "services"):
                 self.page.services.append(picker_excel_traslado)
@@ -256,28 +255,25 @@ class PickingModulo:
             except Exception:
                 pass
 
-        # El handler también debe ser coroutine. No usar run_task(lambda: ...),
-        # porque Flet valida que el handler recibido sea una función async real.
-        async def abrir_selector_traslado(e=None):
+        async def seleccionar_excel_traslado(e=None):
             sig_pick = inspect.signature(picker_excel_traslado.pick_files).parameters
-            kwargs_pick = {"allow_multiple": False, "allowed_extensions": ["xlsx", "xls"]}
+            kwargs_pick = {
+                "allow_multiple": False,
+                "allowed_extensions": ["xlsx", "xls"],
+            }
             if "with_data" in sig_pick:
                 kwargs_pick["with_data"] = True
-
-            resultado = picker_excel_traslado.pick_files(**kwargs_pick)
-            if inspect.isawaitable(resultado):
-                resultado = await resultado
-
-            # En Flet reciente pick_files() devuelve directamente la lista.
-            # En versiones antiguas, on_result procesa el evento por separado.
-            if resultado and not usa_evento_on_result:
-                evento_compatible = type("FilePickerResult", (), {"files": resultado})()
-                await al_seleccionar_excel_traslado(evento_compatible)
+            res_pick = picker_excel_traslado.pick_files(**kwargs_pick)
+            if inspect.iscoroutine(res_pick):
+                archivos_devueltos = await res_pick
+                if archivos_devueltos is not None:
+                    lista_f = getattr(archivos_devueltos, "files", archivos_devueltos)
+                    await manejar_archivo_traslado_seleccionado(lista_f)
 
         btn_subir_traslado = boton_primario(
             "SUBIR EXCEL TRASLADO SCL->CCP",
             ft.Icons.UPLOAD_FILE_ROUNDED,
-            abrir_selector_traslado,
+            lambda e: self.page.run_task(seleccionar_excel_traslado),
             "#B45309",
             height_val=34,
         )
@@ -1868,9 +1864,7 @@ class PickingModulo:
             renderizar_tabla_previsualizacion()
             cargar_monitor_packing_dual()
 
-        # =====================================================================
-        # VISTA 1: MONITOR DE OLAS Y PACKING
-        # =====================================================================
+        # --- 9. COMPOSICIÓN DE PANELES RESPONSIVOS Y BOTÓN DE PLEGAR KPIs ---
         panel_relojes_izquierdo = tarjeta_dark(
             ft.Column(
                 [
@@ -2141,7 +2135,7 @@ class PickingModulo:
                             txt_fecha_hasta,
                             dd_corte_asignar,
                             dd_filtro_corte,
-                            btn_subir_traslado, # <-- BOTÓN EXCEL TRASLADO SCL->CCP
+                            btn_subir_traslado, # <-- BOTÓN EXCEL TRASLADO SCL->CCP INTEGRADO AQUÍ
                             boton_primario("1. EXTRAER ORDENES NETSUITE", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, extraer_ordenes_netsuite, ACCENT_BLUE),
                             ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, on_click=cargar_monitor_packing_dual),
                         ],
