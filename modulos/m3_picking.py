@@ -28,7 +28,7 @@ class PickingModulo:
         TEXT_WHITE = "#FFFFFF"
         TEXT_MUTED = "#94A3B8"
 
-        # --- 2. VARIABLES DE ESTADO ---
+        # --- 2. VARIABLES DE ESTADO Y FUNCIONES AUXILIARES BASE ---
         olas_extraidas_ns = []
         checks_liberacion = {}
         checks_facturacion = {}
@@ -39,6 +39,36 @@ class PickingModulo:
         filtro_canal_ov_activo = "TODOS"
         Archivo_Meta_Despacho = "config_despacho_packing.json"
 
+        def notificar(texto: str, color: str = "#0284C7"):
+            from dependencias import notificar_global
+            notificar_global(self.page, texto, color)
+
+        # DEFINICIÓN PRIMORDIAL DE boton_primario ANTES DE SU USO
+        def boton_primario(texto: str, icono, on_click, color_bg: str, height_val: int = 30, width_val=None):
+            def animar_hover(e):
+                e.control.opacity = 0.85 if e.data == "true" else 1.0
+                e.control.update()
+
+            return ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(icono, color=TEXT_WHITE, size=14),
+                        ft.Text(texto, size=10.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                    ],
+                    spacing=5,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    tight=True,
+                ),
+                bgcolor=color_bg,
+                padding=ft.Padding.symmetric(horizontal=10, vertical=0),
+                height=height_val,
+                width=width_val,
+                border_radius=6,
+                ink=True,
+                on_click=on_click,
+                on_hover=animar_hover,
+            )
+
         def cargar_meta_despacho() -> dict:
             if os.path.exists(Archivo_Meta_Despacho):
                 try:
@@ -48,9 +78,10 @@ class PickingModulo:
                     return {}
             return {}
 
-        # <--- AQUÍEXCEL TRASLADO  --->
+        # --- 3. PROCESAMIENTO ROBUSTO DE EXCEL TRASLADO (SCL a CCP) ---
         def procesar_excel_traslado_scl_ccp(ruta_excel: str):
             try:
+                # La hoja 'Traslado' tiene los headers reales en la fila 3 (header=2)
                 df_tras = pd.read_excel(ruta_excel, sheet_name="Traslado", header=2)
                 lineas_ot = []
                 total_unidades = 0
@@ -60,6 +91,7 @@ class PickingModulo:
                     if pd.isna(sku_raw):
                         continue
                     sku = str(sku_raw).strip().upper()
+                    # Omitir nulos, celdas vacías o la fila resumen de total general
                     if not sku or sku == 'NAN' or 'TOTAL' in sku:
                         continue
                     
@@ -81,7 +113,7 @@ class PickingModulo:
                         total_unidades += cant
 
                 if not lineas_ot:
-                    notificar("No hay artículos con cantidad a enviar de SCL a CCP (>0).", "#D97706")
+                    notificar("No se encontraron artículos con cantidad a enviar de SCL a CCP (>0) en el archivo.", "#D97706")
                     return
 
                 num_ot = f"OT-SCL-CCP-{datetime.now().strftime('%Y%m%d-%H%M')}"
@@ -122,15 +154,13 @@ class PickingModulo:
                     notificar("Error al registrar la OT en Supabase.", "#B91C1C")
             except Exception as ex:
                 notificar(f"Error procesando Excel de traslado: {ex}", "#B91C1C")
+
         def al_seleccionar_excel_traslado(e):
             archivos = getattr(e, "files", None)
             if not archivos:
-                notificar("Selección de archivo cancelada.", "#D97706")
                 return
-            
             f_obj = archivos[0]
             ruta_local = getattr(f_obj, "path", None)
-            
             if ruta_local and os.path.exists(ruta_local):
                 procesar_excel_traslado_scl_ccp(ruta_local)
             else:
@@ -149,13 +179,12 @@ class PickingModulo:
         def on_result_traslado_event(e):
             self.page.run_task(lambda: al_seleccionar_excel_traslado(e))
 
-        # Patrón seguro basado en inspect.signature idéntico a m1_recepcion.py y m6_impresion.py
-        sig_fp = inspect.signature(ft.FilePicker.__init__).parameters
-        kwargs_fp = {}
-        if "on_result" in sig_fp:
-            kwargs_fp["on_result"] = on_result_traslado_event
+        sig_fp_tr = inspect.signature(ft.FilePicker.__init__).parameters
+        kwargs_fp_tr = {}
+        if "on_result" in sig_fp_tr:
+            kwargs_fp_tr["on_result"] = on_result_traslado_event
 
-        picker_excel_traslado = ft.FilePicker(**kwargs_fp)
+        picker_excel_traslado = ft.FilePicker(**kwargs_fp_tr)
         try:
             if hasattr(ft, "Service") and isinstance(picker_excel_traslado, ft.Service) and hasattr(self.page, "services"):
                 self.page.services.append(picker_excel_traslado)
@@ -169,13 +198,9 @@ class PickingModulo:
 
         def abrir_selector_traslado(e=None):
             sig_pick = inspect.signature(picker_excel_traslado.pick_files).parameters
-            kwargs_pick = {
-                "allow_multiple": False,
-                "allowed_extensions": ["xlsx", "xls"],
-            }
+            kwargs_pick = {"allow_multiple": False, "allowed_extensions": ["xlsx", "xls"]}
             if "with_data" in sig_pick:
                 kwargs_pick["with_data"] = True
-            
             res_p = picker_excel_traslado.pick_files(**kwargs_pick)
             if inspect.iscoroutine(res_p):
                 self.page.run_task(lambda: res_p)
@@ -187,44 +212,6 @@ class PickingModulo:
             "#B45309",
             height_val=34,
         )
-
-        def cargar_meta_despacho() -> dict:
-            if os.path.exists(Archivo_Meta_Despacho):
-                try:
-                    with open(Archivo_Meta_Despacho, "r", encoding="utf-8") as f:
-                        return json.load(f)
-                except Exception:
-                    return {}
-            return {}
-
-        def boton_primario(texto: str, icono, on_click, color_bg: str, height_val: int = 30, width_val=None):
-            def animar_hover(e):
-                e.control.opacity = 0.85 if e.data == "true" else 1.0
-                e.control.update()
-
-            return ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Icon(icono, color=TEXT_WHITE, size=14),
-                        ft.Text(texto, size=10.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ],
-                    spacing=5,
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    tight=True,
-                ),
-                bgcolor=color_bg,
-                padding=ft.Padding.symmetric(horizontal=10, vertical=0),
-                height=height_val,
-                width=width_val,
-                border_radius=6,
-                ink=True,
-                on_click=on_click,
-                on_hover=animar_hover,
-            )
-
-        def notificar(texto: str, color: str = "#0284C7"):
-            from dependencias import notificar_global
-            notificar_global(self.page, texto, color)
 
         def descargar_archivo_web(ruta_archivo: str, titulo_doc: str = "Documento Generado"):
             if not ruta_archivo or not os.path.exists(ruta_archivo):
@@ -1702,7 +1689,6 @@ class PickingModulo:
             ovs_liberadas_set = set()
             bodega_act = obtener_bodega_activa(self.page)
 
-            # 1. Obtener operadores activos de la bodega para reparto automático
             operadores_disponibles = []
             carga_por_operador = {}
             try:
@@ -1717,7 +1703,6 @@ class PickingModulo:
                         operadores_disponibles.append(cod_u)
                         carga_por_operador[cod_u] = 0
 
-                # Contar cuántas OVs en PENDIENTE_PICKING tiene actualmente cada operador
                 res_pend = (
                     supabase.table("netsuite_ordenes_venta")
                     .select("operador_asignado, estado_ns, bodega")
@@ -1743,7 +1728,6 @@ class PickingModulo:
                 canal_str = "FARMACIA (-FA)" if es_fa else "ESTANDAR"
                 id_ext_str = str(item.get("id_externo_ns") or item.get("ov_original") or ov_final).strip()
 
-                # Elegir automáticamente al operador con menos OVs en cola
                 operador_elegido = "SIN ASIGNAR"
                 if operadores_disponibles:
                     operadores_disponibles.sort(key=lambda op: carga_por_operador.get(op, 0))
@@ -1815,7 +1799,9 @@ class PickingModulo:
             renderizar_tabla_previsualizacion()
             cargar_monitor_packing_dual()
 
-        # --- 9. COMPOSICIÓN DE PANELES RESPONSIVOS Y BOTÓN DE PLEGAR KPIs ---
+        # =====================================================================
+        # VISTA 1: MONITOR DE OLAS Y PACKING
+        # =====================================================================
         panel_relojes_izquierdo = tarjeta_dark(
             ft.Column(
                 [
@@ -2086,6 +2072,7 @@ class PickingModulo:
                             txt_fecha_hasta,
                             dd_corte_asignar,
                             dd_filtro_corte,
+                            btn_subir_traslado, # <-- BOTÓN EXCEL TRASLADO SCL->CCP INTEGRADO AQUÍ
                             boton_primario("1. EXTRAER ORDENES NETSUITE", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, extraer_ordenes_netsuite, ACCENT_BLUE),
                             ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, on_click=cargar_monitor_packing_dual),
                         ],
