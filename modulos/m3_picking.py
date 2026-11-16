@@ -122,11 +122,14 @@ class PickingModulo:
                     notificar("Error al registrar la OT en Supabase.", "#B91C1C")
             except Exception as ex:
                 notificar(f"Error procesando Excel de traslado: {ex}", "#B91C1C")
-        def al_seleccionar_excel_traslado(e):
-            if not getattr(e, "files", None):
+        def al_seleccionar_excel_traslado(e: ft.FilePickerResultEvent):
+            if not e.files:
+                notificar("Selección de archivo cancelada.", "#D97706")
                 return
+            
             f_obj = e.files[0]
             ruta_local = getattr(f_obj, "path", None)
+            
             if ruta_local and os.path.exists(ruta_local):
                 procesar_excel_traslado_scl_ccp(ruta_local)
             else:
@@ -142,16 +145,23 @@ class PickingModulo:
                 except Exception as ex_up:
                     notificar(f"Error cargando archivo en web: {ex_up}", "#B91C1C")
 
-        picker_excel_traslado = ft.filepicker(on_result=lambda e: self.page.run_task(al_seleccionar_excel_traslado, getattr(e, 'files', [])))
+        # Instanciación moderna de FilePicker para Flet >= 0.25.0
+        picker_excel_traslado = ft.FilePicker(on_result=al_seleccionar_excel_traslado)
+        
+        # En Flet moderno se añade directamente a la página o se incluye en los controles principales si es necesario
         try:
             self.page.overlay.append(picker_excel_traslado)
+            self.page.update()
         except Exception:
             pass
 
         btn_subir_traslado = boton_primario(
             "SUBIR EXCEL TRASLADO SCL->CCP",
             ft.Icons.UPLOAD_FILE_ROUNDED,
-            lambda e: picker_excel_traslado.pick_files(allowed_extensions=["xlsx", "xls"]),
+            lambda e: picker_excel_traslado.pick_files(
+                allow_multiple=False,
+                allowed_extensions=["xlsx", "xls"]
+            ),
             "#B45309",
             height_val=34,
         )
