@@ -115,21 +115,19 @@ class PickingModulo:
 
                 bodega_act = obtener_bodega_activa(self.page)
 
-                # Correlativo corto y persistente: OT-CCP-0001, OT-CCP-0002, etc.
+                # Número legible y único. Se verifica en Supabase por si hay dos cargas simultáneas.
                 prefijo_ot = "OT-CCP-"
-                mayor_correlativo = 0
+                ultimo = 0
                 existentes = (supabase.table("netsuite_ordenes_venta")
                                .select("numero_ov")
                                .ilike("numero_ov", f"{prefijo_ot}%")
-                               .order("id", desc=True)
-                               .limit(500)
-                               .execute())
+                               .order("id", desc=True).limit(500).execute())
                 for fila_existente in (existentes.data or []):
-                    numero_existente = str(fila_existente.get("numero_ov") or "").strip().upper()
-                    sufijo = numero_existente[len(prefijo_ot):] if numero_existente.startswith(prefijo_ot) else ""
+                    valor = str(fila_existente.get("numero_ov") or "").strip().upper()
+                    sufijo = valor[len(prefijo_ot):] if valor.startswith(prefijo_ot) else ""
                     if sufijo.isdigit():
-                        mayor_correlativo = max(mayor_correlativo, int(sufijo))
-                num_ot = f"{prefijo_ot}{mayor_correlativo + 1:04d}"
+                        ultimo = max(ultimo, int(sufijo))
+                num_ot = f"{prefijo_ot}{ultimo + 1:04d}"
 
                 # Asignación automática al operador RF activo con menor carga en la bodega.
                 operador_elegido = "SIN ASIGNAR"
@@ -193,7 +191,7 @@ class PickingModulo:
 
                 destino_prueba = "PACKING RF" if MODO_PRUEBA_EXCEL_A_PACKING else "PICKING RF"
                 notificar(
-                    f"OT {num_ot} creada correctamente en Supabase y lista en {destino_prueba}: "
+                    f"OT {num_ot} creada y lista en {destino_prueba}: "
                     f"{len(lineas_ot)} SKU(s), {total_unidades} UN. "
                     f"Busque este número exacto en el celular.",
                     "#047857",
@@ -210,107 +208,84 @@ class PickingModulo:
                         pass
                 notificar(f"Error creando OT de traslado en Supabase: {ex}", "#B91C1C")
 
-        # Selección/carga del Excel para escritorio y navegador.
+        # Carga de Excel compatible con Flet 1.x: FilePicker es un Service, no un overlay.
         archivo_traslado_subiendo = {"nombre": None}
 
         async def al_seleccionar_excel_traslado(e):
             archivos = getattr(e, "files", None)
             if not archivos:
-                notificar("Selección de archivo cancelada.", "#D97706")
+                notificar("Selección cancelada.", "#D97706")
                 return
-
             f_obj = archivos[0]
             ruta_local = getattr(f_obj, "path", None)
             if ruta_local and os.path.exists(ruta_local):
                 procesar_excel_traslado_scl_ccp(ruta_local)
                 return
 
-            nombre_f = os.path.basename(str(getattr(f_obj, "name", "traslado.xlsx")))
-            archivo_traslado_subiendo["nombre"] = nombre_f
-            datos_bytes = getattr(f_obj, "bytes", None)
-            if datos_bytes:
-                ruta_destino = os.path.join("assets", "uploads", nombre_f)
-                os.makedirs(os.path.dirname(ruta_destino), exist_ok=True)
-                with open(ruta_destino, "wb") as f_out:
-                    f_out.write(bytes(datos_bytes))
-                procesar_excel_traslado_scl_ccp(ruta_destino)
+            nombre = os.path.basename(str(getattr(f_obj, "name", "traslado.xlsx")))
+            archivo_traslado_subiendo["nombre"] = nombre
+            datos = getattr(f_obj, "bytes", None)
+            if datos:
+                destino = os.path.join("assets", "uploads", nombre)
+                os.makedirs(os.path.dirname(destino), exist_ok=True)
+                with open(destino, "wb") as fh:
+                    fh.write(bytes(datos))
+                procesar_excel_traslado_scl_ccp(destino)
                 return
 
-            # Navegador Flet: subir al upload_dir configurado en main.py.
             try:
-                url_subida = self.page.get_upload_url(nombre_f, 600)
-                resultado_upload = picker_excel_traslado.upload([
-                    ft.FilePickerUploadFile(nombre_f, upload_url=url_subida)
+                url = self.page.get_upload_url(nombre, 600)
+                resultado = picker_excel_traslado.upload([
+                    ft.FilePickerUploadFile(nombre, upload_url=url)
                 ])
-                if inspect.isawaitable(resultado_upload):
-                    await resultado_upload
-                notificar(f"Subiendo {nombre_f}; la OT se creará al terminar.", "#0284C7")
-            except Exception as ex_up:
-                notificar(f"Error iniciando carga web: {ex_up}", "#B91C1C")
+                if inspect.isawaitable(resultado):
+                    await resultado
+                notificar(f"Subiendo {nombre}...", "#0284C7")
+            except Exception as ex:
+                notificar(f"Error subiendo Excel: {ex}", "#B91C1C")
 
-        async def on_upload_traslado_event(e):
-            progreso = float(getattr(e, "progress", 0) or 0)
-            if progreso < 1:
-                return
-            nombre_f = os.path.basename(str(getattr(e, "name", None) or archivo_traslado_subiendo.get("nombre") or "traslado.xlsx"))
-            raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            candidatos = [
-                os.path.join(os.getcwd(), "assets", "uploads", nombre_f),
-                os.path.join(raiz_proyecto, "assets", "uploads", nombre_f),
-                os.path.join("assets", "uploads", nombre_f),
-            ]
-            ruta_subida = next((r for r in candidatos if os.path.exists(r)), None)
-            if not ruta_subida:
-                notificar(f"Carga finalizada, pero no encontré {nombre_f} en assets/uploads.", "#B91C1C")
-                return
-            procesar_excel_traslado_scl_ccp(ruta_subida)
-
-        # Compatibilidad entre versiones antiguas y nuevas de Flet.
         async def on_result_traslado_event(e):
             await al_seleccionar_excel_traslado(e)
 
-        sig_fp_tr = inspect.signature(ft.FilePicker.__init__).parameters
-        usa_evento_on_result = "on_result" in sig_fp_tr
-        kwargs_fp_tr = {"on_result": on_result_traslado_event} if usa_evento_on_result else {}
-        if "on_upload" in sig_fp_tr:
-            kwargs_fp_tr["on_upload"] = on_upload_traslado_event
-        picker_excel_traslado = ft.FilePicker(**kwargs_fp_tr)
+        async def on_upload_traslado_event(e):
+            if float(getattr(e, "progress", 0) or 0) < 1:
+                return
+            nombre = os.path.basename(str(getattr(e, "name", None) or archivo_traslado_subiendo.get("nombre") or "traslado.xlsx"))
+            raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            candidatos = [
+                os.path.join(raiz, "assets", "uploads", nombre),
+                os.path.join(os.getcwd(), "assets", "uploads", nombre),
+                os.path.join("assets", "uploads", nombre),
+            ]
+            ruta = next((x for x in candidatos if os.path.exists(x)), None)
+            if not ruta:
+                notificar(f"El archivo subió, pero no se encontró en assets/uploads: {nombre}", "#B91C1C")
+                return
+            procesar_excel_traslado_scl_ccp(ruta)
 
-        try:
-            if hasattr(ft, "Service") and isinstance(picker_excel_traslado, ft.Service) and hasattr(self.page, "services"):
-                self.page.services.append(picker_excel_traslado)
-            else:
-                self.page.overlay.append(picker_excel_traslado)
-        except Exception:
-            try:
-                self.page.overlay.append(picker_excel_traslado)
-            except Exception:
-                pass
+        picker_excel_traslado = ft.FilePicker(
+            on_result=on_result_traslado_event,
+            on_upload=on_upload_traslado_event,
+        )
 
-        # El handler también debe ser coroutine. No usar run_task(lambda: ...),
-        # porque Flet valida que el handler recibido sea una función async real.
-        async def abrir_selector_traslado(e=None):
-            sig_pick = inspect.signature(picker_excel_traslado.pick_files).parameters
-            kwargs_pick = {"allow_multiple": False, "allowed_extensions": ["xlsx", "xls"]}
-            if "with_data" in sig_pick:
-                kwargs_pick["with_data"] = True
-
-            resultado = picker_excel_traslado.pick_files(**kwargs_pick)
-            if inspect.isawaitable(resultado):
-                resultado = await resultado
-
-            # En Flet reciente pick_files() devuelve directamente la lista.
-            # En versiones antiguas, on_result procesa el evento por separado.
-            if resultado and not usa_evento_on_result:
-                evento_compatible = type("FilePickerResult", (), {"files": resultado})()
-                await al_seleccionar_excel_traslado(evento_compatible)
+        # FilePicker en Flet 1.x hereda de Service. Nunca debe agregarse a page.overlay.
+        if not hasattr(self.page, "services"):
+            raise RuntimeError("La versión instalada de Flet no expone page.services")
+        self.page.services.append(picker_excel_traslado)
 
         btn_subir_traslado = boton_primario(
             "SUBIR EXCEL TRASLADO SCL->CCP",
             ft.Icons.UPLOAD_FILE_ROUNDED,
-            abrir_selector_traslado,
+            None,
             "#B45309",
             height_val=34,
+        )
+        # PickFiles se ejecuta en el cliente dentro del clic del navegador.
+        btn_subir_traslado.action = ft.PickFiles(
+            picker_excel_traslado,
+            allow_multiple=False,
+            allowed_extensions=["xlsx", "xls"],
+            with_data=False,
         )
 
         def descargar_archivo_web(ruta_archivo: str, titulo_doc: str = "Documento Generado"):
