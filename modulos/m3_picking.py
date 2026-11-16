@@ -48,6 +48,123 @@ class PickingModulo:
                     return {}
             return {}
 
+        # <--- AQUÍEXCEL TRASLADO  --->
+        def procesar_excel_traslado_scl_ccp(ruta_excel: str):
+            try:
+                df_tras = pd.read_excel(ruta_excel, sheet_name="Traslado", header=2)
+                lineas_ot = []
+                total_unidades = 0
+                
+                for _, row in df_tras.iterrows():
+                    sku_raw = row.get('Artículo')
+                    if pd.isna(sku_raw):
+                        continue
+                    sku = str(sku_raw).strip().upper()
+                    if not sku or sku == 'NAN' or 'TOTAL' in sku:
+                        continue
+                    
+                    try:
+                        cant = int(float(row.get('SCL a CCP (Un)', 0)))
+                    except Exception:
+                        cant = 0
+                        
+                    if cant > 0:
+                        desc = str(row.get('Descripción', 'TRASLADO SCL-CCP')).strip().upper()
+                        lineas_ot.append({
+                            "sku": sku,
+                            "descripcion": desc,
+                            "cantidad": cant,
+                            "cantidad_pedida": cant,
+                            "cantidad_pickeada": 0,
+                            "lotes": "S/L"
+                        })
+                        total_unidades += cant
+
+                if not lineas_ot:
+                    notificar("No hay artículos con cantidad a enviar de SCL a CCP (>0).", "#D97706")
+                    return
+
+                num_ot = f"OT-SCL-CCP-{datetime.now().strftime('%Y%m%d-%H%M')}"
+                bodega_act = obtener_bodega_activa(self.page)
+                
+                payload_ot = {
+                    "bodega": bodega_act,
+                    "id_externo_ns": num_ot,
+                    "numero_ov": num_ot,
+                    "cliente_nombre": "BODEGA CONCEPCION (TRASLADO SCL-CCP)",
+                    "canal_venta": "TRASLADO SCL-CCP",
+                    "fecha_emision_ns": datetime.now().isoformat(),
+                    "estado_ns": "PENDIENTE_PICKING",
+                    "operador_asignado": str(getattr(self.page, "usuario_actual", "WMS")).strip().upper(),
+                }
+
+                res_ins = supabase.table("netsuite_ordenes_venta").insert(payload_ot).execute()
+                if res_ins.data:
+                    id_ot_db = res_ins.data[0].get("id")
+                    lote_detalles = [
+                        {
+                            "orden_id": int(id_ot_db),
+                            "linea_ns": idx,
+                            "sku": lin["sku"],
+                            "cantidad_pedida": lin["cantidad"],
+                            "cantidad_comprometida": lin["cantidad"],
+                            "cantidad_pickeada": 0,
+                            "lote_asignado": "",
+                            "estado_linea": "PENDIENTE",
+                            "lotes_pickeados": "",
+                        }
+                        for idx, lin in enumerate(lineas_ot, start=1)
+                    ]
+                    supabase.table("netsuite_detalle_ov").insert(lote_detalles).execute()
+                    notificar(f"¡Orden de Traslado {num_ot} creada con éxito ({len(lineas_ot)} SKUs | {total_unidades} UN)!", "#047857")
+                    self.cargar_monitor_packing_dual()
+                else:
+                    notificar("Error al registrar la OT en Supabase.", "#B91C1C")
+            except Exception as ex:
+                notificar(f"Error procesando Excel de traslado: {ex}", "#B91C1C")
+        def al_seleccionar_excel_traslado(e):
+            if not getattr(e, "files", None):
+                return
+            f_obj = e.files[0]
+            ruta_local = getattr(f_obj, "path", None)
+            if ruta_local and os.path.exists(ruta_local):
+                procesar_excel_traslado_scl_ccp(ruta_local)
+            else:
+                try:
+                    nombre_f = f_obj.name
+                    os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
+                    ruta_destino = os.path.join("assets", "uploads", nombre_f)
+                    datos_bytes = getattr(f_obj, "bytes", None)
+                    if datos_bytes:
+                        with open(ruta_destino, "wb") as f_out:
+                            f_out.write(bytes(datos_bytes))
+                        procesar_excel_traslado_scl_ccp(ruta_destino)
+                except Exception as ex_up:
+                    notificar(f"Error cargando archivo en web: {ex_up}", "#B91C1C")
+
+        picker_excel_traslado = ft.FilePicker(on_result=lambda e: self.page.run_task(al_seleccionar_excel_traslado, getattr(e, 'files', [])))
+        try:
+            self.page.overlay.append(picker_excel_traslado)
+        except Exception:
+            pass
+
+        btn_subir_traslado = boton_primario(
+            "SUBIR EXCEL TRASLADO SCL->CCP",
+            ft.Icons.UPLOAD_FILE_ROUNDED,
+            lambda e: picker_excel_traslado.pick_files(allowed_extensions=["xlsx", "xls"]),
+            "#B45309",
+            height_val=34,
+        )
+
+        def cargar_meta_despacho() -> dict:
+            if os.path.exists(Archivo_Meta_Despacho):
+                try:
+                    with open(Archivo_Meta_Despacho, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    return {}
+            return {}
+
         def boton_primario(texto: str, icono, on_click, color_bg: str, height_val: int = 30, width_val=None):
             def animar_hover(e):
                 e.control.opacity = 0.85 if e.data == "true" else 1.0
@@ -1553,6 +1670,37 @@ class PickingModulo:
             ovs_liberadas_set = set()
             bodega_act = obtener_bodega_activa(self.page)
 
+            # 1. Obtener operadores activos de la bodega para reparto automático
+            operadores_disponibles = []
+            carga_por_operador = {}
+            try:
+                res_u = supabase.table("wms_usuarios").select("*").eq("activo", True).execute()
+                for u in (res_u.data or []):
+                    rol_u = str(u.get("rol") or "OPERADOR").strip().upper()
+                    bod_u = str(u.get("bodega") or "").strip().upper()
+                    cod_u = str(u.get("usuario") or "").strip().upper()
+                    if not cod_u:
+                        continue
+                    if coincide_bodega(u, bodega_act) or "AMBAS" in bod_u or "TODAS" in bod_u:
+                        operadores_disponibles.append(cod_u)
+                        carga_por_operador[cod_u] = 0
+
+                # Contar cuántas OVs en PENDIENTE_PICKING tiene actualmente cada operador
+                res_pend = (
+                    supabase.table("netsuite_ordenes_venta")
+                    .select("operador_asignado, estado_ns, bodega")
+                    .eq("estado_ns", "PENDIENTE_PICKING")
+                    .execute()
+                )
+                for p in (res_pend.data or []):
+                    if not coincide_bodega(p, bodega_act):
+                        continue
+                    op_act = str(p.get("operador_asignado") or "").strip().upper()
+                    if op_act in carga_por_operador:
+                        carga_por_operador[op_act] += 1
+            except Exception:
+                pass
+
             for item in seleccionadas:
                 es_fa = bool(item.get("es_farmacia"))
                 ov_final = str(item["ov"]).strip()
@@ -1563,6 +1711,13 @@ class PickingModulo:
                 canal_str = "FARMACIA (-FA)" if es_fa else "ESTANDAR"
                 id_ext_str = str(item.get("id_externo_ns") or item.get("ov_original") or ov_final).strip()
 
+                # Elegir automáticamente al operador con menos OVs en cola
+                operador_elegido = "SIN ASIGNAR"
+                if operadores_disponibles:
+                    operadores_disponibles.sort(key=lambda op: carga_por_operador.get(op, 0))
+                    operador_elegido = operadores_disponibles[0]
+                    carga_por_operador[operador_elegido] = carga_por_operador.get(operador_elegido, 0) + 1
+
                 payload_ov = {
                     "bodega": bodega_act,
                     "id_externo_ns": id_ext_str,
@@ -1571,6 +1726,7 @@ class PickingModulo:
                     "canal_venta": canal_str,
                     "fecha_emision_ns": datetime.now().isoformat(),
                     "estado_ns": "PENDIENTE_PICKING",
+                    "operador_asignado": operador_elegido,
                 }
 
                 id_ov_db = None
@@ -1587,6 +1743,7 @@ class PickingModulo:
                     try:
                         copia_sb = dict(payload_ov)
                         copia_sb.pop("bodega", None)
+                        copia_sb.pop("operador_asignado", None)
                         r_ins2 = supabase.table("netsuite_ordenes_venta").insert(copia_sb).execute()
                         if r_ins2.data:
                             id_ov_db = r_ins2.data[0].get("id")
@@ -1622,7 +1779,7 @@ class PickingModulo:
                 liberadas_ok += 1
 
             olas_extraidas_ns[:] = [it for it in olas_extraidas_ns if it["ov"] not in ovs_liberadas_set]
-            notificar(f"¡{liberadas_ok} OVs liberadas a main.dart en estado PICKING!", "#047857")
+            notificar(f"¡{liberadas_ok} OVs liberadas y asignadas automáticamente a operadores RF!", "#047857")
             renderizar_tabla_previsualizacion()
             cargar_monitor_packing_dual()
 

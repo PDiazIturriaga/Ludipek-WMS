@@ -220,7 +220,7 @@ preparar_assets_visuales()
 
 
 class MonitorUsuariosColaModulo:
-    """Módulo principal independiente para supervisar Operadores RF/PC activos y la Cola de Picking en vivo."""
+    """Módulo principal independiente para supervisar Operadores RF/PC activos y asignar la Cola de Picking en vivo."""
 
     def __init__(self, page: ft.Page, tarjetas_adaptables: list, kpis_adaptables: list):
         self.page = page
@@ -244,7 +244,7 @@ class MonitorUsuariosColaModulo:
 
         txt_buscar_cola = ft.TextField(
             label="Filtrar Operador, N° OV o Cliente...",
-            width=260,
+            width=250,
             dense=True,
             text_size=12,
             color=TEXT_WHITE,
@@ -280,15 +280,15 @@ class MonitorUsuariosColaModulo:
             heading_row_height=34,
             data_row_min_height=36,
             data_row_max_height=42,
-            column_spacing=16,
+            column_spacing=14,
             horizontal_margin=10,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
                 ft.DataColumn(ft.Text("OPERADOR / USUARIO", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("ROL", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("BODEGA", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("ESTADO EN PISO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ÚLTIMA ACCIÓN / ORDEN", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
+                ft.DataColumn(ft.Text("OV ASIGNADA (ACTIVA / COLA)", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
+                ft.DataColumn(ft.Text("ÚLTIMA ACCIÓN RF", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("MOVIMIENTOS", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("UNID. PROCESADAS", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
             ],
@@ -298,9 +298,9 @@ class MonitorUsuariosColaModulo:
         tabla_cola_picking = ft.DataTable(
             heading_row_color="#181E20",
             heading_row_height=34,
-            data_row_min_height=36,
-            data_row_max_height=42,
-            column_spacing=16,
+            data_row_min_height=40,
+            data_row_max_height=46,
+            column_spacing=14,
             horizontal_margin=10,
             data_text_style=ft.TextStyle(color=TEXT_WHITE),
             columns=[
@@ -310,13 +310,73 @@ class MonitorUsuariosColaModulo:
                 ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
                 ft.DataColumn(ft.Text("CLIENTE / DESTINO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("ETAPA EN COLA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("OPERADOR RF", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("ASIGNAR OPERADOR RF", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
             ],
             rows=[],
         )
 
-        cont_tabla_usuarios = envolver_tabla_scroll(tabla_usuarios_rf, 250)
-        cont_tabla_cola = envolver_tabla_scroll(tabla_cola_picking, 310)
+        cont_tabla_usuarios = envolver_tabla_scroll(tabla_usuarios_rf, 240)
+        cont_tabla_cola = envolver_tabla_scroll(tabla_cola_picking, 320)
+
+        def asignar_operador_manual_ov(id_ov: int, num_ov: str, nuevo_op: str):
+            try:
+                supabase.table("netsuite_ordenes_venta").update({"operador_asignado": nuevo_op}).eq("id", id_ov).execute()
+                notificar_global(self.page, f"OV {num_ov} asignada a {nuevo_op}.", "#047857")
+                refrescar_monitor_usuarios_y_cola()
+            except Exception as ex:
+                notificar_global(self.page, f"Error asignando OV: {ex}", "#B91C1C")
+
+        def auto_asignar_todas_las_ovs_en_cola(e=None):
+            """Reparte automáticamente todas las OVs en PENDIENTE_PICKING entre los operadores activos de la bodega."""
+            bodega_act = obtener_bodega_activa(self.page)
+            try:
+                res_u = supabase.table("wms_usuarios").select("*").eq("activo", True).execute()
+                operadores = [
+                    str(u.get("usuario") or "").strip().upper()
+                    for u in (res_u.data or [])
+                    if str(u.get("usuario") or "").strip()
+                    and (
+                        coincide_bodega(u, bodega_act)
+                        or "AMBAS" in str(u.get("bodega") or "").upper()
+                        or "TODAS" in str(u.get("bodega") or "").upper()
+                    )
+                ]
+                if not operadores:
+                    notificar_global(self.page, "No hay operadores activos en esta bodega para asignar.", "#D97706")
+                    return
+
+                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=False).limit(400).execute()
+                carga_op = {op: 0 for op in operadores}
+                ovs_sin_asignar = []
+
+                for r in (res_ov.data or []):
+                    if not coincide_bodega(r, bodega_act):
+                        continue
+                    est = str(r.get("estado_ns") or r.get("estado") or "PENDIENTE_PICKING").strip().upper()
+                    if est != "PENDIENTE_PICKING":
+                        continue
+                    op_actual = str(r.get("operador_asignado") or "").strip().upper()
+                    if op_actual in carga_op:
+                        carga_op[op_actual] += 1
+                    else:
+                        ovs_sin_asignar.append(r)
+
+                if not ovs_sin_asignar:
+                    notificar_global(self.page, "Todas las OVs en cola ya están asignadas a un operador.", "#0284C7")
+                    return
+
+                asignadas_cnt = 0
+                for ov_r in ovs_sin_asignar:
+                    operadores.sort(key=lambda x: carga_op.get(x, 0))
+                    elegido = operadores[0]
+                    supabase.table("netsuite_ordenes_venta").update({"operador_asignado": elegido}).eq("id", ov_r["id"]).execute()
+                    carga_op[elegido] += 1
+                    asignadas_cnt += 1
+
+                notificar_global(self.page, f"¡{asignadas_cnt} OVs cargadas automáticamente a los operadores!", "#047857")
+                refrescar_monitor_usuarios_y_cola()
+            except Exception as ex:
+                notificar_global(self.page, f"Error en auto-asignación: {ex}", "#B91C1C")
 
         def refrescar_monitor_usuarios_y_cola(e=None):
             bodega_act = obtener_bodega_activa(self.page)
@@ -333,6 +393,7 @@ class MonitorUsuariosColaModulo:
                         or "TODAS" in str(u.get("bodega") or "").upper()
                     )
                 ]
+                codigos_operadores = [str(u.get("usuario") or "").strip().upper() for u in usuarios_lista if u.get("usuario")]
 
                 mapa_actividad_usr = {}
                 movs_totales = 0
@@ -354,64 +415,8 @@ class MonitorUsuariosColaModulo:
                 except Exception:
                     pass
 
-                mapa_op_por_ov = {}
-                try:
-                    res_pl = supabase.table("wms_packing_lists_fa").select("*").order("id", desc=True).limit(200).execute()
-                    for pl in (res_pl.data or []):
-                        if not coincide_bodega(pl, bodega_act):
-                            continue
-                        ov_k = str(pl.get("numero_ov") or "").split("(")[0].strip().upper().removesuffix("-FA").strip()
-                        op_k = str(pl.get("usuario_picking") or "").strip().upper()
-                        if ov_k and op_k and ov_k not in mapa_op_por_ov:
-                            mapa_op_por_ov[ov_k] = op_k
-                        if op_k:
-                            if op_k not in mapa_actividad_usr:
-                                mapa_actividad_usr[op_k] = {
-                                    "ultimo_mov": f"PACKING OV {ov_k}",
-                                    "conteo": 0,
-                                    "unidades": 0,
-                                }
-                            mapa_actividad_usr[op_k]["conteo"] += 1
-                except Exception:
-                    pass
-
-                filas_u = []
-                for u in usuarios_lista:
-                    cod_u = str(u.get("usuario") or "").strip().upper()
-                    nom_u = str(u.get("nombre_completo") or cod_u).strip().upper()
-                    rol_u = str(u.get("rol") or "OPERADOR").strip().upper()
-                    bod_u = str(u.get("bodega") or bodega_act).strip()
-
-                    if q_filtro and not any(q_filtro in x for x in (cod_u, nom_u, rol_u)):
-                        continue
-
-                    inf_act = mapa_actividad_usr.get(cod_u) or mapa_actividad_usr.get(nom_u) or {}
-                    cnt_m = inf_act.get("conteo", 0)
-                    unid_m = inf_act.get("unidades", 0)
-                    ult_txt = inf_act.get("ultimo_mov", "EN LÍNEA / DISPONIBLE")
-
-                    badge_est = (
-                        crear_badge_estado("ACTIVO EN PISO", "#065F46", "#D1FAE5")
-                        if cnt_m > 0
-                        else crear_badge_estado("HABILITADO", "#1E3A8A", "#DBEAFE")
-                    )
-
-                    filas_u.append(
-                        ft.DataRow(
-                            cells=[
-                                ft.DataCell(ft.Text(f"{nom_u} ({cod_u})", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                                ft.DataCell(ft.Text(rol_u, size=10.5, color=TEXT_WHITE)),
-                                ft.DataCell(ft.Text(bod_u, size=10.5, color="#34D399")),
-                                ft.DataCell(badge_est),
-                                ft.DataCell(ft.Text(ult_txt[:38], size=10.5, color="#FBBF24")),
-                                ft.DataCell(ft.Text(f"{cnt_m} movs", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                                ft.DataCell(ft.Text(f"{unid_m} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
-                            ]
-                        )
-                    )
-                tabla_usuarios_rf.rows = filas_u
-
-                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(400).execute()
+                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=False).limit(400).execute()
+                ovs_por_operador = {}
                 filas_cola = []
                 ovs_vistas = set()
                 cnt_pend_pick = 0
@@ -430,16 +435,18 @@ class MonitorUsuariosColaModulo:
                         continue
 
                     ovs_vistas.add(ov_base)
+                    op_asig = str(r.get("operador_asignado") or "SIN ASIGNAR").strip().upper()
                     if est_ov == "PENDIENTE_PACKING":
                         cnt_pend_pack += 1
                     else:
                         cnt_pend_pick += 1
+                        if op_asig and op_asig != "SIN ASIGNAR":
+                            ovs_por_operador.setdefault(op_asig, []).append(ov_raw)
 
                     cli_str = str(r.get("cliente_nombre") or r.get("cliente") or "CLIENTE").strip()
                     canal_str = str(r.get("canal_venta") or "").upper()
                     es_fa = ov_raw.endswith("-FA") or "FARM" in canal_str or ov_raw.startswith("OT-")
                     fecha_s = str(r.get("fecha_emision_ns") or r.get("created_at") or "")[:10]
-                    op_asig = str(r.get("operador_asignado") or mapa_op_por_ov.get(ov_base) or "EN COLA GENERAL").upper()
 
                     if q_filtro and not any(q_filtro in x for x in (ov_raw, cli_str.upper(), op_asig)):
                         continue
@@ -455,6 +462,23 @@ class MonitorUsuariosColaModulo:
                         else crear_badge_estado("EN COLA PICKING", "#92400E", "#FEF3C7")
                     )
 
+                    opciones_dd = [ft.DropdownOption(key="SIN ASIGNAR", text="SIN ASIGNAR")] + [
+                        ft.DropdownOption(key=op_c, text=f"👤 {op_c}") for op_c in codigos_operadores
+                    ]
+                    val_dd = op_asig if op_asig in codigos_operadores else "SIN ASIGNAR"
+
+                    dd_op_fila = ft.Dropdown(
+                        width=175,
+                        dense=True,
+                        value=val_dd,
+                        bgcolor=BG_INPUT,
+                        border_color=ACCENT_CYAN if val_dd != "SIN ASIGNAR" else BORDER_COLOR,
+                        text_style=ft.TextStyle(size=11, color=TEXT_WHITE, weight=ft.FontWeight.BOLD),
+                        content_padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                        options=opciones_dd,
+                        on_select=lambda ev, id_o=r.get("id"), n_ov=ov_raw: asignar_operador_manual_ov(id_o, n_ov, ev.control.value),
+                    )
+
                     filas_cola.append(
                         ft.DataRow(
                             color="#2A2419" if es_fa else None,
@@ -463,13 +487,50 @@ class MonitorUsuariosColaModulo:
                                 ft.DataCell(ft.Text(ov_raw, weight=ft.FontWeight.W_900, size=11.5, color="#FBBF24" if es_fa else ACCENT_CYAN)),
                                 ft.DataCell(badge_canal),
                                 ft.DataCell(ft.Text(fecha_s, size=11, color="#34D399")),
-                                ft.DataCell(ft.Text(cli_str[:32], size=11, color=TEXT_WHITE)),
+                                ft.DataCell(ft.Text(cli_str[:30], size=11, color=TEXT_WHITE)),
                                 ft.DataCell(badge_etapa),
-                                ft.DataCell(ft.Text(op_asig, weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
+                                ft.DataCell(dd_op_fila),
                             ],
                         )
                     )
 
+                filas_u = []
+                for u in usuarios_lista:
+                    cod_u = str(u.get("usuario") or "").strip().upper()
+                    nom_u = str(u.get("nombre_completo") or cod_u).strip().upper()
+                    rol_u = str(u.get("rol") or "OPERADOR").strip().upper()
+                    bod_u = str(u.get("bodega") or bodega_act).strip()
+
+                    if q_filtro and not any(q_filtro in x for x in (cod_u, nom_u, rol_u)):
+                        continue
+
+                    inf_act = mapa_actividad_usr.get(cod_u) or mapa_actividad_usr.get(nom_u) or {}
+                    cnt_m = inf_act.get("conteo", 0)
+                    unid_m = inf_act.get("unidades", 0)
+                    ult_txt = inf_act.get("ultimo_mov", "EN LÍNEA / DISPONIBLE")
+
+                    cola_op = ovs_por_operador.get(cod_u, [])
+                    if cola_op:
+                        txt_ov_activa = f"Activa: {cola_op[0]}" + (f" (+{len(cola_op)-1} en cola)" if len(cola_op) > 1 else "")
+                        badge_ov_op = crear_badge_estado(txt_ov_activa, "#065F46", "#D1FAE5")
+                    else:
+                        badge_ov_op = crear_badge_estado("SIN OV ASIGNADA", "#475569", "#1E293B")
+
+                    filas_u.append(
+                        ft.DataRow(
+                            cells=[
+                                ft.DataCell(ft.Text(f"{nom_u} ({cod_u})", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                                ft.DataCell(ft.Text(rol_u, size=10.5, color=TEXT_WHITE)),
+                                ft.DataCell(ft.Text(bod_u, size=10.5, color="#34D399")),
+                                ft.DataCell(badge_ov_op),
+                                ft.DataCell(ft.Text(ult_txt[:36], size=10.5, color="#FBBF24")),
+                                ft.DataCell(ft.Text(f"{cnt_m} movs", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                                ft.DataCell(ft.Text(f"{unid_m} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                            ]
+                        )
+                    )
+
+                tabla_usuarios_rf.rows = filas_u
                 tabla_cola_picking.rows = filas_cola
                 lbl_kpi_usr_activos.value = str(len(usuarios_lista))
                 lbl_kpi_cola_pend.value = str(cnt_pend_pick)
@@ -492,7 +553,7 @@ class MonitorUsuariosColaModulo:
                         [
                             ft.Icon(_ico("PRECISION_MANUFACTURING_OUTLINED", "HUB_OUTLINED"), color=ACCENT_CYAN, size=22),
                             ft.Text(
-                                "MONITOR DE USUARIOS RF & COLA DE PICKING EN VIVO",
+                                "MONITOR DE USUARIOS RF & ASIGNACIÓN AUTOMÁTICA DE COLA PICKING",
                                 size=14.5,
                                 weight=ft.FontWeight.W_900,
                                 color=TEXT_WHITE,
@@ -504,6 +565,13 @@ class MonitorUsuariosColaModulo:
                         [
                             txt_buscar_cola,
                             boton_primario(
+                                "CARGAR OVs AUTOMÁTICAMENTE A USUARIOS",
+                                _ico("BOLT_ROUNDED", "SEND_ROUNDED"),
+                                auto_asignar_todas_las_ovs_en_cola,
+                                "#047857",
+                                height_val=34,
+                            ),
+                            boton_primario(
                                 "ACTUALIZAR EN VIVO",
                                 _ico("SYNC_ROUNDED", "REFRESH_ROUNDED"),
                                 refrescar_monitor_usuarios_y_cola,
@@ -512,6 +580,7 @@ class MonitorUsuariosColaModulo:
                             ),
                         ],
                         spacing=8,
+                        wrap=True,
                     ),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -540,7 +609,7 @@ class MonitorUsuariosColaModulo:
                     ft.Row(
                         [
                             ft.Icon(_ico("CENTER_FOCUS_STRONG_OUTLINED", "PERSON_SEARCH_OUTLINED"), color=ACCENT_CYAN, size=18),
-                            ft.Text("1. MONITOR DE OPERADORES RF / PC Y ACTIVIDAD EN PISO", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                            ft.Text("1. MONITOR DE OPERADORES RF / PC Y OV ASIGNADA EN PISO", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                         ],
                         spacing=8,
                     ),
@@ -561,7 +630,7 @@ class MonitorUsuariosColaModulo:
                     ft.Row(
                         [
                             ft.Icon(_ico("ALL_INBOX_OUTLINED", "INVENTORY_2_OUTLINED"), color="#FBBF24", size=18),
-                            ft.Text("2. COLA ACTIVA DE PICKING Y PACKING (PRIORIDAD NORMAL VS FARMACIA -FA)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                            ft.Text("2. COLA ACTIVA DE PICKING Y ASIGNACIÓN DE OPERADOR (NORMAL VS FARMACIA -FA)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
                         ],
                         spacing=8,
                     ),

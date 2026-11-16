@@ -1210,3 +1210,4 @@ def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):
             page.update()
     except Exception as ex_dl:
         print(f"[WARN] Error enviando archivo al navegador: {ex_dl}")
+
