@@ -78,7 +78,9 @@ class PickingModulo:
                     return {}
             return {}
 
-        # --- 3. EXCEL TRASLADO SCL -> CCP COMO OT PARA RF Y PACKING ---
+        # --- 3. PRUEBA CONTROLADA: EXCEL TRASLADO -> PACKING RF ---
+        # Temporal: permite validar la subida del Excel y Packing sin modificar el resto del WMS.
+        MODO_PRUEBA_EXCEL_A_PACKING = True
         def procesar_excel_traslado_scl_ccp(ruta_excel: str):
             """Crea una OT trazable en Supabase y la deja disponible para Picking RF."""
             id_ot_db = None
@@ -160,7 +162,8 @@ class PickingModulo:
                     "cliente_nombre": "BODEGA CONCEPCION (TRASLADO SCL-CCP)",
                     "canal_venta": "TRASLADO SCL-CCP",
                     "fecha_emision_ns": datetime.now().isoformat(),
-                    "estado_ns": "PENDIENTE_PICKING",
+                    # En esta prueba se omite Picking para validar directamente Packing móvil.
+                    "estado_ns": "PENDIENTE_PACKING" if MODO_PRUEBA_EXCEL_A_PACKING else "PENDIENTE_PICKING",
                     "operador_asignado": operador_elegido,
                 }
                 res_ins = supabase.table("netsuite_ordenes_venta").insert(payload_ot).execute()
@@ -177,9 +180,9 @@ class PickingModulo:
                     "sku": lin["sku"],
                     "cantidad_pedida": int(lin["cantidad"]),
                     "cantidad_comprometida": int(lin["cantidad"]),
-                    "cantidad_pickeada": 0,
+                    "cantidad_pickeada": int(lin["cantidad"]) if MODO_PRUEBA_EXCEL_A_PACKING else 0,
                     "lote_asignado": "",
-                    "estado_linea": "PENDIENTE",
+                    "estado_linea": "PICKEADO" if MODO_PRUEBA_EXCEL_A_PACKING else "PENDIENTE",
                     "lotes_pickeados": "",
                 } for idx, lin in enumerate(lineas_ot, start=1)]
 
@@ -187,9 +190,11 @@ class PickingModulo:
                 if not res_det.data:
                     raise RuntimeError("No se pudieron registrar las líneas de la OT")
 
+                destino_prueba = "PACKING RF" if MODO_PRUEBA_EXCEL_A_PACKING else "PICKING RF"
                 notificar(
-                    f"OT {num_ot} enviada a Picking RF: {len(lineas_ot)} SKU(s), "
-                    f"{total_unidades} UN, operador {operador_elegido}.",
+                    f"OT {num_ot} creada y lista en {destino_prueba}: "
+                    f"{len(lineas_ot)} SKU(s), {total_unidades} UN. "
+                    f"Busque este número exacto en el celular.",
                     "#047857",
                 )
                 cargar_monitor_packing_dual()
@@ -226,6 +231,8 @@ class PickingModulo:
                         with open(ruta_destino, "wb") as f_out:
                             f_out.write(bytes(datos_bytes))
                         procesar_excel_traslado_scl_ccp(ruta_destino)
+                    else:
+                        raise RuntimeError("Flet no entregó ruta ni bytes del archivo seleccionado")
                 except Exception as ex_up:
                     notificar(f"Error cargando archivo en web: {ex_up}", "#B91C1C")
 
