@@ -155,12 +155,16 @@ class PickingModulo:
             except Exception as ex:
                 notificar(f"Error procesando Excel de traslado: {ex}", "#B91C1C")
 
-        def al_seleccionar_excel_traslado(e):
+        # Función asíncrona para procesar el archivo seleccionado
+        async def al_seleccionar_excel_traslado(e):
             archivos = getattr(e, "files", None)
             if not archivos:
+                notificar("Selección de archivo cancelada.", "#D97706")
                 return
+            
             f_obj = archivos[0]
             ruta_local = getattr(f_obj, "path", None)
+            
             if ruta_local and os.path.exists(ruta_local):
                 procesar_excel_traslado_scl_ccp(ruta_local)
             else:
@@ -176,8 +180,9 @@ class PickingModulo:
                 except Exception as ex_up:
                     notificar(f"Error cargando archivo en web: {ex_up}", "#B91C1C")
 
-        def on_result_traslado_event(e):
-            self.page.run_task(lambda: al_seleccionar_excel_traslado(e))
+        # IMPORTANTE: Debe ser 'async def' para satisfacer a Flet
+        async def on_result_traslado_event(e):
+            await al_seleccionar_excel_traslado(e)
 
         sig_fp_tr = inspect.signature(ft.FilePicker.__init__).parameters
         kwargs_fp_tr = {}
@@ -2072,7 +2077,7 @@ class PickingModulo:
                             txt_fecha_hasta,
                             dd_corte_asignar,
                             dd_filtro_corte,
-                            btn_subir_traslado, # <-- BOTÓN EXCEL TRASLADO SCL->CCP INTEGRADO AQUÍ
+                            btn_subir_traslado, # <-- BOTÓN EXCEL TRASLADO SCL->CCP
                             boton_primario("1. EXTRAER ORDENES NETSUITE", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, extraer_ordenes_netsuite, ACCENT_BLUE),
                             ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, on_click=cargar_monitor_packing_dual),
                         ],
