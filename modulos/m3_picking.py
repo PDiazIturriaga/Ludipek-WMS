@@ -78,47 +78,81 @@ class PickingModulo:
                     return {}
             return {}
 
-        # --- 3. PROCESAMIENTO ROBUSTO DE EXCEL TRASLADO (SCL a CCP) ---
+        # --- 3. EXCEL TRASLADO SCL -> CCP COMO OT PARA RF Y PACKING ---
         def procesar_excel_traslado_scl_ccp(ruta_excel: str):
+            """Crea una OT trazable en Supabase y la deja disponible para Picking RF."""
+            id_ot_db = None
             try:
-                # La hoja 'Traslado' tiene los headers reales en la fila 3 (header=2)
                 df_tras = pd.read_excel(ruta_excel, sheet_name="Traslado", header=2)
-                lineas_ot = []
-                total_unidades = 0
-                
+
+                # Consolidar SKU repetidos para no crear dos líneas RF del mismo artículo.
+                lineas_por_sku = {}
                 for _, row in df_tras.iterrows():
-                    sku_raw = row.get('Artículo')
+                    sku_raw = row.get("Artículo")
                     if pd.isna(sku_raw):
                         continue
                     sku = str(sku_raw).strip().upper()
-                    # Omitir nulos, celdas vacías o la fila resumen de total general
-                    if not sku or sku == 'NAN' or 'TOTAL' in sku:
+                    if not sku or sku == "NAN" or "TOTAL" in sku:
                         continue
-                    
                     try:
-                        cant = int(float(row.get('SCL a CCP (Un)', 0)))
-                    except Exception:
+                        cant = int(float(row.get("SCL a CCP (Un)", 0) or 0))
+                    except (TypeError, ValueError):
                         cant = 0
-                        
-                    if cant > 0:
-                        desc = str(row.get('Descripción', 'TRASLADO SCL-CCP')).strip().upper()
-                        lineas_ot.append({
-                            "sku": sku,
-                            "descripcion": desc,
-                            "cantidad": cant,
-                            "cantidad_pedida": cant,
-                            "cantidad_pickeada": 0,
-                            "lotes": "S/L"
-                        })
-                        total_unidades += cant
+                    if cant <= 0:
+                        continue
+                    desc = str(row.get("Descripción") or "TRASLADO SCL-CCP").strip().upper()
+                    if sku not in lineas_por_sku:
+                        lineas_por_sku[sku] = {"sku": sku, "descripcion": desc, "cantidad": 0}
+                    lineas_por_sku[sku]["cantidad"] += cant
 
+                lineas_ot = list(lineas_por_sku.values())
+                total_unidades = sum(x["cantidad"] for x in lineas_ot)
                 if not lineas_ot:
-                    notificar("No se encontraron artículos con cantidad a enviar de SCL a CCP (>0) en el archivo.", "#D97706")
+                    notificar("El Excel no contiene cantidades SCL a CCP mayores que cero.", "#D97706")
                     return
 
-                num_ot = f"OT-SCL-CCP-{datetime.now().strftime('%Y%m%d-%H%M')}"
                 bodega_act = obtener_bodega_activa(self.page)
-                
+
+                # Número legible y único. Se verifica en Supabase por si hay dos cargas simultáneas.
+                base_ot = f"OT-SCL-CCP-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                num_ot = base_ot
+                correlativo = 1
+                while True:
+                    existente = (supabase.table("netsuite_ordenes_venta")
+                                  .select("id")
+                                  .eq("numero_ov", num_ot)
+                                  .limit(1)
+                                  .execute())
+                    if not existente.data:
+                        break
+                    correlativo += 1
+                    num_ot = f"{base_ot}-{correlativo:02d}"
+
+                # Asignación automática al operador RF activo con menor carga en la bodega.
+                operador_elegido = "SIN ASIGNAR"
+                carga = {}
+                try:
+                    usuarios = supabase.table("wms_usuarios").select("*").eq("activo", True).execute()
+                    for u in (usuarios.data or []):
+                        codigo = str(u.get("usuario") or "").strip().upper()
+                        bodega_u = str(u.get("bodega") or "").strip().upper()
+                        if codigo and (coincide_bodega(u, bodega_act) or bodega_u in ("AMBAS", "TODAS")):
+                            carga[codigo] = 0
+                    pendientes = (supabase.table("netsuite_ordenes_venta")
+                                  .select("operador_asignado,bodega")
+                                  .eq("estado_ns", "PENDIENTE_PICKING")
+                                  .execute())
+                    for orden in (pendientes.data or []):
+                        if coincide_bodega(orden, bodega_act):
+                            op = str(orden.get("operador_asignado") or "").strip().upper()
+                            if op in carga:
+                                carga[op] += 1
+                    if carga:
+                        operador_elegido = min(carga, key=carga.get)
+                except Exception:
+                    # La OT sigue visible para asignación manual aunque no se pueda balancear.
+                    pass
+
                 payload_ot = {
                     "bodega": bodega_act,
                     "id_externo_ns": num_ot,
@@ -127,33 +161,48 @@ class PickingModulo:
                     "canal_venta": "TRASLADO SCL-CCP",
                     "fecha_emision_ns": datetime.now().isoformat(),
                     "estado_ns": "PENDIENTE_PICKING",
-                    "operador_asignado": str(getattr(self.page, "usuario_actual", "WMS")).strip().upper(),
+                    "operador_asignado": operador_elegido,
                 }
-
                 res_ins = supabase.table("netsuite_ordenes_venta").insert(payload_ot).execute()
-                if res_ins.data:
-                    id_ot_db = res_ins.data[0].get("id")
-                    lote_detalles = [
-                        {
-                            "orden_id": int(id_ot_db),
-                            "linea_ns": idx,
-                            "sku": lin["sku"],
-                            "cantidad_pedida": lin["cantidad"],
-                            "cantidad_comprometida": lin["cantidad"],
-                            "cantidad_pickeada": 0,
-                            "lote_asignado": "",
-                            "estado_linea": "PENDIENTE",
-                            "lotes_pickeados": "",
-                        }
-                        for idx, lin in enumerate(lineas_ot, start=1)
-                    ]
-                    supabase.table("netsuite_detalle_ov").insert(lote_detalles).execute()
-                    notificar(f"¡Orden de Traslado {num_ot} creada con éxito ({len(lineas_ot)} SKUs | {total_unidades} UN)!", "#047857")
-                    self.cargar_monitor_packing_dual()
-                else:
-                    notificar("Error al registrar la OT en Supabase.", "#B91C1C")
+                if not res_ins.data:
+                    raise RuntimeError("Supabase no devolvió el encabezado de la OT creada")
+
+                id_ot_db = res_ins.data[0].get("id")
+                if id_ot_db is None:
+                    raise RuntimeError("La OT fue insertada sin ID de Supabase")
+
+                lote_detalles = [{
+                    "orden_id": int(id_ot_db),
+                    "linea_ns": idx,
+                    "sku": lin["sku"],
+                    "cantidad_pedida": int(lin["cantidad"]),
+                    "cantidad_comprometida": int(lin["cantidad"]),
+                    "cantidad_pickeada": 0,
+                    "lote_asignado": "",
+                    "estado_linea": "PENDIENTE",
+                    "lotes_pickeados": "",
+                } for idx, lin in enumerate(lineas_ot, start=1)]
+
+                res_det = supabase.table("netsuite_detalle_ov").insert(lote_detalles).execute()
+                if not res_det.data:
+                    raise RuntimeError("No se pudieron registrar las líneas de la OT")
+
+                notificar(
+                    f"OT {num_ot} enviada a Picking RF: {len(lineas_ot)} SKU(s), "
+                    f"{total_unidades} UN, operador {operador_elegido}.",
+                    "#047857",
+                )
+                cargar_monitor_packing_dual()
+
             except Exception as ex:
-                notificar(f"Error procesando Excel de traslado: {ex}", "#B91C1C")
+                # Compensación: evita dejar una cabecera huérfana si fallan sus líneas.
+                if id_ot_db is not None:
+                    try:
+                        supabase.table("netsuite_detalle_ov").delete().eq("orden_id", id_ot_db).execute()
+                        supabase.table("netsuite_ordenes_venta").delete().eq("id", id_ot_db).execute()
+                    except Exception:
+                        pass
+                notificar(f"Error creando OT de traslado en Supabase: {ex}", "#B91C1C")
 
         # Función asíncrona para procesar el archivo Excel de traslado SCL->CCP
         async def al_seleccionar_excel_traslado(e):
