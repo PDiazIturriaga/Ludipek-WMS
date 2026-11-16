@@ -1686,7 +1686,7 @@ def main(page: ft.Page):
         cargar_datos_vivos_panel_izquierdo()
         page.on_resize = adaptar_resolucion_automatica
         page.controls.clear()
-        page.overlay.clear()
+        
         page.bgcolor = COLOR_BG_PORTAL
         page.add(ft.Column([encabezado, cuerpo_principal], spacing=0, expand=True))
         adaptar_resolucion_automatica()
