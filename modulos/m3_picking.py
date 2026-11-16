@@ -122,12 +122,13 @@ class PickingModulo:
                     notificar("Error al registrar la OT en Supabase.", "#B91C1C")
             except Exception as ex:
                 notificar(f"Error procesando Excel de traslado: {ex}", "#B91C1C")
-        def al_seleccionar_excel_traslado(e: ft.FilePickerResultEvent):
-            if not e.files:
+        def al_seleccionar_excel_traslado(e):
+            archivos = getattr(e, "files", None)
+            if not archivos:
                 notificar("Selección de archivo cancelada.", "#D97706")
                 return
             
-            f_obj = e.files[0]
+            f_obj = archivos[0]
             ruta_local = getattr(f_obj, "path", None)
             
             if ruta_local and os.path.exists(ruta_local):
@@ -145,23 +146,44 @@ class PickingModulo:
                 except Exception as ex_up:
                     notificar(f"Error cargando archivo en web: {ex_up}", "#B91C1C")
 
-        # Instanciación moderna de FilePicker para Flet >= 0.25.0
-        picker_excel_traslado = ft.FilePicker(on_result=al_seleccionar_excel_traslado)
-        
-        # En Flet moderno se añade directamente a la página o se incluye en los controles principales si es necesario
+        def on_result_traslado_event(e):
+            self.page.run_task(lambda: al_seleccionar_excel_traslado(e))
+
+        # Patrón seguro basado en inspect.signature idéntico a m1_recepcion.py y m6_impresion.py
+        sig_fp = inspect.signature(ft.FilePicker.__init__).parameters
+        kwargs_fp = {}
+        if "on_result" in sig_fp:
+            kwargs_fp["on_result"] = on_result_traslado_event
+
+        picker_excel_traslado = ft.FilePicker(**kwargs_fp)
         try:
-            self.page.overlay.append(picker_excel_traslado)
-            self.page.update()
+            if hasattr(ft, "Service") and isinstance(picker_excel_traslado, ft.Service) and hasattr(self.page, "services"):
+                self.page.services.append(picker_excel_traslado)
+            else:
+                self.page.overlay.append(picker_excel_traslado)
         except Exception:
-            pass
+            try:
+                self.page.overlay.append(picker_excel_traslado)
+            except Exception:
+                pass
+
+        def abrir_selector_traslado(e=None):
+            sig_pick = inspect.signature(picker_excel_traslado.pick_files).parameters
+            kwargs_pick = {
+                "allow_multiple": False,
+                "allowed_extensions": ["xlsx", "xls"],
+            }
+            if "with_data" in sig_pick:
+                kwargs_pick["with_data"] = True
+            
+            res_p = picker_excel_traslado.pick_files(**kwargs_pick)
+            if inspect.iscoroutine(res_p):
+                self.page.run_task(lambda: res_p)
 
         btn_subir_traslado = boton_primario(
             "SUBIR EXCEL TRASLADO SCL->CCP",
             ft.Icons.UPLOAD_FILE_ROUNDED,
-            lambda e: picker_excel_traslado.pick_files(
-                allow_multiple=False,
-                allowed_extensions=["xlsx", "xls"]
-            ),
+            abrir_selector_traslado,
             "#B45309",
             height_val=34,
         )
