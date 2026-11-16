@@ -3230,7 +3230,7 @@ class RecepcionModulo:
             else:
                 await procesar_packing_ia_desde_ruta(ruta_local)
 
-        def on_upload_ia_event(e):
+        async def on_upload_ia_event(e):
             err_up = getattr(e, "error", None)
             if err_up:
                 txt_estado_ia.value = f"Error al subir PDF: {err_up}"
@@ -3245,7 +3245,7 @@ class RecepcionModulo:
             nombre_f = getattr(e, "file_name", None) or modo_carga_ia_actual.get("ultimo_nombre", "")
             ruta_subida = os.path.join("assets", "uploads", os.path.basename(nombre_f))
             if os.path.exists(ruta_subida):
-                self.page.run_task(despachar_archivo_ia_listo, ruta_subida)
+                await despachar_archivo_ia_listo(ruta_subida)
 
         async def manejar_archivos_seleccionados_ia(archivos_lista):
             if not archivos_lista:
@@ -3286,9 +3286,9 @@ class RecepcionModulo:
             if inspect.iscoroutine(res_u):
                 await res_u
 
-        def on_result_ia_event(e):
+        async def on_result_ia_event(e):
             archivos = getattr(e, "files", None)
-            self.page.run_task(manejar_archivos_seleccionados_ia, archivos)
+            await manejar_archivos_seleccionados_ia(archivos)
 
         sig_fp = inspect.signature(ft.FilePicker.__init__).parameters
         kwargs_fp = {}
@@ -3298,16 +3298,10 @@ class RecepcionModulo:
             kwargs_fp["on_upload"] = on_upload_ia_event
 
         selector_archivos_ia = ft.FilePicker(**kwargs_fp)
-        try:
-            if hasattr(ft, "Service") and isinstance(selector_archivos_ia, ft.Service) and hasattr(self.page, "services"):
-                self.page.services.append(selector_archivos_ia)
-            else:
-                self.page.overlay.append(selector_archivos_ia)
-        except Exception:
-            try:
-                self.page.overlay.append(selector_archivos_ia)
-            except Exception:
-                pass
+        
+            # Flet 1.x: FilePicker es un Service, no un control visual.
+        if selector_archivos_ia not in self.page.services:
+            self.page.services.append(selector_archivos_ia)
 
         async def abrir_selector_web_ia(tipo_doc: str, extensiones: list):
             modo_carga_ia_actual["tipo"] = tipo_doc

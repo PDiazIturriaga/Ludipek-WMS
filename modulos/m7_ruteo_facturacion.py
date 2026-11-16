@@ -877,35 +877,37 @@ class RuteoFacturacionModulo:
             except Exception as ex:
                 notificar(f"Error importando Excel Base: {ex}", "#B91C1C")
 
-        def al_subir_excel_picker(e):
+        async def al_subir_excel_picker(e):
             try:
                 os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
                 nombre_f = getattr(e, "file_name", None)
                 if nombre_f:
                     ruta_f = os.path.join("assets", "uploads", nombre_f)
                     if os.path.exists(ruta_f):
-                        self.page.run_task(procesar_excel_base_netsuite, ruta_f)
+                        await procesar_excel_base_netsuite(ruta_f)
             except Exception as ex_up:
                 notificar(f"Error procesando archivo subido: {ex_up}", "#B91C1C")
 
-        def al_elegir_excel_picker(e):
+        async def al_elegir_excel_picker(e):
             if not getattr(e, "files", None):
                 return
             f_obj = e.files[0]
             if getattr(f_obj, "path", None) and os.path.exists(f_obj.path):
-                self.page.run_task(procesar_excel_base_netsuite, f_obj.path)
+                await procesar_excel_base_netsuite(f_obj.path)
             else:
                 try:
                     url_up = self.page.get_upload_url(f_obj.name, 600)
-                    picker_excel_ns.upload([ft.FilePickerUploadFile(f_obj.name, upload_url=url_up)])
+                    archivo_up = ft.FilePickerUploadFile(upload_url=url_up, name=f_obj.name)
+                    resultado_up = picker_excel_ns.upload([archivo_up])
+                    if inspect.isawaitable(resultado_up):
+                        await resultado_up
                 except Exception as ex_u:
                     notificar(f"No se pudo cargar el archivo en web: {ex_u}", "#B91C1C")
 
         picker_excel_ns = ft.FilePicker(on_result=al_elegir_excel_picker, on_upload=al_subir_excel_picker)
-        try:
-            self.page.overlay.append(picker_excel_ns)
-        except Exception:
-            pass
+        # Flet 1.x: FilePicker es un Service, no un control visual.
+        if picker_excel_ns not in self.page.services:
+            self.page.services.append(picker_excel_ns)
 
         # =====================================================================
         # MODAL DE EDICIÓN HUMANA AMIGABLE POR OV (FACTURA, BULTOS, ARENAS, RUTA)

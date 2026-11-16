@@ -55,7 +55,7 @@ class ImpresionModulo:
         ultimo_nombre_cenco = {"nombre": ""}
 
         # --- SELECTOR WEB / CLOUD COMPATIBLE CON RENDER (SIN TKINTER) ---
-        def on_upload_cenco_event(e):
+        async def on_upload_cenco_event(e):
             nonlocal ruta_excel_cencosud
             err_up = getattr(e, "error", None)
             if err_up:
@@ -120,9 +120,9 @@ class ImpresionModulo:
             if inspect.iscoroutine(res_u):
                 await res_u
 
-        def on_result_cenco_event(e):
+        async def on_result_cenco_event(e):
             archivos = getattr(e, "files", None)
-            self.page.run_task(manejar_archivo_cenco_seleccionado, archivos)
+            await manejar_archivo_cenco_seleccionado(archivos)
 
         sig_fp_c = inspect.signature(ft.FilePicker.__init__).parameters
         kwargs_fp_c = {}
@@ -132,16 +132,9 @@ class ImpresionModulo:
             kwargs_fp_c["on_upload"] = on_upload_cenco_event
 
         picker_cencosud = selector_cencosud or ft.FilePicker(**kwargs_fp_c)
-        try:
-            if hasattr(ft, "Service") and isinstance(picker_cencosud, ft.Service) and hasattr(self.page, "services"):
-                self.page.services.append(picker_cencosud)
-            else:
-                self.page.overlay.append(picker_cencosud)
-        except Exception:
-            try:
-                self.page.overlay.append(picker_cencosud)
-            except Exception:
-                pass
+        # Flet 1.x: FilePicker es un Service, no un control visual.
+        if picker_cencosud not in self.page.services:
+            self.page.services.append(picker_cencosud)
 
         async def seleccionar_excel_cencosud(e=None):
             sig_pick = inspect.signature(picker_cencosud.pick_files).parameters
