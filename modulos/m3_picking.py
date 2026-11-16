@@ -208,7 +208,8 @@ class PickingModulo:
                         pass
                 notificar(f"Error creando OT de traslado en Supabase: {ex}", "#B91C1C")
 
-        # Carga de Excel compatible con Flet 1.x: FilePicker es un Service, no un overlay.
+        # Carga Excel compatible con Flet 1.x.
+        # FilePicker es Service y no debe agregarse a page.overlay.
         archivo_traslado_subiendo = {"nombre": None}
 
         async def al_seleccionar_excel_traslado(e):
@@ -216,6 +217,7 @@ class PickingModulo:
             if not archivos:
                 notificar("Selección cancelada.", "#D97706")
                 return
+
             f_obj = archivos[0]
             ruta_local = getattr(f_obj, "path", None)
             if ruta_local and os.path.exists(ruta_local):
@@ -234,10 +236,14 @@ class PickingModulo:
                 return
 
             try:
-                url = self.page.get_upload_url(nombre, 600)
-                resultado = picker_excel_traslado.upload([
-                    ft.FilePickerUploadFile(nombre, upload_url=url)
-                ])
+                url_subida = self.page.get_upload_url(nombre, 600)
+                # Flet 1.x: el primer argumento es upload_url. No pasar el nombre
+                # como primer argumento y upload_url como keyword porque duplica el valor.
+                archivo_upload = ft.FilePickerUploadFile(
+                    upload_url=url_subida,
+                    name=nombre,
+                )
+                resultado = picker_excel_traslado.upload([archivo_upload])
                 if inspect.isawaitable(resultado):
                     await resultado
                 notificar(f"Subiendo {nombre}...", "#0284C7")
@@ -250,7 +256,11 @@ class PickingModulo:
         async def on_upload_traslado_event(e):
             if float(getattr(e, "progress", 0) or 0) < 1:
                 return
-            nombre = os.path.basename(str(getattr(e, "name", None) or archivo_traslado_subiendo.get("nombre") or "traslado.xlsx"))
+            nombre = os.path.basename(str(
+                getattr(e, "name", None)
+                or archivo_traslado_subiendo.get("nombre")
+                or "traslado.xlsx"
+            ))
             raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             candidatos = [
                 os.path.join(raiz, "assets", "uploads", nombre),
@@ -259,7 +269,10 @@ class PickingModulo:
             ]
             ruta = next((x for x in candidatos if os.path.exists(x)), None)
             if not ruta:
-                notificar(f"El archivo subió, pero no se encontró en assets/uploads: {nombre}", "#B91C1C")
+                notificar(
+                    f"El archivo terminó de subir, pero no se encontró en assets/uploads: {nombre}",
+                    "#B91C1C",
+                )
                 return
             procesar_excel_traslado_scl_ccp(ruta)
 
@@ -268,10 +281,9 @@ class PickingModulo:
             on_upload=on_upload_traslado_event,
         )
 
-        # FilePicker en Flet 1.x hereda de Service. Nunca debe agregarse a page.overlay.
-        if not hasattr(self.page, "services"):
-            raise RuntimeError("La versión instalada de Flet no expone page.services")
-        self.page.services.append(picker_excel_traslado)
+        # En Flet 1.x FilePicker hereda de Service.
+        if picker_excel_traslado not in self.page.services:
+            self.page.services.append(picker_excel_traslado)
 
         btn_subir_traslado = boton_primario(
             "SUBIR EXCEL TRASLADO SCL->CCP",
@@ -280,7 +292,7 @@ class PickingModulo:
             "#B45309",
             height_val=34,
         )
-        # PickFiles se ejecuta en el cliente dentro del clic del navegador.
+        # Acción cliente: evita bloqueos del selector en navegador.
         btn_subir_traslado.action = ft.PickFiles(
             picker_excel_traslado,
             allow_multiple=False,
