@@ -208,8 +208,7 @@ class PickingModulo:
                         pass
                 notificar(f"Error creando OT de traslado en Supabase: {ex}", "#B91C1C")
 
-        # Carga Excel compatible con Flet 1.x.
-        # FilePicker es Service y no debe agregarse a page.overlay.
+        # Carga del excel derlay.
         archivo_traslado_subiendo = {"nombre": None}
 
         async def al_seleccionar_excel_traslado(e):
@@ -217,14 +216,16 @@ class PickingModulo:
             if not archivos:
                 notificar("Selección cancelada.", "#D97706")
                 return
-
             f_obj = archivos[0]
             ruta_local = getattr(f_obj, "path", None)
             if ruta_local and os.path.exists(ruta_local):
                 procesar_excel_traslado_scl_ccp(ruta_local)
                 return
 
-            nombre = os.path.basename(str(getattr(f_obj, "name", "traslado.xlsx")))
+            nombre = os.path.basename(
+            str(getattr(f_obj, "name", "Concepcion.xlsx"))
+                )
+
             archivo_traslado_subiendo["nombre"] = nombre
             datos = getattr(f_obj, "bytes", None)
             if datos:
@@ -236,14 +237,10 @@ class PickingModulo:
                 return
 
             try:
-                url_subida = self.page.get_upload_url(nombre, 600)
-                # Flet 1.x: el primer argumento es upload_url. No pasar el nombre
-                # como primer argumento y upload_url como keyword porque duplica el valor.
-                archivo_upload = ft.FilePickerUploadFile(
-                    upload_url=url_subida,
-                    name=nombre,
-                )
-                resultado = picker_excel_traslado.upload([archivo_upload])
+                url = self.page.get_upload_url(nombre, 600)
+                resultado = picker_excel_traslado.upload([
+                    ft.FilePickerUploadFile(nombre, upload_url=url)
+                ])
                 if inspect.isawaitable(resultado):
                     await resultado
                 notificar(f"Subiendo {nombre}...", "#0284C7")
@@ -254,51 +251,129 @@ class PickingModulo:
             await al_seleccionar_excel_traslado(e)
 
         async def on_upload_traslado_event(e):
-            if float(getattr(e, "progress", 0) or 0) < 1:
-                return
-            nombre = os.path.basename(str(
-                getattr(e, "name", None)
-                or archivo_traslado_subiendo.get("nombre")
-                or "traslado.xlsx"
-            ))
-            raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            candidatos = [
-                os.path.join(raiz, "assets", "uploads", nombre),
-                os.path.join(os.getcwd(), "assets", "uploads", nombre),
-                os.path.join("assets", "uploads", nombre),
-            ]
-            ruta = next((x for x in candidatos if os.path.exists(x)), None)
-            if not ruta:
+            error_subida = getattr(e, "error", None)
+            if error_subida:
                 notificar(
-                    f"El archivo terminó de subir, pero no se encontró en assets/uploads: {nombre}",
-                    "#B91C1C",
-                )
-                return
-            procesar_excel_traslado_scl_ccp(ruta)
+                f"Error durante la subida del Excel: {error_subida}",
+                "#B91C1C",
+            )
+            return
 
-        picker_excel_traslado = ft.FilePicker(
-            on_result=on_result_traslado_event,
-            on_upload=on_upload_traslado_event,
+        progreso = float(getattr(e, "progress", 0) or 0)
+
+        if progreso < 1:
+            notificar(
+                f"Subiendo Excel de traslado: {int(progreso * 100)}%",
+                "#0284C7",
+            )
+            return
+
+    # IMPORTANTE:
+    # En Flet 1.x, e.name puede contener solamente "upload".
+    # Se debe usar primero el nombre original almacenado en on_result.
+        nombre_original = str(
+            archivo_traslado_subiendo.get("nombre")
+            or getattr(e, "file_name", None)
+            or ""
+        ).strip()
+
+        # Ignorar los nombres internos del endpoint de Flet.
+        if not nombre_original or nombre_original.lower() in (
+            "upload",
+            "/upload",
+            "none",
+        ):
+            notificar(
+                "El archivo terminó de subir, pero Flet no devolvió "
+                "el nombre original del Excel.",
+                "#B91C1C",
+            )
+            return
+
+        nombre_original = os.path.basename(nombre_original)
+
+        raiz_proyecto = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
         )
 
-        # En Flet 1.x FilePicker hereda de Service.
-        if picker_excel_traslado not in self.page.services:
-            self.page.services.append(picker_excel_traslado)
+        candidatos = [
+            os.path.join(
+                raiz_proyecto,
+                "assets",
+                "uploads",
+                nombre_original,
+            ),
+            os.path.join(
+                os.getcwd(),
+                "assets",
+                "uploads",
+                nombre_original,
+            ),
+            os.path.join(
+                "assets",
+                "uploads",
+                nombre_original,
+            ),
+        ]
 
-        btn_subir_traslado = boton_primario(
-            "SUBIR EXCEL TRASLADO SCL->CCP",
-            ft.Icons.UPLOAD_FILE_ROUNDED,
+        # Respaldo: buscar recursivamente por nombre.
+        carpetas_busqueda = [
+            os.path.join(raiz_proyecto, "assets", "uploads"),
+            os.path.join(os.getcwd(), "assets", "uploads"),
+            os.path.join("assets", "uploads"),
+        ]
+
+        ruta_encontrada = next(
+            (
+                ruta
+                for ruta in candidatos
+                if os.path.isfile(ruta)
+            ),
             None,
-            "#B45309",
-            height_val=34,
         )
-        # Acción cliente: evita bloqueos del selector en navegador.
-        btn_subir_traslado.action = ft.PickFiles(
-            picker_excel_traslado,
-            allow_multiple=False,
-            allowed_extensions=["xlsx", "xls"],
-            with_data=False,
-        )
+
+        if not ruta_encontrada:
+            for carpeta in carpetas_busqueda:
+                if not os.path.isdir(carpeta):
+                    continue
+
+                for raiz, _, archivos in os.walk(carpeta):
+                    for archivo in archivos:
+                        if archivo.lower() == nombre_original.lower():
+                            ruta_encontrada = os.path.join(raiz, archivo)
+                            break
+
+                    if ruta_encontrada:
+                        break
+
+                if ruta_encontrada:
+                    break
+
+        if not ruta_encontrada:
+            contenido_encontrado = []
+
+            for carpeta in carpetas_busqueda:
+                if os.path.isdir(carpeta):
+                    try:
+                        contenido_encontrado.extend(os.listdir(carpeta))
+                    except Exception:
+                        pass
+
+            notificar(
+                f"El Excel terminó de subir, pero no se encontró "
+                f"'{nombre_original}'. Archivos presentes: "
+                f"{', '.join(contenido_encontrado[:5]) or 'ninguno'}.",
+                "#B91C1C",
+            )
+            return
+
+        notificar(
+            f"Excel recibido. Procesando hoja Traslado: "
+            f"{os.path.basename(ruta_encontrada)}",
+            "#0284C7",
+            )
+
+        procesar_excel_traslado_scl_ccp(ruta_encontrada)
 
         def descargar_archivo_web(ruta_archivo: str, titulo_doc: str = "Documento Generado"):
             if not ruta_archivo or not os.path.exists(ruta_archivo):
