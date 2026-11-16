@@ -142,7 +142,7 @@ class PickingModulo:
                 except Exception as ex_up:
                     notificar(f"Error cargando archivo en web: {ex_up}", "#B91C1C")
 
-        picker_excel_traslado = ft.FilePicker(on_result=lambda e: self.page.run_task(al_seleccionar_excel_traslado, getattr(e, 'files', [])))
+        picker_excel_traslado = ft.filepicker(on_result=lambda e: self.page.run_task(al_seleccionar_excel_traslado, getattr(e, 'files', [])))
         try:
             self.page.overlay.append(picker_excel_traslado)
         except Exception:
