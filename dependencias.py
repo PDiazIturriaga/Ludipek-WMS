@@ -1211,3 +1211,64 @@ def descargar_o_abrir_archivo(page: ft.Page, ruta_archivo: str):
     except Exception as ex_dl:
         print(f"[WARN] Error enviando archivo al navegador: {ex_dl}")
 
+
+# =====================================================================
+# 10. SISTEMA RESPONSIVE Y NAVEGACION LIMPIA PARA WMS PC
+# =====================================================================
+def obtener_perfil_responsive(page: ft.Page) -> dict:
+    """Contrato visual compartido para notebook, escritorio y monitor externo."""
+    ancho = float(page.width or 1366)
+    alto = float(page.height or 768)
+    if ancho < 1100:
+        modo, menu, maximo, columnas = "compacto", 68, ancho, 1
+    elif ancho < 1440:
+        modo, menu, maximo, columnas = "notebook", 190, 1180, 2
+    elif ancho < 1920:
+        modo, menu, maximo, columnas = "escritorio", 215, 1480, 3
+    else:
+        modo, menu, maximo, columnas = "amplio", 225, 1640, 4
+    return {
+        "modo": modo,
+        "ancho": ancho,
+        "alto": alto,
+        "menu_width": menu,
+        "content_max": maximo,
+        "columnas": columnas,
+        "padding": 6 if modo == "compacto" else (8 if modo == "notebook" else 12),
+        "card_padding": 8 if modo in ("compacto", "notebook") else 12,
+        "table_factor": 0.68 if alto < 760 else (0.82 if alto < 900 else 1.0),
+        "compacto": modo == "compacto",
+    }
+
+
+def aplicar_responsive_a_vista(vista, perfil: dict):
+    """Aplica densidad y ancho estable sin tocar reglas de negocio del modulo."""
+    if vista is None:
+        return
+    try:
+        vista.padding = perfil["padding"]
+        vista.width = perfil["content_max"]
+        vista.expand = False
+        vista.alignment = ft.Alignment.TOP_CENTER
+        if isinstance(getattr(vista, "content", None), ft.Column):
+            vista.content.scroll = ft.ScrollMode.AUTO
+            vista.content.expand = True
+    except Exception:
+        pass
+
+
+def cerrar_superficies_transitorias(page: ft.Page):
+    """Cierra dialogos/snackbars al cambiar de modulo sin borrar datos persistidos."""
+    try:
+        page.close_dialog()
+    except Exception:
+        try:
+            if getattr(page, "dialog", None):
+                page.dialog.open = False
+        except Exception:
+            pass
+    try:
+        if getattr(page, "snack_bar", None):
+            page.snack_bar.open = False
+    except Exception:
+        pass

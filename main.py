@@ -820,6 +820,8 @@ def main(page: ft.Page):
         tarjetas_adaptables = []
         kpis_adaptables = []
         indice_modulo_activo = -1
+        indice_submodulo_activo = 0
+        menu_contraido_manual = False
         sesion_activa = True
         historial_recientes = []
 
@@ -978,45 +980,72 @@ def main(page: ft.Page):
             if len(historial_recientes) > 6:
                 historial_recientes.pop()
 
-        def generar_menu_lateral(idx_mod: int):
+        breadcrumb_txt = ft.Text(
+            "Inicio", size=11.5, color="#CBD5E1", weight=ft.FontWeight.W_600,
+            overflow=ft.TextOverflow.ELLIPSIS,
+        )
+        barra_contexto = ft.Container(
+            height=36,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=5),
+            bgcolor="#202728",
+            border=ft.Border(bottom=ft.BorderSide(1, "#3B484B")),
+            content=ft.Row([
+                ft.Icon(ft.Icons.ROUTE_ROUNDED, size=16, color="#38BDF8"),
+                breadcrumb_txt,
+            ], spacing=7),
+        )
+
+        def generar_menu_lateral(idx_mod: int, sub_activo: int = 0, compacto: bool = False):
             texto_mod, icono_mod, _, _, fn_sub, sub_items = vistas_mapa[idx_mod]
             items = []
             for s_idx, (txt_sub, ico_sub) in enumerate(sub_items):
+                activo = s_idx == sub_activo
+                def ir_submodulo(e, m=idx_mod, s=s_idx, fn=fn_sub):
+                    nonlocal indice_submodulo_activo
+                    cerrar_superficies_transitorias(page)
+                    indice_submodulo_activo = s
+                    registrar_visita_reciente(m, s)
+                    if fn:
+                        fn(s)
+                    panel_submenus.content = generar_menu_lateral(m, s, panel_submenus.width <= 76)
+                    breadcrumb_txt.value = f"{vistas_mapa[m][0].replace(chr(10), ' ')}  ›  {vistas_mapa[m][5][s][0]}"
+                    page.update()
                 items.append(
-                    ft.ListTile(
-                        leading=ft.Icon(ico_sub, color="#38BDF8", size=19),
-                        title=ft.Text(txt_sub, size=12, color="#F8FAFC", weight=ft.FontWeight.W_500),
-                        on_click=lambda e, m=idx_mod, s=s_idx, fn=fn_sub: (
-                            registrar_visita_reciente(m, s),
-                            fn(s) if fn else None,
-                            page.update(),
+                    ft.Container(
+                        bgcolor="#155E75" if activo else None,
+                        border=ft.Border(left=ft.BorderSide(3, "#38BDF8" if activo else "transparent")),
+                        border_radius=6,
+                        tooltip=txt_sub,
+                        content=ft.ListTile(
+                            leading=ft.Icon(ico_sub, color="#E0F2FE" if activo else "#38BDF8", size=19),
+                            title=None if compacto else ft.Text(txt_sub, size=11.5, color="#FFFFFF", weight=ft.FontWeight.BOLD if activo else ft.FontWeight.W_500),
+                            on_click=ir_submodulo,
+                            hover_color="#3F5657",
+                            dense=True,
                         ),
-                        hover_color="#527976",
                     )
                 )
             return ft.Container(
-                width=250,
+                width=68 if compacto else 215,
                 bgcolor="#2F3738",
                 border=ft.Border(right=ft.BorderSide(1, "#3B484B")),
-                content=ft.Column(
-                    [
-                        ft.Container(
-                            padding=18,
-                            bgcolor="#232A2B",
-                            border=ft.Border(bottom=ft.BorderSide(1, "#3B484B")),
-                            content=ft.Row([
-                                ft.Icon(icono_mod, color="#38BDF8", size=22),
-                                ft.Text(texto_mod.replace("\n", " "), size=13, weight=ft.FontWeight.BOLD, color="#FFFFFF")
-                            ], spacing=12)
-                        ),
-                        ft.Column(items, spacing=2)
-                    ],
-                    spacing=0
-                )
+                content=ft.Column([
+                    ft.Container(
+                        padding=10 if compacto else 15,
+                        bgcolor="#232A2B",
+                        border=ft.Border(bottom=ft.BorderSide(1, "#3B484B")),
+                        tooltip=texto_mod.replace("\n", " "),
+                        content=ft.Row([
+                            ft.Icon(icono_mod, color="#38BDF8", size=22),
+                            *( [] if compacto else [ft.Text(texto_mod.replace("\n", " "), size=12.5, weight=ft.FontWeight.BOLD, color="#FFFFFF", expand=True)] ),
+                        ], spacing=9),
+                    ),
+                    ft.Column(items, spacing=3, scroll=ft.ScrollMode.AUTO, expand=True),
+                ], spacing=0, expand=True),
             )
 
         def activar_modulo_principal(idx_sel: int, sub_idx: int = 0):
-            nonlocal indice_modulo_activo
+            nonlocal indice_modulo_activo, indice_submodulo_activo
             codigos_mod = [
                 "PC_DASHBOARD",
                 "PC_RECEPCION",
@@ -1035,11 +1064,24 @@ def main(page: ft.Page):
                 notificar_global(page, "Acceso restringido: tu perfil no tiene permisos para este módulo.", "#B91C1C")
                 return
 
+            cerrar_superficies_transitorias(page)
             indice_modulo_activo = idx_sel
+            indice_submodulo_activo = sub_idx
+            contenedor_vista_activa.content = ft.Container(
+                alignment=ft.Alignment.CENTER,
+                content=ft.ProgressRing(width=24, height=24, stroke_width=2, color="#38BDF8"),
+            )
             registrar_visita_reciente(idx_sel, sub_idx)
-            panel_submenus.content = generar_menu_lateral(idx_sel)
+            perfil_nav = obtener_perfil_responsive(page)
+            panel_submenus.content = generar_menu_lateral(idx_sel, sub_idx, perfil_nav["compacto"])
             panel_submenus.visible = True
-            contenedor_vista_activa.content = vistas_mapa[idx_sel][2]
+            vista_destino = vistas_mapa[idx_sel][2]
+            aplicar_responsive_a_vista(vista_destino, obtener_perfil_responsive(page))
+            contenedor_vista_activa.content = ft.Row(
+                [vista_destino], alignment=ft.MainAxisAlignment.CENTER,
+                vertical_alignment=ft.CrossAxisAlignment.START, expand=True,
+            )
+            breadcrumb_txt.value = f"{vistas_mapa[idx_sel][0].replace(chr(10), ' ')}  ›  {vistas_mapa[idx_sel][5][sub_idx][0]}"
             accion_recarga = vistas_mapa[idx_sel][3]
             fn_sub = vistas_mapa[idx_sel][4]
             if fn_sub:
@@ -1048,7 +1090,10 @@ def main(page: ft.Page):
                 accion_recarga()
             page.bgcolor = "#1B2122"
             btn_home.visible = True
-            cuerpo_principal.content = ft.Row([panel_submenus, contenedor_vista_activa], expand=True, spacing=0)
+            cuerpo_principal.content = ft.Row([
+                panel_submenus,
+                ft.Column([barra_contexto, contenedor_vista_activa], spacing=0, expand=True),
+            ], expand=True, spacing=0)
             adaptar_resolucion_automatica()
             page.update()
 
@@ -1651,36 +1696,28 @@ def main(page: ft.Page):
         )
 
         def adaptar_resolucion_automatica(e=None):
-            ancho_w = page.width or 1366
-            alto_h = page.height or 768
-            es_notebook = (ancho_w <= 1500) or (alto_h <= 860)
-
-            pad_vista = 8 if es_notebook else 14
-            pad_tarjeta = 10 if es_notebook else 14
-
-            ancho_menu = 200 if es_notebook else 245
+            perfil = obtener_perfil_responsive(page)
+            ancho_menu = perfil["menu_width"]
             panel_submenus.width = ancho_menu
-            if panel_submenus.content and hasattr(panel_submenus.content, "width"):
-                panel_submenus.content.width = ancho_menu
-
-            for mod_obj in (dash, recep, puta, pick, mon_cola, inv, mae, imp, ruteo):
-                mod_obj.vista.padding = ft.Padding.only(
-                    left=pad_vista, top=pad_vista, right=pad_vista + 6, bottom=pad_vista
+            if indice_modulo_activo >= 0:
+                panel_submenus.content = generar_menu_lateral(
+                    indice_modulo_activo,
+                    indice_submodulo_activo,
+                    perfil["compacto"],
                 )
-                if hasattr(mod_obj.vista, "content") and isinstance(mod_obj.vista.content, ft.Column):
-                    mod_obj.vista.content.scroll = ft.ScrollMode.ALWAYS
-
-            factor_alto = 0.72 if alto_h <= 780 else (0.85 if alto_h <= 920 else 1.05)
+            for mod_obj in (dash, recep, puta, pick, mon_cola, inv, mae, imp, ruteo):
+                aplicar_responsive_a_vista(mod_obj.vista, perfil)
             for cont_tabla, h_base in tablas_scroll_sesion:
-                cont_tabla.height = max(145, int(h_base * factor_alto))
-
+                cont_tabla.height = max(140, int(h_base * perfil["table_factor"]))
             for tarj in tarjetas_adaptables:
-                tarj.padding = pad_tarjeta
+                try:
+                    tarj.padding = perfil["card_padding"]
+                except Exception:
+                    pass
             for card_k, box_ico, txt_val in kpis_adaptables:
-                card_k.padding = 8 if es_notebook else 12
-                box_ico.padding = 6 if es_notebook else 10
-                txt_val.size = 15 if es_notebook else 20
-
+                card_k.padding = 7 if perfil["modo"] in ("compacto", "notebook") else 11
+                box_ico.padding = 6 if perfil["modo"] in ("compacto", "notebook") else 9
+                txt_val.size = 15 if perfil["modo"] in ("compacto", "notebook") else 18
             page.update()
 
         cargar_datos_vivos_panel_izquierdo()
