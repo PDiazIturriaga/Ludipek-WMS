@@ -1028,8 +1028,6 @@ class PickingModulo:
                         agrupado_por_ov[ov_pl_base]["pallets_detalle"] = mapa_pallets_pl_por_ov.get(ov_pl_base, {})
                         agrupado_por_ov[ov_pl_base]["packing_persistido"] = bool(mapa_pallets_pl_por_ov.get(ov_pl_base))
                         agrupado_por_ov[ov_pl_base]["estado_packing_json"] = estado_packing_json
-                        if estado_packing_json == "PACKING_EN_PROCESO":
-                            agrupado_por_ov[ov_pl_base]["estado"] = "PENDIENTE_PACKING"
 
                     if ov_pl_base in agrupado_por_ov and meta_desde_json:
                         if meta_desde_json.get("comuna"):
