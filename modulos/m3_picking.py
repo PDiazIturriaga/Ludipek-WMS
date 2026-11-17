@@ -961,6 +961,7 @@ class PickingModulo:
                 pass
 
             mapa_lineas_pl_por_ov = {}
+            mapa_pallets_pl_por_ov = {}
             try:
                 res_pl = supabase.table("wms_packing_lists_fa").select("*").order("id", desc=True).limit(300).execute()
                 for pl in (res_pl.data or []):
@@ -995,19 +996,32 @@ class PickingModulo:
                                     continue
                                 sku_j_base = sku_j.split("-")[0].strip()
                                 inf_m = mapa_maestra_sku.get(sku_j) or mapa_maestra_sku.get(sku_j_base) or {}
-                                lineas_pl.append({
+                                linea_pl = {
                                     "sku": sku_j,
                                     "ean": str(item_j.get("ean") or inf_m.get("ean") or "").strip(),
                                     "descripcion": str(item_j.get("descripcion") or inf_m.get("descripcion") or "").strip(),
                                     "cantidad": int(float(item_j.get("solicitado") or 0)),
                                     "cantidad_pedida": int(float(item_j.get("solicitado") or 0)),
-                                    "cantidad_pickeada": int(float(item_j.get("pickeado") or 0)),
+                                    "cantidad_pickeada": int(float(item_j.get("pickeado") or item_j.get("unidades_totales") or 0)),
+                                    "unidades_totales": int(float(item_j.get("unidades_totales") or item_j.get("pickeado") or 0)),
+                                    "cajas": int(float(item_j.get("cajas") or 0)),
+                                    "displays": int(float(item_j.get("displays") or 0)),
+                                    "multiplo_aplicado": int(float(item_j.get("multiplo_aplicado") or 1)),
+                                    "lpn_pallet": str(item_j.get("lpn_pallet") or item_j.get("lpn_consolidado") or "").strip().upper(),
+                                    "lote": str(item_j.get("lote") or "S/L").strip().upper(),
+                                    "fecha_vencimiento_cl": str(item_j.get("fecha_vencimiento_cl") or "S/F").strip(),
                                     "lotes": str(item_j.get("lotes") or "").strip(),
                                     "es_farmacia": True,
-                                })
+                                }
+                                lineas_pl.append(linea_pl)
+                                lpn_p = linea_pl["lpn_pallet"]
+                                if lpn_p:
+                                    mapa_pallets_pl_por_ov.setdefault(ov_pl_base, {}).setdefault(lpn_p, []).append(linea_pl)
 
                     if lineas_pl and ov_pl_base not in mapa_lineas_pl_por_ov:
                         mapa_lineas_pl_por_ov[ov_pl_base] = lineas_pl
+                    if ov_pl_base in agrupado_por_ov:
+                        agrupado_por_ov[ov_pl_base]["pallets_detalle"] = mapa_pallets_pl_por_ov.get(ov_pl_base, {})
 
                     if ov_pl_base in agrupado_por_ov and meta_desde_json:
                         if meta_desde_json.get("comuna"):
@@ -1119,6 +1133,44 @@ class PickingModulo:
                 except Exception:
                     continue
 
+        def descargar_pdf_contenido_pallets(info_ov: dict):
+            from fpdf import FPDF
+            pallets = info_ov.get("pallets_detalle") or {}
+            if not pallets:
+                notificar("La OV no tiene detalle de pallets transferido desde Packing RF.", "#D97706")
+                return
+            try:
+                ov_cod = str(info_ov.get("ov") or "S-OV").strip().upper()
+                os.makedirs("reportes_packing", exist_ok=True)
+                ruta_pdf = os.path.join("reportes_packing", f"Contenido_Pallets_{ov_cod.replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+                pdf = FPDF(orientation="L", unit="mm", format="A4")
+                pdf.set_auto_page_break(auto=True, margin=12)
+                for lpn, lineas_pallet in pallets.items():
+                    pdf.add_page()
+                    pdf.set_fill_color(15, 118, 110); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 15)
+                    pdf.cell(0, 11, "LUDIPEK WMS - CONTENIDO DE PALLET", ln=True, fill=True, align="C")
+                    pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "B", 13)
+                    pdf.cell(0, 9, f"LPN: {lpn}   |   OV/OT: {ov_cod}", ln=True)
+                    pdf.set_font("Arial", "", 9)
+                    pdf.cell(0, 6, f"Cliente: {str(info_ov.get('cliente') or 'CLIENTE')[:90]}", ln=True)
+                    total_un = sum(int(x.get("unidades_totales") or x.get("cantidad_pickeada") or 0) for x in lineas_pallet)
+                    total_cj = sum(int(x.get("cajas") or 0) for x in lineas_pallet)
+                    total_dsp = sum(int(x.get("displays") or 0) for x in lineas_pallet)
+                    pdf.cell(0, 6, f"Resumen: {len(lineas_pallet)} SKU | {total_cj} cajas | {total_dsp} displays | {total_un} unidades", ln=True)
+                    pdf.ln(2)
+                    headers = [("SKU", 28), ("Descripcion", 82), ("Lote", 38), ("Vencimiento", 28), ("Cajas", 18), ("Displays", 20), ("Unidades", 22), ("Multiplo", 20)]
+                    pdf.set_font("Arial", "B", 8); pdf.set_fill_color(30, 58, 138); pdf.set_text_color(255, 255, 255)
+                    for titulo, ancho in headers: pdf.cell(ancho, 7, titulo, border=1, fill=True, align="C")
+                    pdf.ln(); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 8)
+                    for item in lineas_pallet:
+                        valores = [str(item.get("sku") or "")[:16], str(item.get("descripcion") or "")[:48], str(item.get("lote") or "S/L")[:22], str(item.get("fecha_vencimiento_cl") or "S/F")[:14], str(item.get("cajas") or 0), str(item.get("displays") or 0), str(item.get("unidades_totales") or item.get("cantidad_pickeada") or 0), str(item.get("multiplo_aplicado") or 1)]
+                        for valor, (_, ancho) in zip(valores, headers): pdf.cell(ancho, 7, valor, border=1, align="C" if ancho <= 28 else "L")
+                        pdf.ln()
+                pdf.output(ruta_pdf)
+                descargar_archivo_web(ruta_pdf, f"PDF contenido de pallets - {ov_cod}")
+            except Exception as ex:
+                notificar(f"Error generando PDF de pallets: {ex}", "#B91C1C")
+
         def imprimir_etiqueta_packing_bultos_ov(info_ov: dict):
             ov_cod = str(info_ov.get("ov") or "S/OV").strip().upper()
             ov_limpia = ov_cod.removesuffix("-FA").strip()
@@ -1185,6 +1237,7 @@ class PickingModulo:
                     content=ft.Column(filas_d, spacing=6, scroll=ft.ScrollMode.ALWAYS),
                 ),
                 actions=[
+                    boton_primario("PDF CONTENIDO PALLETS", ft.Icons.PICTURE_AS_PDF_ROUNDED, lambda ev: (cerrar_d(), descargar_pdf_contenido_pallets(info_ov)), "#B91C1C", height_val=32),
                     boton_primario("ETIQUETA BULTOS (15x10)", ft.Icons.QR_CODE_2_ROUNDED, lambda ev: (cerrar_d(), imprimir_etiqueta_packing_bultos_ov(info_ov)), ACCENT_TEAL, height_val=32),
                     boton_primario("PACKING LIST (EXCEL)", ft.Icons.TABLE_VIEW_OUTLINED, lambda ev: (cerrar_d(), exportar_ov_farmacia_excel_pdf(info_ov)), "#B45309", height_val=32),
                     ft.TextButton("Cerrar", on_click=cerrar_d),
@@ -1628,6 +1681,7 @@ class PickingModulo:
                                 ft.Row(
                                     [
                                         boton_primario("EXCEL NS", ft.Icons.TABLE_VIEW_ROUNDED, lambda ev, it=r_fc: exportar_excel_facturacion_netsuite(solo_ov=it), ACCENT_BLUE, height_val=26),
+                                        boton_primario("PDF PALLETS", ft.Icons.PICTURE_AS_PDF_ROUNDED, lambda ev, it=r_fc: descargar_pdf_contenido_pallets(it), "#B91C1C", height_val=26),
                                         boton_primario("LPN BULTOS", ft.Icons.QR_CODE_2_ROUNDED, lambda ev, it=r_fc: imprimir_etiqueta_packing_bultos_ov(it), ACCENT_TEAL, height_val=26),
                                         boton_primario("FACTURADA ✓", ft.Icons.CHECK_CIRCLE_OUTLINE, lambda ev, it=r_fc: marcar_ovs_como_facturadas(ov_unica=it), "#047857" if est_fc != "FACTURADO" else "#334155", height_val=26),
                                     ],
