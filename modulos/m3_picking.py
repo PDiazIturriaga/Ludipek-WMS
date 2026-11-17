@@ -981,9 +981,13 @@ class PickingModulo:
 
                     lineas_pl = []
                     meta_desde_json = {}
+                    estado_packing_json = ""
                     if isinstance(det_json, list):
                         for item_j in det_json:
                             if isinstance(item_j, dict):
+                                estado_item = str(item_j.get("_estado_packing") or "").strip().upper()
+                                if estado_item:
+                                    estado_packing_json = estado_item
                                 if item_j.get("comuna") or item_j.get("bultos") or item_j.get("lpn_consolidado"):
                                     meta_desde_json = {
                                         "comuna": item_j.get("comuna"),
@@ -1022,6 +1026,10 @@ class PickingModulo:
                         mapa_lineas_pl_por_ov[ov_pl_base] = lineas_pl
                     if ov_pl_base in agrupado_por_ov:
                         agrupado_por_ov[ov_pl_base]["pallets_detalle"] = mapa_pallets_pl_por_ov.get(ov_pl_base, {})
+                        agrupado_por_ov[ov_pl_base]["packing_persistido"] = bool(mapa_pallets_pl_por_ov.get(ov_pl_base))
+                        agrupado_por_ov[ov_pl_base]["estado_packing_json"] = estado_packing_json
+                        if estado_packing_json == "PACKING_EN_PROCESO":
+                            agrupado_por_ov[ov_pl_base]["estado"] = "PENDIENTE_PACKING"
 
                     if ov_pl_base in agrupado_por_ov and meta_desde_json:
                         if meta_desde_json.get("comuna"):
