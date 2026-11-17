@@ -892,10 +892,10 @@ def main(page: ft.Page):
                 pick.cargar_monitor_packing_dual,
                 pick.sel_sub_olas,
                 [
-                    ("1. Monitor Completo (Olas + Packing)", _ico("VIEW_IN_AR_OUTLINED", "VIEW_QUILT_OUTLINED")),
-                    ("2. Extracción Olas NetSuite", _ico("ALL_INBOX_OUTLINED", "CLOUD_DOWNLOAD_OUTLINED")),
-                    ("3. Listado Órdenes de Venta", _ico("INVENTORY_2_OUTLINED", "INVENTORY_OUTLINED")),
-                    ("4. Facturación (Subida NetSuite)", _ico("CENTER_FOCUS_STRONG_OUTLINED", "RECEIPT_LONG_ROUNDED")),
+                    ("1. Resumen Operativo", _ico("DASHBOARD_OUTLINED", "VIEW_QUILT_OUTLINED")),
+                    ("2. Crear / Liberar Olas", _ico("ALL_INBOX_OUTLINED", "CLOUD_DOWNLOAD_OUTLINED")),
+                    ("3. Seguimiento Picking / Packing", _ico("FACT_CHECK_OUTLINED", "INVENTORY_OUTLINED")),
+                    ("4. Facturación NetSuite", _ico("CENTER_FOCUS_STRONG_OUTLINED", "RECEIPT_LONG_ROUNDED")),
                 ],
             ),
             (

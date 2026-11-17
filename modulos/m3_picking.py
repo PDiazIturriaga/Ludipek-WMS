@@ -2185,64 +2185,222 @@ class PickingModulo:
             )
         )
 
-        subvista_monitor_completo = ft.Column([bloque_superior_kpi_cortes, tarjeta_extraccion_netsuite, tarjeta_listado_unico_ovs], spacing=10)
-        subvista_solo_extraccion = ft.Column([bloque_superior_kpi_cortes, tarjeta_extraccion_netsuite], spacing=10)
-        subvista_solo_estaciones = ft.Column([tarjeta_listado_unico_ovs], spacing=10)
-        subvista_solo_facturacion = ft.Column([tarjeta_modulo_facturacion], spacing=10)
+        # =====================================================================
+        # PAGINAS OPERATIVAS SEPARADAS: una tarea por pantalla
+        # =====================================================================
+        titulo_pagina = ft.Text(
+            "RESUMEN OPERATIVO DE OLAS Y PACKING",
+            size=14.5,
+            weight=ft.FontWeight.W_900,
+            color=TEXT_WHITE,
+        )
+        subtitulo_pagina = ft.Text(
+            "Indicadores generales. Seleccione un proceso en el menú lateral.",
+            size=10.5,
+            color=TEXT_MUTED,
+        )
+        acciones_pagina = ft.Row([], spacing=8, wrap=True)
 
-        contenedor_subvista_olas = ft.Container(content=subvista_monitor_completo)
+        def encabezado_proceso():
+            return ft.Container(
+                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+                bgcolor="#222A2C",
+                border_radius=8,
+                border=ft.Border.all(1, BORDER_COLOR),
+                content=ft.Row(
+                    [
+                        ft.Row(
+                            [
+                                ft.Icon(ft.Icons.VIEW_IN_AR_OUTLINED, color=ACCENT_CYAN, size=22),
+                                ft.Column([titulo_pagina, subtitulo_pagina], spacing=1),
+                            ],
+                            spacing=10,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        acciones_pagina,
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=True,
+                ),
+            )
 
-        barra_titulo_monitor = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
-            bgcolor="#222A2C",
+        barra_proceso = encabezado_proceso()
+
+        def tarjeta_acceso(titulo, descripcion, icono, color, indice):
+            return ft.Container(
+                col={"xs": 12, "sm": 12, "md": 4, "lg": 4, "xl": 4},
+                padding=14,
+                bgcolor="#202728",
+                border_radius=8,
+                border=ft.Border.all(1, color),
+                ink=True,
+                on_click=lambda e, i=indice: self.sel_sub_olas(i),
+                content=ft.Row(
+                    [
+                        ft.Container(
+                            width=42,
+                            height=42,
+                            border_radius=8,
+                            bgcolor=color,
+                            alignment=ft.Alignment.CENTER,
+                            content=ft.Icon(icono, color=TEXT_WHITE, size=22),
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text(titulo, size=12.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                                ft.Text(descripcion, size=10.5, color=TEXT_MUTED),
+                            ],
+                            spacing=2,
+                            expand=True,
+                        ),
+                        ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=color, size=20),
+                    ],
+                    spacing=10,
+                ),
+            )
+
+        accesos_resumen = ft.ResponsiveRow(
+            [
+                tarjeta_acceso(
+                    "CREAR / LIBERAR OLAS",
+                    "NetSuite, Excel traslado y liberación RF",
+                    ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
+                    ACCENT_BLUE,
+                    1,
+                ),
+                tarjeta_acceso(
+                    "SEGUIMIENTO PICKING / PACKING",
+                    "Consultar OV/OT, estados, SKU y etiquetas",
+                    ft.Icons.FACT_CHECK_ROUNDED,
+                    ACCENT_CYAN,
+                    2,
+                ),
+                tarjeta_acceso(
+                    "FACTURACIÓN NETSUITE",
+                    "Exportar órdenes empacadas y confirmar facturación",
+                    ft.Icons.RECEIPT_LONG_ROUNDED,
+                    "#10B981",
+                    3,
+                ),
+            ],
+            spacing=10,
+            run_spacing=10,
+        )
+
+        # Página 1: resumen, sin tablas operativas apiladas.
+        subvista_resumen = ft.Column(
+            [bloque_superior_kpi_cortes, accesos_resumen],
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
+
+        # Página 2: creación y liberación. Los filtros de extracción viven solo aquí.
+        barra_extraccion = ft.Container(
+            padding=12,
+            bgcolor="#202728",
             border_radius=8,
             border=ft.Border.all(1, BORDER_COLOR),
             content=ft.Row(
                 [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.VIEW_IN_AR_OUTLINED, color=ACCENT_CYAN, size=22),
-                            ft.Text("MONITOR DE ÓRDENES DE VENTA: PICKING, PACKING & FACTURACIÓN", size=14.5, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                            btn_plegar_kpis,
-                        ],
-                        spacing=10,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    txt_fecha_desde,
+                    txt_fecha_hasta,
+                    dd_corte_asignar,
+                    btn_subir_traslado,
+                    boton_primario(
+                        "1. EXTRAER ÓRDENES NETSUITE",
+                        ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
+                        extraer_ordenes_netsuite,
+                        ACCENT_BLUE,
+                        height_val=34,
                     ),
-                    ft.Row(
-                        [
-                            txt_fecha_desde,
-                            txt_fecha_hasta,
-                            dd_corte_asignar,
-                            dd_filtro_corte,
-                            btn_subir_traslado, # <-- BOTÓN EXCEL TRASLADO SCL->CCP
-                            boton_primario("1. EXTRAER ORDENES NETSUITE", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, extraer_ordenes_netsuite, ACCENT_BLUE),
-                            ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, on_click=cargar_monitor_packing_dual),
-                        ],
-                        spacing=8,
-                        wrap=True,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ft.IconButton(
+                        icon=ft.Icons.SYNC_ROUNDED,
+                        icon_color=ACCENT_CYAN,
+                        tooltip="Actualizar previsualización",
+                        on_click=cargar_monitor_packing_dual,
                     ),
                 ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                spacing=8,
                 wrap=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         )
+        subvista_extraccion = ft.Column(
+            [barra_extraccion, tarjeta_extraccion_netsuite],
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
 
-        col_principal_picking = ft.Column([barra_titulo_monitor, contenedor_subvista_olas], spacing=10, scroll=ft.ScrollMode.ALWAYS, expand=True)
+        # Página 3: seguimiento. No contiene extracción ni KPI de cortes.
+        subvista_seguimiento = ft.Column(
+            [tarjeta_listado_unico_ovs],
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
 
-        self.vista = ft.Container(padding=ft.Padding.only(left=12, top=10, right=16, bottom=12), bgcolor=BG_MODULO, content=col_principal_picking, expand=True)
+        # Página 4: facturación independiente.
+        subvista_facturacion = ft.Column(
+            [tarjeta_modulo_facturacion],
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
+
+        contenedor_subvista_olas = ft.Container(content=subvista_resumen, expand=True)
+        col_principal_picking = ft.Column(
+            [barra_proceso, contenedor_subvista_olas],
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
+        self.vista = ft.Container(
+            padding=ft.Padding.only(left=12, top=10, right=16, bottom=12),
+            bgcolor=BG_MODULO,
+            content=col_principal_picking,
+            expand=True,
+        )
         self.contenedor = contenedor_subvista_olas
-        self.sub_completo = subvista_monitor_completo
-        self.sub_extraccion = subvista_solo_extraccion
-        self.sub_estaciones = subvista_solo_estaciones
-        self.sub_facturacion = subvista_solo_facturacion
+        self.sub_resumen = subvista_resumen
+        self.sub_extraccion = subvista_extraccion
+        self.sub_seguimiento = subvista_seguimiento
+        self.sub_facturacion = subvista_facturacion
+        self.titulo_pagina = titulo_pagina
+        self.subtitulo_pagina = subtitulo_pagina
+        self.acciones_pagina = acciones_pagina
+        self._checks_liberacion = checks_liberacion
+        self._checks_facturacion = checks_facturacion
+        self._olas_extraidas_ns = olas_extraidas_ns
         self.cargar_monitor_packing_dual_func = cargar_monitor_packing_dual
 
     def cargar_monitor_packing_dual(self, e=None):
         self.cargar_monitor_packing_dual_func(e)
 
     def sel_sub_olas(self, idx: int):
-        vistas = [self.sub_completo, self.sub_extraccion, self.sub_estaciones, self.sub_facturacion]
-        self.contenedor.content = vistas[idx if 0 <= idx < len(vistas) else 0]
+        idx_ok = idx if 0 <= idx <= 3 else 0
+        vistas = [self.sub_resumen, self.sub_extraccion, self.sub_seguimiento, self.sub_facturacion]
+        titulos = [
+            ("RESUMEN OPERATIVO", "Indicadores generales y acceso a cada proceso."),
+            ("CREAR Y LIBERAR OLAS", "Extraiga desde NetSuite o Excel, revise y libere a RF."),
+            ("SEGUIMIENTO PICKING / PACKING", "Consulte cada OV/OT sin mezclar extracción ni facturación."),
+            ("FACTURACIÓN NETSUITE", "Trabaje únicamente con órdenes empacadas pendientes de facturar."),
+        ]
+        # Limpia selección visual de la página anterior, no elimina datos persistidos.
+        if idx_ok != 1:
+            for chk in self._checks_liberacion.values():
+                try:
+                    chk.value = False
+                except Exception:
+                    pass
+        if idx_ok != 3:
+            for chk, _ in self._checks_facturacion.values():
+                try:
+                    chk.value = False
+                except Exception:
+                    pass
+        self.contenedor.content = vistas[idx_ok]
+        self.titulo_pagina.value, self.subtitulo_pagina.value = titulos[idx_ok]
         self.cargar_monitor_packing_dual_func()
         self.page.update()
