@@ -1330,6 +1330,7 @@ class PickingModulo:
                 suf_ov = str(solo_ov.get("ov_base") or solo_ov.get("ov") or "").strip() if solo_ov else "LOTE"
                 ruta_xlsx = os.path.join("reportes_facturacion", f"NetSuite_Facturacion_{suf_ov}_{ts_now}.xlsx")
                 filas_detalle_ns, filas_resumen_ov = [], []
+                filas_resumen_lpn, filas_checklist_recepcion = [], []
                 ovs_procesadas_excel = set()
 
                 for ov_item in lista_fact:
@@ -1345,7 +1346,20 @@ class PickingModulo:
                     cant_bultos = int(ov_item.get("bultos") or 1)
                     lpn_cod = str(ov_item.get("lpn") or f"LPN-PK-{ov_limpia}").strip()
                     canal_str = "FARMACIA (-FA)" if ov_item.get("es_farmacia") else "ESTANDAR"
-                    lineas = list(ov_item.get("lineas_detalle") or [])
+                    pallets_detalle = ov_item.get("pallets_detalle") or {}
+                    lineas = []
+                    if pallets_detalle:
+                        for lpn_pallet, items_pallet in pallets_detalle.items():
+                            for item_pallet in items_pallet:
+                                linea_pallet = dict(item_pallet)
+                                linea_pallet["lpn_pallet"] = lpn_pallet
+                                linea_pallet["lotes"] = str(
+                                    linea_pallet.get("lotes")
+                                    or f"[{lpn_pallet}] {linea_pallet.get('lote') or 'S/L'} / {linea_pallet.get('fecha_vencimiento_cl') or 'S/F'} ({int(linea_pallet.get('unidades_totales') or linea_pallet.get('cantidad_pickeada') or 0)} UN)"
+                                )
+                                lineas.append(linea_pallet)
+                    else:
+                        lineas = list(ov_item.get("lineas_detalle") or [])
                     if not lineas and ov_item.get("id") is not None:
                         r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", ov_item["id"]).order("linea_ns").execute()
                         for d in (r_det.data or []):
@@ -1361,9 +1375,18 @@ class PickingModulo:
                     unid_tot_emp = 0
                     for idx_l, lin in enumerate(lineas or [{"sku": "CONSOLIDADO", "descripcion": "ORDEN EMPACADA EN WMS"}], start=1):
                         sol_u = int(lin.get("cantidad_pedida") or lin.get("cantidad") or ov_item.get("unidades") or 0)
-                        pick_u = int(lin.get("cantidad_pickeada") or sol_u or ov_item.get("unidades_pickeadas") or 1)
+                        pick_u = int(lin.get("unidades_totales") or lin.get("cantidad_pickeada") or sol_u or ov_item.get("unidades_pickeadas") or 1)
                         unid_tot_emp += pick_u
-                        trazas = extraer_trazabilidad(lin.get("lotes") or "S/L", lpn_cod, pick_u)
+                        if lin.get("lpn_pallet"):
+                            trazas = [{
+                                "LPN_Pallet": str(lin.get("lpn_pallet") or lpn_cod).upper(),
+                                "Lote": str(lin.get("lote") or "S/L").upper(),
+                                "Fecha_Vencimiento": normalizar_fecha_vencimiento(lin.get("fecha_vencimiento_cl")),
+                                "Unidades_Lote": pick_u,
+                                "Trazabilidad_Original": str(lin.get("lotes") or ""),
+                            }]
+                        else:
+                            trazas = extraer_trazabilidad(lin.get("lotes") or "S/L", lpn_cod, pick_u)
                         for traza in trazas:
                             filas_detalle_ns.append({
                                 "Numero_OV_NetSuite": ov_limpia,
@@ -1382,9 +1405,51 @@ class PickingModulo:
                                 "LPN_Pallet": traza["LPN_Pallet"],
                                 "Lote": traza["Lote"],
                                 "Fecha_Vencimiento": traza["Fecha_Vencimiento"],
+                                "Cajas": int(lin.get("cajas") or 0),
+                                "Displays": int(lin.get("displays") or 0),
+                                "Multiplo_Caja": int(lin.get("multiplo_aplicado") or 1),
                                 "Unidades_Lote": traza["Unidades_Lote"],
                                 "Trazabilidad_Original": traza["Trazabilidad_Original"],
                                 "Estado_Facturacion": ov_item.get("estado", "PENDIENTE_FACTURACION"),
+                            })
+
+                    for lpn_pallet, items_pallet in pallets_detalle.items():
+                        total_un_lpn = sum(int(i.get("unidades_totales") or i.get("cantidad_pickeada") or 0) for i in items_pallet)
+                        total_cajas_lpn = sum(int(i.get("cajas") or 0) for i in items_pallet)
+                        total_displays_lpn = sum(int(i.get("displays") or 0) for i in items_pallet)
+                        skus_lpn = len({str(i.get("sku") or "").upper() for i in items_pallet if i.get("sku")})
+                        filas_resumen_lpn.append({
+                            "Numero_OT": ov_limpia,
+                            "LPN": lpn_pallet,
+                            "Cliente_Destino": cli_nom,
+                            "Comuna_Destino": comuna_nom,
+                            "Cantidad_SKU": skus_lpn,
+                            "Total_Cajas": total_cajas_lpn,
+                            "Total_Displays": total_displays_lpn,
+                            "Total_Unidades": total_un_lpn,
+                            "Estado_Despacho": "EN_TRANSITO_CCP" if ov_limpia.startswith("OT-CCP-") else ov_item.get("estado", "PENDIENTE_FACTURACION"),
+                            "Recepcionado_CCP": "NO",
+                            "Fecha_Recepcion_CCP": "",
+                            "Usuario_Recepcion_CCP": "",
+                            "Observacion_Recepcion": "",
+                        })
+                        for i in items_pallet:
+                            filas_checklist_recepcion.append({
+                                "Numero_OT": ov_limpia,
+                                "LPN": lpn_pallet,
+                                "SKU": i.get("sku"),
+                                "Descripcion": i.get("descripcion"),
+                                "Lote": i.get("lote") or "S/L",
+                                "Fecha_Vencimiento": normalizar_fecha_vencimiento(i.get("fecha_vencimiento_cl")),
+                                "Cajas_Despachadas": int(i.get("cajas") or 0),
+                                "Displays_Despachados": int(i.get("displays") or 0),
+                                "Unidades_Despachadas": int(i.get("unidades_totales") or i.get("cantidad_pickeada") or 0),
+                                "Cajas_Recibidas": "",
+                                "Displays_Recibidos": "",
+                                "Unidades_Recibidas": "",
+                                "Conforme": "",
+                                "Diferencia": "",
+                                "Observacion": "",
                             })
 
                     filas_resumen_ov.append({
@@ -1395,14 +1460,19 @@ class PickingModulo:
                         "Comuna_Despacho": comuna_nom,
                         "Modalidad": tipo_emp,
                         "N_Bultos_Pallets": cant_bultos,
-                        "LPN_Despacho": lpn_cod,
+                        "Cantidad_Total_LPN": len(pallets_detalle) if pallets_detalle else 1,
+                        "LPN_Despacho": ", ".join(pallets_detalle.keys()) if pallets_detalle else lpn_cod,
+                        "Total_Cajas": sum(int(i.get("cajas") or 0) for items in pallets_detalle.values() for i in items),
+                        "Total_Displays": sum(int(i.get("displays") or 0) for items in pallets_detalle.values() for i in items),
                         "Total_Unidades_Facturar": unid_tot_emp,
-                        "Estado": ov_item.get("estado", "PENDIENTE_FACTURACION"),
+                        "Estado": "EN_TRANSITO_CCP" if ov_limpia.startswith("OT-CCP-") else ov_item.get("estado", "PENDIENTE_FACTURACION"),
                     })
 
                 with pd.ExcelWriter(ruta_xlsx, engine="openpyxl") as writer:
                     pd.DataFrame(filas_detalle_ns).to_excel(writer, sheet_name="1_Subida_NetSuite_Lineas", index=False)
                     pd.DataFrame(filas_resumen_ov).to_excel(writer, sheet_name="2_Resumen_OVs_Bultos", index=False)
+                    pd.DataFrame(filas_resumen_lpn).to_excel(writer, sheet_name="3_Resumen_LPN", index=False)
+                    pd.DataFrame(filas_checklist_recepcion).to_excel(writer, sheet_name="4_Checklist_Recepcion_CCP", index=False)
 
                 wb = openpyxl.load_workbook(ruta_xlsx)
                 fill_hdr = PatternFill(fill_type="solid", start_color="1E3A8A", end_color="1E3A8A")
