@@ -1194,27 +1194,82 @@ class PickingModulo:
             page.update()
 
         def exportar_excel_facturacion_netsuite(e=None, solo_ov: dict = None):
+            import re
             import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment
 
-            if solo_ov:
-                lista_fact = [solo_ov]
-            else:
-                seleccionadas_chk = [reg for _, (chk, reg) in checks_facturacion.items() if chk.value]
-                lista_fact = seleccionadas_chk if seleccionadas_chk else [
-                    r for r in registros_packing_db if r.get("estado") == "PENDIENTE_FACTURACION"
-                ]
+            def normalizar_fecha_vencimiento(valor):
+                txt = str(valor or "").strip()
+                if not txt or txt.upper() in ("S/F", "SF", "SIN FECHA", "NONE", "NULL", "-"):
+                    return "S/F"
+                txt = txt.replace(".", "-").replace("/", "-")
+                for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d-%m-%y", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        return datetime.strptime(txt[:19], fmt).strftime("%d-%m-%Y")
+                    except Exception:
+                        pass
+                return txt
 
+            def extraer_trazabilidad(texto, lpn_default, unidades_default):
+                """Convierte trazabilidad combinada en una fila por LPN/lote/vencimiento."""
+                raw = str(texto or "").strip()
+                if not raw or raw.upper() in ("NONE", "NULL"):
+                    raw = "S/L"
+                bloques = [b.strip() for b in re.split(r"\s*\|\s*|\s*;\s*|\n+", raw) if b.strip()]
+                salida = []
+                for bloque in bloques or ["S/L"]:
+                    original = bloque
+                    lpn = lpn_default
+                    m_lpn = re.search(r"\[([^\]]+)\]", bloque)
+                    if m_lpn:
+                        lpn = m_lpn.group(1).strip().upper()
+                        bloque = (bloque[:m_lpn.start()] + bloque[m_lpn.end():]).strip()
+                    unidades = unidades_default
+                    m_un = re.search(r"\((\d+(?:[.,]\d+)?)\s*UN\)", bloque, flags=re.I)
+                    if m_un:
+                        unidades = int(float(m_un.group(1).replace(",", ".")))
+                        bloque = (bloque[:m_un.start()] + bloque[m_un.end():]).strip()
+                    bloque = re.sub(r"\[Rack:[^\]]*\]", "", bloque, flags=re.I).strip()
+                    limpio = re.sub(r"\s+", " ", bloque).strip(" -/")
+                    lote, venc = "S/L", "S/F"
+                    # S/L es un valor indivisible: nunca se interpreta como lote S y fecha L.
+                    if limpio.upper().replace(" ", "") in ("S/L", "SL", "SINLOTE"):
+                        lote = "S/L"
+                    else:
+                        fecha_match = re.search(r"(\d{2}[/-]\d{2}[/-]\d{2,4}|\d{4}[/-]\d{2}[/-]\d{2})", limpio)
+                        if fecha_match:
+                            venc = normalizar_fecha_vencimiento(fecha_match.group(1))
+                            lote_txt = (limpio[:fecha_match.start()] + limpio[fecha_match.end():]).strip(" -/")
+                            lote = lote_txt or "S/L"
+                        elif re.search(r"\bS\s*/\s*F\b", limpio, flags=re.I):
+                            venc = "S/F"
+                            lote_txt = re.sub(r"\bS\s*/\s*F\b", "", limpio, flags=re.I).strip(" -/")
+                            lote = lote_txt or "S/L"
+                        else:
+                            lote = limpio or "S/L"
+                    salida.append({
+                        "LPN_Pallet": lpn or lpn_default,
+                        "Lote": lote.upper(),
+                        "Fecha_Vencimiento": venc,
+                        "Unidades_Lote": unidades,
+                        "Trazabilidad_Original": original,
+                    })
+                # Si solo hay un bloque sin unidades explícitas, usa el total facturable.
+                if len(salida) == 1 and salida[0]["Unidades_Lote"] <= 0:
+                    salida[0]["Unidades_Lote"] = unidades_default
+                return salida
+
+            lista_fact = [solo_ov] if solo_ov else [reg for _, (chk, reg) in checks_facturacion.items() if chk.value]
             if not lista_fact:
-                notificar("No hay OVs en estado PENDIENTE_FACTURACION seleccionadas para exportar.", "#D97706")
+                lista_fact = [r for r in registros_packing_db if r.get("estado") == "PENDIENTE_FACTURACION"]
+            if not lista_fact:
+                notificar("No hay OVs en PENDIENTE_FACTURACION seleccionadas para exportar.", "#D97706")
                 return
-
             try:
                 os.makedirs("reportes_facturacion", exist_ok=True)
                 ts_now = datetime.now().strftime("%Y%m%d_%H%M%S")
                 suf_ov = str(solo_ov.get("ov_base") or solo_ov.get("ov") or "").strip() if solo_ov else "LOTE"
                 ruta_xlsx = os.path.join("reportes_facturacion", f"NetSuite_Facturacion_{suf_ov}_{ts_now}.xlsx")
-
                 filas_detalle_ns, filas_resumen_ov = [], []
                 ovs_procesadas_excel = set()
 
@@ -1224,7 +1279,6 @@ class PickingModulo:
                     if ov_limpia in ovs_procesadas_excel:
                         continue
                     ovs_procesadas_excel.add(ov_limpia)
-
                     fecha_ov = str(ov_item.get("fecha_ov") or datetime.now().strftime("%Y-%m-%d"))
                     cli_nom = str(ov_item.get("cliente") or "CLIENTE").strip()
                     comuna_nom = str(ov_item.get("comuna") or "SANTIAGO").strip()
@@ -1232,29 +1286,26 @@ class PickingModulo:
                     cant_bultos = int(ov_item.get("bultos") or 1)
                     lpn_cod = str(ov_item.get("lpn") or f"LPN-PK-{ov_limpia}").strip()
                     canal_str = "FARMACIA (-FA)" if ov_item.get("es_farmacia") else "ESTANDAR"
-
                     lineas = list(ov_item.get("lineas_detalle") or [])
                     if not lineas and ov_item.get("id") is not None:
-                        try:
-                            r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", ov_item["id"]).order("linea_ns").execute()
-                            for d in (r_det.data or []):
-                                lineas.append({
-                                    "linea_ns": d.get("linea_ns"),
-                                    "sku": str(d.get("sku") or "").strip().upper(),
-                                    "descripcion": str(d.get("descripcion") or "").strip(),
-                                    "cantidad_pedida": int(float(d.get("cantidad_pedida") or 0)),
-                                    "cantidad_pickeada": int(float(d.get("cantidad_pickeada") or d.get("cantidad_pedida") or 0)),
-                                    "lotes": str(d.get("lotes_pickeados") or d.get("lote_asignado") or "S/L").strip(),
-                                })
-                        except Exception:
-                            pass
+                        r_det = supabase.table("netsuite_detalle_ov").select("*").eq("orden_id", ov_item["id"]).order("linea_ns").execute()
+                        for d in (r_det.data or []):
+                            lineas.append({
+                                "linea_ns": d.get("linea_ns"),
+                                "sku": str(d.get("sku") or "").strip().upper(),
+                                "descripcion": str(d.get("descripcion") or "").strip(),
+                                "cantidad_pedida": int(float(d.get("cantidad_pedida") or 0)),
+                                "cantidad_pickeada": int(float(d.get("cantidad_pickeada") or d.get("cantidad_pedida") or 0)),
+                                "lotes": str(d.get("lotes_pickeados") or d.get("lote_asignado") or "S/L").strip(),
+                            })
 
                     unid_tot_emp = 0
-                    if lineas:
-                        for idx_l, lin in enumerate(lineas, start=1):
-                            sol_u = int(lin.get("cantidad_pedida") or lin.get("cantidad") or 0)
-                            pick_u = int(lin.get("cantidad_pickeada") or sol_u)
-                            unid_tot_emp += pick_u
+                    for idx_l, lin in enumerate(lineas or [{"sku": "CONSOLIDADO", "descripcion": "ORDEN EMPACADA EN WMS"}], start=1):
+                        sol_u = int(lin.get("cantidad_pedida") or lin.get("cantidad") or ov_item.get("unidades") or 0)
+                        pick_u = int(lin.get("cantidad_pickeada") or sol_u or ov_item.get("unidades_pickeadas") or 1)
+                        unid_tot_emp += pick_u
+                        trazas = extraer_trazabilidad(lin.get("lotes") or "S/L", lpn_cod, pick_u)
+                        for traza in trazas:
                             filas_detalle_ns.append({
                                 "Numero_OV_NetSuite": ov_limpia,
                                 "Codigo_WMS": ov_cod,
@@ -1269,28 +1320,13 @@ class PickingModulo:
                                 "Descripcion": str(lin.get("descripcion") or "").strip(),
                                 "Cantidad_Solicitada": sol_u,
                                 "Cantidad_Facturar_Despachar": pick_u,
-                                "Lotes_y_Vencimientos": str(lin.get("lotes") or "S/L").strip(),
+                                "LPN_Pallet": traza["LPN_Pallet"],
+                                "Lote": traza["Lote"],
+                                "Fecha_Vencimiento": traza["Fecha_Vencimiento"],
+                                "Unidades_Lote": traza["Unidades_Lote"],
+                                "Trazabilidad_Original": traza["Trazabilidad_Original"],
                                 "Estado_Facturacion": ov_item.get("estado", "PENDIENTE_FACTURACION"),
                             })
-                    else:
-                        unid_tot_emp = int(ov_item.get("unidades_pickeadas") or ov_item.get("unidades") or 1)
-                        filas_detalle_ns.append({
-                            "Numero_OV_NetSuite": ov_limpia,
-                            "Codigo_WMS": ov_cod,
-                            "Fecha_OV": fecha_ov,
-                            "Cliente": cli_nom,
-                            "Comuna_Despacho": comuna_nom,
-                            "Modalidad_Empaque": tipo_emp,
-                            "Cantidad_Bultos_Pallets": cant_bultos,
-                            "LPN_Despacho": lpn_cod,
-                            "Linea_NS": 1,
-                            "SKU": "CONSOLIDADO",
-                            "Descripcion": "ORDEN EMPACADA EN WMS",
-                            "Cantidad_Solicitada": int(ov_item.get("unidades") or unid_tot_emp),
-                            "Cantidad_Facturar_Despachar": unid_tot_emp,
-                            "Lotes_y_Vencimientos": "S/L",
-                            "Estado_Facturacion": ov_item.get("estado", "PENDIENTE_FACTURACION"),
-                        })
 
                     filas_resumen_ov.append({
                         "Numero_OV_NetSuite": ov_limpia,
@@ -1313,17 +1349,27 @@ class PickingModulo:
                 fill_hdr = PatternFill(fill_type="solid", start_color="1E3A8A", end_color="1E3A8A")
                 font_hdr = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
                 for ws in wb.worksheets:
-                    ws.row_dimensions[1].height = 24
+                    ws.freeze_panes = "A2"
+                    ws.auto_filter.ref = ws.dimensions
+                    ws.row_dimensions[1].height = 34
                     for cell in ws[1]:
                         cell.fill = fill_hdr
                         cell.font = font_hdr
-                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                    for col in ws.columns:
+                        letra = col[0].column_letter
+                        max_largo = max(len(str(c.value or "")) for c in col)
+                        ws.column_dimensions[letra].width = min(max(max_largo + 2, 11), 38)
+                    if ws.title == "1_Subida_NetSuite_Lineas":
+                        encabezados = {c.value: c.column for c in ws[1]}
+                        col_v = encabezados.get("Fecha_Vencimiento")
+                        if col_v:
+                            for fila in range(2, ws.max_row + 1):
+                                ws.cell(fila, col_v).alignment = Alignment(horizontal="center")
                 wb.save(ruta_xlsx)
-
                 descargar_archivo_web(ruta_xlsx, f"Excel Facturación NetSuite ({len(ovs_procesadas_excel)} OVs)")
             except Exception as ex:
                 notificar(f"Error exportando Excel de Facturación: {ex}", "#B91C1C")
-
         def marcar_ovs_como_facturadas(e=None, ov_unica: dict = None):
             objetivos = [ov_unica] if ov_unica else [reg for _, (chk, reg) in checks_facturacion.items() if chk.value]
             if not objetivos:
