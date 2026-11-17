@@ -6,7 +6,7 @@ import threading
 import traceback
 import flet as ft
 from dependencias import *
-from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion
+from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion, m8_recepcion_ccp
 os.environ["TZ"] = "America/Santiago"
 if hasattr(time, "tzset"):
     time.tzset()
@@ -842,6 +842,13 @@ def main(page: ft.Page):
         mae = m5_maestra.MaestraModulo(page, tarjetas_adaptables, kpis_adaptables)
         imp = m6_impresion.ImpresionModulo(page, tarjetas_adaptables, kpis_adaptables)
         ruteo = m7_ruteo_facturacion.RuteoFacturacionModulo(page, tarjetas_adaptables, kpis_adaptables)
+        bodega_sesion_normalizada = str(getattr(page, "bodega_actual", "") or "").upper().replace("Ó", "O")
+        es_bodega_concepcion = "CONCEPCION" in bodega_sesion_normalizada
+        recep_ccp = (
+            m8_recepcion_ccp.RecepcionTrasladosCcpModulo(page, tarjetas_adaptables, kpis_adaptables)
+            if es_bodega_concepcion
+            else None
+        )
 
         tablas_scroll_sesion = list(TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:])
         del TABLAS_SCROLL_ADAPTABLES[idx_ini_tablas:]
@@ -962,6 +969,21 @@ def main(page: ft.Page):
             ),
         ]
 
+        if es_bodega_concepcion and recep_ccp is not None:
+            vistas_mapa.append(
+                (
+                    "Recepción Traslados\n(Concepción)",
+                    _ico("MOVE_TO_INBOX_ROUNDED", "WAREHOUSE_ROUNDED"),
+                    recep_ccp.vista,
+                    recep_ccp.refrescar,
+                    recep_ccp.sel_sub_recepcion_ccp,
+                    [
+                        ("1. Bandeja Traslados en Tránsito", _ico("LOCAL_SHIPPING_OUTLINED", "ALL_INBOX_OUTLINED")),
+                        ("2. Recepción por LPN", _ico("QR_CODE_SCANNER_ROUNDED", "MOVE_TO_INBOX_ROUNDED")),
+                    ],
+                )
+            )
+
         COLOR_BG_PORTAL = "#527976"
         COLOR_PANEL_IZQ = "#2F3738"
         COLOR_HEADER = "#34302D"
@@ -1057,10 +1079,18 @@ def main(page: ft.Page):
                 "PC_IMPRESION",
                 "PC_RUTEO",
             ]
+            if es_bodega_concepcion:
+                codigos_mod.append("PC_RECEPCION_CCP")
+            if idx_sel < 0 or idx_sel >= len(vistas_mapa):
+                return
             rol_usr = str(getattr(page, "rol_actual", "")).upper()
             permisos_str = str(getattr(page, "modulos_pc_usuario", "")).upper()
-            cod_req = codigos_mod[idx_sel] if idx_sel < len(codigos_mod) else "PC_RUTEO"
-            if "ADMIN" not in rol_usr and permisos_str and cod_req not in permisos_str:
+            cod_req = codigos_mod[idx_sel] if idx_sel < len(codigos_mod) else "PC_RECEPCION_CCP"
+            es_modulo_ccp = cod_req == "PC_RECEPCION_CCP"
+            if es_modulo_ccp and not es_bodega_concepcion:
+                notificar_global(page, "Módulo exclusivo de Bodega Concepción.", "#B91C1C")
+                return
+            if not es_modulo_ccp and "ADMIN" not in rol_usr and permisos_str and cod_req not in permisos_str:
                 notificar_global(page, "Acceso restringido: tu perfil no tiene permisos para este módulo.", "#B91C1C")
                 return
 
@@ -1705,7 +1735,10 @@ def main(page: ft.Page):
                     indice_submodulo_activo,
                     perfil["compacto"],
                 )
-            for mod_obj in (dash, recep, puta, pick, mon_cola, inv, mae, imp, ruteo):
+            modulos_responsive = [dash, recep, puta, pick, mon_cola, inv, mae, imp, ruteo]
+            if recep_ccp is not None:
+                modulos_responsive.append(recep_ccp)
+            for mod_obj in modulos_responsive:
                 aplicar_responsive_a_vista(mod_obj.vista, perfil)
             for cont_tabla, h_base in tablas_scroll_sesion:
                 cont_tabla.height = max(140, int(h_base * perfil["table_factor"]))
