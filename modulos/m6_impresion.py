@@ -5,13 +5,17 @@ import flet as ft
 from dependencias import *
 try:
     from servicios.servicio_ubicaciones_etiquetas import (
-        generar_ubicaciones_concepcion, generar_pdfs_ubicaciones,
-        subir_ubicaciones_supabase, codigo_ubicacion,
+        generar_ubicaciones_concepcion,
+        generar_pdfs_ubicaciones,
+        subir_ubicaciones_supabase,
+        codigo_ubicacion,
     )
 except ImportError:
     from servicio_ubicaciones_etiquetas import (
-        generar_ubicaciones_concepcion, generar_pdfs_ubicaciones,
-        subir_ubicaciones_supabase, codigo_ubicacion,
+        generar_ubicaciones_concepcion,
+        generar_pdfs_ubicaciones,
+        subir_ubicaciones_supabase,
+        codigo_ubicacion,
     )
 
 
