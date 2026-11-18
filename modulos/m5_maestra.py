@@ -216,9 +216,8 @@ class MaestraModulo:
             rf_raw = row_u.get("modulos_rf") or row_u.get("permisos_rf")
 
             if pc_raw is not None or rf_raw is not None:
-                pc_list = [x.strip() for x in str(pc_raw or "").split(",") if x.strip()]
-                rf_list = [x.strip() for x in str(rf_raw or "").split(",") if x.strip()]
-                return (pc_list, rf_list)
+                # En Supabase son columnas text[] (llegan como lista)
+                return (lista_permisos(pc_raw), lista_permisos(rf_raw))
 
             if u_key in mapa_local:
                 return (
@@ -256,7 +255,9 @@ class MaestraModulo:
             lbl_modo_form_usr.color = ACCENT_AMBER
             txt_usr_login.value = u_log
             txt_usr_nombre.value = str(row_u.get("nombre_completo") or "")
-            txt_usr_pass.value = str(row_u.get("password") or "")
+            # La contraseña no se muestra (puede estar cifrada): en blanco = se mantiene la actual
+            txt_usr_pass.value = ""
+            txt_usr_pass.hint_text = "(sin cambios)"
             rol_actual = str(row_u.get("rol") or "OPERADOR RF").strip().upper()
             opciones_roles_keys = [o.key for o in dd_usr_rol.options]
             if rol_actual not in opciones_roles_keys:
@@ -390,7 +391,7 @@ class MaestraModulo:
             u_bod = (dd_usr_bodega.value or "Bodega Santiago").strip()
             u_act = bool(sw_usr_activo.value)
 
-            if not u_log or not u_nom or not u_pass:
+            if not u_log or not u_nom or (not u_pass and id_usuario_editando is None):
                 notificar("Complete Usuario, Nombre Completo y Contraseña.", "#D97706")
                 return
 
@@ -417,9 +418,12 @@ class MaestraModulo:
                 "bodega": u_bod,
                 "activo": u_act,
             }
+            if not u_pass:
+                payload_base.pop("password", None)  # editar sin cambiar la contraseña
             payload_ext = dict(payload_base)
-            payload_ext["modulos_pc"] = ",".join(pc_sel)
-            payload_ext["modulos_rf"] = ",".join(rf_sel)
+            # Columnas text[] en Supabase: se envían como lista (antes el texto "A,B" fallaba en silencio)
+            payload_ext["modulos_pc"] = pc_sel
+            payload_ext["modulos_rf"] = rf_sel
 
             guardado_ok = False
             try:

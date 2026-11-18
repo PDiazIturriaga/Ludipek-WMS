@@ -9,6 +9,27 @@ import flet as ft
 from dependencias import *
 
 
+def depurar_lineas_traslado(df):
+    """Deja una línea por ítem en órdenes de traslado (TrnfrOrd) de NetSuite.
+
+    NetSuite guarda cada ítem de un traslado en varias líneas internas; se conservan
+    las de salida (cantidad negativa) y, si no vienen, se eliminan repeticiones exactas.
+    """
+    if df is None or getattr(df, "empty", True) or "tipo_doc" not in df.columns:
+        return df
+    es_to = df["tipo_doc"].astype(str).str.strip() == "TrnfrOrd"
+    if not es_to.any():
+        return df
+    partes = [df[~es_to]]
+    for _, grupo in df[es_to].groupby("numero_ov", sort=False):
+        if "cantidad_raw" in grupo.columns:
+            negativos = grupo[pd.to_numeric(grupo["cantidad_raw"], errors="coerce") < 0]
+            if not negativos.empty:
+                grupo = negativos
+        partes.append(grupo.drop_duplicates(subset=["sku", "cantidad"], keep="first"))
+    return pd.concat(partes, ignore_index=True)
+
+
 class PickingModulo:
     def __init__(self, page: ft.Page, tarjetas_adaptables: list, kpis_adaptables: list):
         self.page = page
@@ -1922,7 +1943,8 @@ class PickingModulo:
                         BUILTIN.DF(tl.location) AS bodega_ns,
                         i.itemid AS sku,
                         BUILTIN.DF(tl.item) AS descripcion,
-                        ABS(tl.quantity) AS cantidad
+                        ABS(tl.quantity) AS cantidad,
+                        tl.quantity AS cantidad_raw
                     FROM transaction t
                     INNER JOIN transactionline tl ON t.id = tl.transaction
                     INNER JOIN item i ON tl.item = i.id
@@ -1939,6 +1961,12 @@ class PickingModulo:
                     txt_estado_erp.color = "#FBBF24"
                     page.update()
                     return
+
+                # Las órdenes de traslado (TrnfrOrd) traen cada ítem en varias líneas internas
+                # (salida / tránsito / recepción). Con ABS(quantity) las cantidades se triplicaban.
+                filas_antes = len(df_ov)
+                df_ov = depurar_lineas_traslado(df_ov)
+                lineas_depuradas = filas_antes - len(df_ov)
 
                 agrupado_olas = {}
                 corte_forzado_ui = None if dd_corte_asignar.value == "AUTO" else dd_corte_asignar.value
@@ -1995,6 +2023,8 @@ class PickingModulo:
                 olas_extraidas_ns = list(agrupado_olas.values())
                 cant_fa = sum(1 for x in olas_extraidas_ns if x.get("es_farmacia"))
                 txt_estado_erp.value = f"Extracción exitosa: {len(olas_extraidas_ns)} Olas ({len(olas_extraidas_ns) - cant_fa} Estándar | {cant_fa} Farmacia -FA)."
+                if lineas_depuradas:
+                    txt_estado_erp.value += f" Se descartaron {lineas_depuradas} líneas internas repetidas de traslados."
                 txt_estado_erp.color = "#34D399"
                 renderizar_tabla_previsualizacion()
             except Exception as ex:
@@ -2013,6 +2043,7 @@ class PickingModulo:
                 return
 
             liberadas_ok = 0
+            omitidas_con_avance = []
             ovs_liberadas_set = set()
             bodega_act = obtener_bodega_activa(self.page)
 
@@ -2074,9 +2105,16 @@ class PickingModulo:
 
                 id_ov_db = None
                 try:
-                    r_exist = supabase.table("netsuite_ordenes_venta").select("id").or_(f"numero_ov.eq.{ov_final},numero_ov.eq.{ov_sin_fa}").limit(1).execute()
+                    r_exist = supabase.table("netsuite_ordenes_venta").select("id, estado_ns").or_(f"numero_ov.eq.{ov_final},numero_ov.eq.{ov_sin_fa}").limit(1).execute()
                     if r_exist.data:
                         id_ov_db = r_exist.data[0].get("id")
+                        # Una OV con avance NO se vuelve a liberar: antes se borraban sus líneas
+                        # (perdiendo lo pickeado) y volvía a PENDIENTE_PICKING aunque estuviera en packing.
+                        estado_prev = str(r_exist.data[0].get("estado_ns") or "").strip().upper()
+                        r_avance = supabase.table("netsuite_detalle_ov").select("id").eq("orden_id", id_ov_db).gt("cantidad_pickeada", 0).limit(1).execute()
+                        if r_avance.data or estado_prev not in ("", "PENDIENTE", "PENDIENTE_PICKING"):
+                            omitidas_con_avance.append(f"{ov_final} ({estado_prev or 'CON PICKING'})")
+                            continue
                         supabase.table("netsuite_ordenes_venta").update(payload_ov).eq("id", id_ov_db).execute()
                     else:
                         r_ins = supabase.table("netsuite_ordenes_venta").insert(payload_ov).execute()
@@ -2123,6 +2161,12 @@ class PickingModulo:
 
             olas_extraidas_ns[:] = [it for it in olas_extraidas_ns if it["ov"] not in ovs_liberadas_set]
             notificar(f"¡{liberadas_ok} OVs liberadas y asignadas automáticamente a operadores RF!", "#047857")
+            if omitidas_con_avance:
+                notificar(
+                    f"No se re-liberaron {len(omitidas_con_avance)} OV con avance (para no perder lo pickeado): "
+                    + ", ".join(omitidas_con_avance[:8]),
+                    "#D97706",
+                )
             renderizar_tabla_previsualizacion()
             cargar_monitor_packing_dual()
 

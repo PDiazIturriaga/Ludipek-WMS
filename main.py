@@ -719,12 +719,25 @@ def main(page: ft.Page):
             page.update()
             return
         try:
-            # ilike trata "_" y "%" como comodines: se escapan para comparar el usuario exacto
-            user_patron = user_val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            res = supabase.table("wms_usuarios").select("*").ilike("usuario", user_patron).limit(1).execute()
-            fila_u = res.data[0] if res.data else None
+            fila_u = None
+            try:
+                # Validación en el servidor (acepta contraseñas cifradas bcrypt y las antiguas en texto)
+                res = supabase.rpc("wms_login", {"p_usuario": user_val, "p_password": pass_val}).execute()
+                fila_u = res.data if isinstance(res.data, dict) else None
+                if fila_u and fila_u.get("error") == "USUARIO_INACTIVO":
+                    lbl_login_error.value = "Usuario inactivo. Contacte a Gerencia."
+                    page.update()
+                    return
+            except Exception as ex_rpc:
+                # Respaldo mientras no se ejecute sql/robustez_2026_11/04_funciones_operacion.sql
+                print(f"[WARN] wms_login no disponible, se usa validación local: {ex_rpc}")
+                user_patron = user_val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                res = supabase.table("wms_usuarios").select("*").ilike("usuario", user_patron).limit(1).execute()
+                fila_tmp = res.data[0] if res.data else None
+                if fila_tmp and fila_tmp.get("activo") and verificar_password_seguro(pass_val, fila_tmp.get("password", "")):
+                    fila_u = fila_tmp
 
-            if fila_u and fila_u.get("activo") and verificar_password_seguro(pass_val, fila_u.get("password", "")):
+            if fila_u:
                 rol_usr = str(fila_u.get("rol") or "OPERADOR").strip().upper()
                 bodega_asignada = str(fila_u.get("bodega") or "Bodega Santiago").strip()
                 bodega_elegida = str(dd_login_bodega.value or bodega_asignada).strip()
@@ -748,7 +761,7 @@ def main(page: ft.Page):
                 page.bodega_actual = bodega_elegida if tiene_acceso_global else bodega_asignada
                 page.tiene_acceso_multibodega = tiene_acceso_global
 
-                mod_pc_str = str(fila_u.get("modulos_pc") or fila_u.get("permisos_pc") or "").strip()
+                mod_pc_str = ",".join(lista_permisos(fila_u.get("modulos_pc") or fila_u.get("permisos_pc")))
                 if not mod_pc_str and os.path.exists("config_permisos_wms.json"):
                     try:
                         import json

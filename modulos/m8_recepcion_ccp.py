@@ -250,54 +250,45 @@ class RecepcionTrasladosCcpModulo:
         return (lote or "S/L"), (str(venc).strip() if venc and str(venc).strip().upper() != "S/F" else None)
 
     def _registrar_ingreso_en_ccp(self, lpn: str, items: list) -> bool:
-        """Crea el registro_recepcion del LPN en Bodega Concepcion para que el RF pueda hacer Putaway."""
+        """Crea la recepción del LPN en Bodega Concepcion (función wms_cerrar_pallet_recepcion)
+        para que el RF pueda hacer Putaway. Valida SKU, fechas y LPN en el servidor."""
         try:
             ya = supabase.table("registro_recepcion").select("id").eq("lpn", lpn).eq("bodega", "Bodega Concepcion").limit(1).execute()
             if ya.data:
                 return True
         except Exception:
             pass
-        ahora = datetime.now().isoformat()
-        filas, logs = [], []
-        usuario = str(getattr(self.page, "usuario_actual", "OPERADOR CCP"))
+        lineas = []
         for it in items:
             sku = normalizar_sku(it.get("sku"))
-            if not sku:
+            unid = int(it.get("unidades_totales") or it.get("pickeado") or 0)
+            if not sku or unid <= 0:
                 continue
             lote, venc = self._lote_y_venc_desde_item(it)
-            unid = int(it.get("unidades_totales") or it.get("pickeado") or 0)
-            if unid <= 0:
-                continue
+            try:
+                fecha = fecha_a_date(venc) if venc else None
+            except Exception:
+                fecha = None  # fechas ilegibles del packing antiguo ("2028", "12/20/28") quedan sin vencimiento
             mult = max(1, int(it.get("multiplo_aplicado") or 1))
-            cajas = int(it.get("cajas") or 0) or (unid // mult)
-            filas.append({
-                "asn_id": None, "sku": sku, "codigo_barras_escaneado": sku, "lote": lote,
-                "fecha_vencimiento_cl": venc, "multiplo_aplicado": mult, "cajas": cajas,
-                "unidades_sueltas": max(0, unid - cajas * mult), "unidades_totales": unid, "lpn": lpn,
-                "bodega": "Bodega Concepcion", "contenedor": self.lbl_ot.value, "fecha_recepcion": ahora,
+            cajas = int(it.get("cajas") or 0)
+            if cajas * mult > unid:
+                cajas = unid // mult
+            lineas.append({
+                "sku": sku, "lote": lote, "fecha_vencimiento": fecha.strftime("%d-%m-%Y") if fecha else None,
+                "cajas": cajas, "multiplo": mult, "unidades_sueltas": unid - cajas * mult, "unidades_totales": unid,
             })
-            logs.append({
-                "bodega": "Bodega Concepcion", "usuario": usuario, "tipo_movimiento": f"RECEPCION_TRASLADO ({self.lbl_ot.value})",
-                "lpn": lpn, "sku": sku, "lote": lote, "ubicacion_origen": "TRANSITO_SCL_CCP",
-                "ubicacion_destino": "ANDEN_TRANSITO", "cajas_afectadas": cajas, "unidades_afectadas": unid, "fecha": ahora,
-            })
-        if not filas:
+        if not lineas:
             return False
         try:
-            supabase.table("registro_recepcion").insert(filas).execute()
+            supabase.rpc("wms_cerrar_pallet_recepcion", {
+                "p_bodega": "Bodega Concepcion", "p_lpn": lpn, "p_lineas": lineas, "p_asn_id": None,
+                "p_contenedor": self.lbl_ot.value, "p_usuario": str(getattr(self.page, "usuario_actual", "OPERADOR CCP")),
+            }).execute()
+            return True
         except Exception as ex:
-            try:  # respaldo si la tabla aún no tiene las columnas contenedor / fecha_recepcion
-                supabase.table("registro_recepcion").insert(
-                    [{k: v for k, v in f.items() if k not in ("contenedor", "fecha_recepcion")} for f in filas]
-                ).execute()
-            except Exception as ex2:
-                print(f"[WARN] registro_recepcion CCP: {ex} / {ex2}")
-                return False
-        try:
-            supabase.table("historial_movimientos").insert(logs).execute()
-        except Exception:
-            pass
-        return True
+            print(f"[WARN] Recepción CCP de {lpn}: {ex}")
+            notificar_global(self.page, f"Recepción CCP {lpn}: {str(ex)[:160]}", "#B91C1C")
+            return False
 
     def cerrar_recepcion(self, con_diferencias=False):
         if not self.ot_activa: return

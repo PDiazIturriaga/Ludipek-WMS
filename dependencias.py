@@ -142,6 +142,17 @@ def leer_por_lista(tabla: str, columna: str, valores, columnas: str = "*", taman
     return filas
 
 
+def lista_permisos(valor) -> list:
+    """Permisos de wms_usuarios (columnas text[]): acepta lista, texto 'A,B' o '{A,B}'."""
+    if valor is None:
+        return []
+    if isinstance(valor, (list, tuple, set)):
+        items = valor
+    else:
+        items = str(valor).strip().strip("{}[]").replace(";", ",").split(",")
+    return [str(x).strip().strip("'\"").upper() for x in items if str(x).strip().strip("'\"")]
+
+
 def obtener_val(diccionario: dict, posibles_claves: list, por_defecto=""):
     if not isinstance(diccionario, dict):
         return por_defecto
