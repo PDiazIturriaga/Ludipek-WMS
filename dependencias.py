@@ -1272,3 +1272,15 @@ def cerrar_superficies_transitorias(page: ft.Page):
             page.snack_bar.open = False
     except Exception:
         pass
+
+
+# WMS PRO: contrato compartido
+try:
+ from dominio.estados import EstadoWms, EstadoNetSuite, EstadoRecepcion, validar_transicion
+ from dominio.errores import WmsError, WmsDataError, SupabaseWriteError, ConciliacionError
+ from servicios.normalizacion import normalizar_sku, normalizar_lote, fecha_a_date, fecha_a_iso, fecha_a_visual, lote_fecha_visual, normalizar_bodega
+ from servicios.conversion_empaque import convertir_unidades, calcular_unidades, seleccionar_presentaciones
+ WMS_PRO_DISPONIBLE=True
+except Exception as _wms_pro_error:
+ WMS_PRO_DISPONIBLE=False
+ print(f"[WARN] Servicios WMS Pro no disponibles: {_wms_pro_error}")

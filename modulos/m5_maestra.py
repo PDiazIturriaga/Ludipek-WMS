@@ -6,8 +6,8 @@ import pandas as pd
 import flet as ft
 from dependencias import *
 
-RUTA_PERMISOS_LOCAL = "config_permisos_wms.json"
-RUTA_MAESTRA_EXTRA = "config_maestra_extra.json"
+RUTA_PERMISOS_LOCAL = "config_permisos_wms.cache.json"
+RUTA_MAESTRA_EXTRA = "config_maestra_extra.cache.json"
 
 
 class MaestraModulo:
@@ -39,7 +39,9 @@ class MaestraModulo:
             ("PC_OLAS", "Olas & Packing"),
             ("PC_INVENTARIO", "Mov. Stock (Inventario)"),
             ("PC_ADMIN_MAESTRA", "Admin. Usuarios & Maestra SKU"),
+            ("PC_RUTEO", "Ruteo y Facturación"),
             ("PC_IMPRESION", "Etiquetas & Impresión"),
+            ("PC_RECEPCION_CCP", "Recepción Traslados Concepción"),
         ]
 
         MODULOS_RF_LISTA = [

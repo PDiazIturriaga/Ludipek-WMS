@@ -8,6 +8,9 @@ import flet as ft
 from dependencias import *
 
 
+def clave_inventario_wms(fila: dict) -> tuple:
+ return (normalizar_bodega(fila.get("bodega")), str(fila.get("ubicacion_id") or fila.get("codigo_ubicacion") or "").upper(), str(fila.get("lpn_origen") or fila.get("lpn") or "S/LPN").upper(), normalizar_sku(fila.get("sku")), normalizar_lote(fila.get("lote")), fecha_a_iso(fila.get("fecha_vencimiento") or fila.get("fecha_vencimiento_cl")))
+
 class InventarioModulo:
     def __init__(self, page: ft.Page, tarjetas_adaptables: list, kpis_adaptables: list):
         self.page = page

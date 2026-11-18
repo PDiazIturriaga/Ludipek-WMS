@@ -24,6 +24,9 @@ CLIENTES_AGENDAMIENTO_CLAVE = [
 ]
 
 
+def peso_logistico_linea(linea: dict) -> float:
+ return round(int(linea.get("cajas") or 0)*float(linea.get("peso_caja_kg") or 0)+int(linea.get("displays") or 0)*float(linea.get("peso_display_kg") or 0)+int(linea.get("unidades_sueltas") or 0)*float(linea.get("peso_unitario_kg") or 0),3)
+
 class RuteoFacturacionModulo:
     def __init__(self, page: ft.Page, tarjetas_adaptables: list, kpis_adaptables: list):
         self.page = page

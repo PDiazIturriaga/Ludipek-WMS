@@ -80,7 +80,7 @@ class PickingModulo:
 
         # --- 3. PRUEBA CONTROLADA: EXCEL TRASLADO -> PACKING RF ---
         # Temporal: permite validar la subida del Excel y Packing sin modificar el resto del WMS.
-        MODO_PRUEBA_EXCEL_A_PACKING = True
+        MODO_PRUEBA_EXCEL_A_PACKING = False
         def procesar_excel_traslado_scl_ccp(ruta_excel: str):
             """Crea una OT trazable en Supabase y la deja disponible para Picking RF."""
             id_ot_db = None

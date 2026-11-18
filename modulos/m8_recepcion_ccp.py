@@ -135,7 +135,13 @@ class RecepcionTrasladosCcpModulo:
             if isinstance(det, str):
                 try: det = json.loads(det)
                 except Exception: det = []
-            mapa_pl.setdefault(num, []).extend([dict(x) for x in det if isinstance(x, dict)])
+            destino = mapa_pl.setdefault(num, [])
+            claves = {(str(i.get("lpn_pallet") or i.get("lpn_consolidado") or "").upper(), normalizar_sku(i.get("sku")), normalizar_lote(i.get("lote")), fecha_a_iso(i.get("fecha_vencimiento_cl")), int(i.get("unidades_totales") or i.get("pickeado") or 0)) for i in destino}
+            for raw in det:
+                if not isinstance(raw, dict): continue
+                item = dict(raw)
+                clave = (str(item.get("lpn_pallet") or item.get("lpn_consolidado") or "").upper(), normalizar_sku(item.get("sku")), normalizar_lote(item.get("lote")), fecha_a_iso(item.get("fecha_vencimiento_cl")), int(item.get("unidades_totales") or item.get("pickeado") or 0))
+                if clave not in claves: destino.append(item); claves.add(clave)
         return [dict(x) for x in (res_ov.data or [])], mapa_pl
 
     def cargar_bandeja(self, e=None):
