@@ -61,7 +61,7 @@ class ImpresionModulo:
                 self._opcion("LETRA", "UNA LETRA: columnas 01 a 04"),
                 self._opcion("COLUMNAS", "COLUMNAS NUMÉRICAS: 05 a 15"),
             ],
-            on_change=self._actualizar_panel_filtros,
+            on_select=self._actualizar_panel_filtros,
         )
         self.dd_letra = ft.Dropdown(
             label="Letra",
