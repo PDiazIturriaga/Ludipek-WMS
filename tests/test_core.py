@@ -19,3 +19,10 @@ def test_conciliacion_por_lote():
     fis=[{'sku':'USA601','lote':'TELH','fecha_vencimiento':'2028-05-22','unidades':144}]
     r=conciliar(oc,pl,fis)
     assert len(r)==1 and not r[0].observaciones
+
+def test_conciliacion_con_y_sin_vencimiento():
+    # Antes fallaba con NameError (faltaba "from datetime import date") al ordenar fechas None
+    oc=[{'sku':'A','lote':'L','unidades':10}]
+    pl=[{'sku':'A','lote':'L','fecha_vencimiento':'2028-01-01','unidades':10}]
+    r=conciliar(oc,pl,[])
+    assert len(r)==2 and r[0].fecha_vencimiento is None

@@ -227,10 +227,77 @@ class RecepcionTrasladosCcpModulo:
         }
         try:
             supabase.table("wms_recepcion_traslados_ccp").upsert(payload, on_conflict="numero_ot,lpn").execute()
+            ok_ingreso = self._registrar_ingreso_en_ccp(lpn, items)
+            if not ok_ingreso:
+                notificar_global(self.page, f"LPN {lpn} recibido, pero no se pudo crear su registro de recepción en CCP. Revise conexión.", "#D97706")
             self.lpns_recibidos.add(lpn); self._refrescar_tabla_lpns()
             self.lbl_meta.value=f"Origen: Bodega Santiago | Esperados: {len(self.pallets_esperados)} LPN | Recibidos: {len(self.lpns_recibidos)}"
             notificar_global(self.page, f"LPN {lpn} recibido conforme.", "#047857")
         except Exception as ex: notificar_global(self.page, f"Error guardando recepción: {ex}", "#B91C1C")
+
+    @staticmethod
+    def _lote_y_venc_desde_item(item: dict):
+        """Soporta packing nuevo (lote / fecha_vencimiento_cl) y antiguo ('lotes': 'LOTE / VENC (N UN)')."""
+        lote = str(item.get("lote") or "").strip().upper()
+        venc = item.get("fecha_vencimiento_cl")
+        if not lote:
+            texto = str(item.get("lotes") or "")
+            texto = texto.split("]")[-1].split("(")[0].strip()
+            partes = [x.strip() for x in texto.split(" / ")]
+            lote = (partes[0] if partes and partes[0] else "S/L").upper()
+            if not venc and len(partes) > 1 and partes[1].upper() not in ("", "S/F"):
+                venc = partes[1]
+        return (lote or "S/L"), (str(venc).strip() if venc and str(venc).strip().upper() != "S/F" else None)
+
+    def _registrar_ingreso_en_ccp(self, lpn: str, items: list) -> bool:
+        """Crea el registro_recepcion del LPN en Bodega Concepcion para que el RF pueda hacer Putaway."""
+        try:
+            ya = supabase.table("registro_recepcion").select("id").eq("lpn", lpn).eq("bodega", "Bodega Concepcion").limit(1).execute()
+            if ya.data:
+                return True
+        except Exception:
+            pass
+        ahora = datetime.now().isoformat()
+        filas, logs = [], []
+        usuario = str(getattr(self.page, "usuario_actual", "OPERADOR CCP"))
+        for it in items:
+            sku = normalizar_sku(it.get("sku"))
+            if not sku:
+                continue
+            lote, venc = self._lote_y_venc_desde_item(it)
+            unid = int(it.get("unidades_totales") or it.get("pickeado") or 0)
+            if unid <= 0:
+                continue
+            mult = max(1, int(it.get("multiplo_aplicado") or 1))
+            cajas = int(it.get("cajas") or 0) or (unid // mult)
+            filas.append({
+                "asn_id": None, "sku": sku, "codigo_barras_escaneado": sku, "lote": lote,
+                "fecha_vencimiento_cl": venc, "multiplo_aplicado": mult, "cajas": cajas,
+                "unidades_sueltas": max(0, unid - cajas * mult), "unidades_totales": unid, "lpn": lpn,
+                "bodega": "Bodega Concepcion", "contenedor": self.lbl_ot.value, "fecha_recepcion": ahora,
+            })
+            logs.append({
+                "bodega": "Bodega Concepcion", "usuario": usuario, "tipo_movimiento": f"RECEPCION_TRASLADO ({self.lbl_ot.value})",
+                "lpn": lpn, "sku": sku, "lote": lote, "ubicacion_origen": "TRANSITO_SCL_CCP",
+                "ubicacion_destino": "ANDEN_TRANSITO", "cajas_afectadas": cajas, "unidades_afectadas": unid, "fecha": ahora,
+            })
+        if not filas:
+            return False
+        try:
+            supabase.table("registro_recepcion").insert(filas).execute()
+        except Exception as ex:
+            try:  # respaldo si la tabla aún no tiene las columnas contenedor / fecha_recepcion
+                supabase.table("registro_recepcion").insert(
+                    [{k: v for k, v in f.items() if k not in ("contenedor", "fecha_recepcion")} for f in filas]
+                ).execute()
+            except Exception as ex2:
+                print(f"[WARN] registro_recepcion CCP: {ex} / {ex2}")
+                return False
+        try:
+            supabase.table("historial_movimientos").insert(logs).execute()
+        except Exception:
+            pass
+        return True
 
     def cerrar_recepcion(self, con_diferencias=False):
         if not self.ot_activa: return

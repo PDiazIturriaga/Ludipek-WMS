@@ -2487,8 +2487,8 @@ class RecepcionModulo:
             mapa_multiplos = {}
             mapa_desc_maestra = {}
             try:
-                res_m = supabase.table("maestra_sku").select("sku, multiplo, descripcion").limit(4000).execute()
-                for m in (res_m.data or []):
+                filas_maestra = leer_tabla_paginada(lambda: supabase.table("maestra_sku").select("sku, multiplo, descripcion"))
+                for m in filas_maestra:
                     s_k = str(m.get("sku") or "").strip().upper()
                     if s_k:
                         mapa_multiplos[s_k] = max(1, int(float(m.get("multiplo") or 1)))

@@ -537,10 +537,11 @@ class PickingModulo:
                 content_padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                 border_radius=6,
             )
-            if on_change is not None:
-                dd.on_change = on_change
+            # En Flet 0.70+ Dropdown solo dispara on_select: on_change se redirige ahí
             if on_select is not None:
                 dd.on_select = on_select
+            elif on_change is not None:
+                dd.on_select = on_change
             return dd
 
         def crear_caja_digital(txt_control: ft.Text, etiqueta_inf: str, color_borde: str = "#6366F1", ancho: int = 82, on_click=None):
@@ -914,8 +915,8 @@ class PickingModulo:
 
             mapa_maestra_sku = {}
             try:
-                res_m = supabase.table("maestra_sku").select("*").limit(5000).execute()
-                for m in (res_m.data or []):
+                filas_maestra = leer_tabla_paginada(lambda: supabase.table("maestra_sku").select("*"))
+                for m in filas_maestra:
                     s_k = str(m.get("sku") or "").strip().upper()
                     if not s_k:
                         continue
@@ -947,8 +948,9 @@ class PickingModulo:
             mapa_id_a_ov_base = {}
             bodega_act = obtener_bodega_activa(self.page)
             try:
-                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=False).limit(600).execute()
-                filas_ov = [r for r in (res_ov.data or []) if coincide_bodega(r, bodega_act)]
+                # Se leen las 600 OV MÁS RECIENTES (antes eran las más antiguas) y se procesan en orden ascendente
+                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(600).execute()
+                filas_ov = [r for r in reversed(res_ov.data or []) if coincide_bodega(r, bodega_act)]
                 for r in filas_ov:
                     info = extraer_campos_registro_ola(dict(r), mapa_clientes_ns, mapa_meta_desp)
                     if not info:
@@ -1042,9 +1044,16 @@ class PickingModulo:
                 pass
 
             try:
-                res_det = supabase.table("netsuite_detalle_ov").select("*").order("id", desc=False).limit(2500).execute()
+                # Detalle de las OV cargadas (por orden_id, paginado) + últimas 1000 líneas como respaldo
+                try:
+                    filas_det_por_id = leer_por_lista("netsuite_detalle_ov", "orden_id", list(mapa_id_a_ov_base.keys()))
+                except Exception as ex_det:
+                    print(f"[WARN] Detalle OV por orden_id: {ex_det}")
+                    filas_det_por_id = []
+                res_det_recientes = supabase.table("netsuite_detalle_ov").select("*").order("id", desc=True).limit(1000).execute()
+                filas_det = {d.get("id"): d for d in (res_det_recientes.data or []) + filas_det_por_id}
                 ovs_con_detalle_db = set()
-                for d in (res_det.data or []):
+                for d in sorted(filas_det.values(), key=lambda x: x.get("id") or 0):
                     ord_id = d.get("orden_id")
                     ov_b = mapa_id_a_ov_base.get(ord_id) or str(d.get("numero_ov") or "").strip().upper().removesuffix("-FA").strip()
                     if not ov_b or ov_b not in agrupado_por_ov:
@@ -1859,8 +1868,8 @@ class PickingModulo:
         def obtener_skus_farmacia_supabase() -> set:
             skus_fa = set()
             try:
-                res_m = supabase.table("maestra_sku").select("*").limit(5000).execute()
-                for row in (res_m.data or []):
+                filas_maestra = leer_tabla_paginada(lambda: supabase.table("maestra_sku").select("*"))
+                for row in filas_maestra:
                     sku_c = str(row.get("sku") or "").strip().upper()
                     if not sku_c:
                         continue

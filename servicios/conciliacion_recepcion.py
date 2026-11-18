@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import date
 from dominio.modelos import LineaConciliacion
 from servicios.normalizacion import normalizar_sku, normalizar_lote, fecha_a_date
 

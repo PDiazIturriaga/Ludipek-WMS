@@ -111,6 +111,37 @@ def coincide_bodega(fila: dict, bodega_objetivo: str) -> bool:
     return bod_fila.upper() == bod_obj.upper()
 
 
+def leer_tabla_paginada(construir_consulta, paso: int = 1000, max_filas: int = 100000) -> list:
+    """Lee TODAS las filas de una consulta Supabase.
+
+    PostgREST corta cada respuesta en 1.000 filas (max_rows), aunque se pida
+    .limit(5000). construir_consulta() debe devolver una consulta nueva
+    (ej: lambda: supabase.table("maestra_sku").select("*")).
+    """
+    filas = []
+    desde = 0
+    while desde < max_filas:
+        res = construir_consulta().range(desde, desde + paso - 1).execute()
+        lote = res.data or []
+        if not lote:
+            break
+        filas.extend(lote)
+        desde += len(lote)
+    return filas
+
+
+def leer_por_lista(tabla: str, columna: str, valores, columnas: str = "*", tamano_bloque: int = 150) -> list:
+    """Lee filas cuya `columna` está en `valores`, en bloques (evita URLs gigantes y el tope de 1.000 filas)."""
+    unicos = [v for v in dict.fromkeys(valores) if v is not None and str(v).strip() != ""]
+    filas = []
+    for i in range(0, len(unicos), tamano_bloque):
+        bloque = unicos[i:i + tamano_bloque]
+        filas.extend(
+            leer_tabla_paginada(lambda b=bloque: supabase.table(tabla).select(columnas).in_(columna, b))
+        )
+    return filas
+
+
 def obtener_val(diccionario: dict, posibles_claves: list, por_defecto=""):
     if not isinstance(diccionario, dict):
         return por_defecto
@@ -638,23 +669,36 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
         if lotes_agrupados[clave]["vencimiento"] == "S/F" and venc_r != "S/F":
             lotes_agrupados[clave]["vencimiento"] = venc_r
 
-    filas_verticales_pdf = []
-    for (sku_k, lote_k), info_lote in sorted(lotes_agrupados.items(), key=lambda x: (x[0][0], x[0][1])):
-        desc_rescate = "Ingreso Directo"
-        unid_po = 0
-        for f in filas_conciliacion:
-            if str(f.get("sku", "")).strip().upper() == sku_k:
-                desc_rescate = str(f.get("descripcion", ""))
-                unid_po = int(f.get("unidades_esperadas", 0) or 0)
-                break
+    # Totales por SKU: OC (suma de TODAS las líneas de la OC) y recibido físico (todos los lotes)
+    oc_por_sku = {}
+    desc_por_sku = {}
+    for f in filas_conciliacion:
+        s_f = str(f.get("sku", "")).strip().upper()
+        if not s_f:
+            continue
+        oc_por_sku[s_f] = oc_por_sku.get(s_f, 0) + int(f.get("unidades_esperadas", 0) or 0)
+        if s_f not in desc_por_sku and str(f.get("descripcion", "") or "").strip():
+            desc_por_sku[s_f] = str(f.get("descripcion", ""))
+    recibido_por_sku = {}
+    for (sku_k, _lote_k), info_lote in lotes_agrupados.items():
+        recibido_por_sku[sku_k] = recibido_por_sku.get(sku_k, 0) + info_lote["unidades"]
 
+    filas_verticales_pdf = []
+    sku_ya_mostrado = set()
+    for (sku_k, lote_k), info_lote in sorted(lotes_agrupados.items(), key=lambda x: (x[0][0], x[0][1])):
+        primera_fila_sku = sku_k not in sku_ya_mostrado
+        sku_ya_mostrado.add(sku_k)
+        unid_po = oc_por_sku.get(sku_k, 0)
         filas_verticales_pdf.append({
             "sku": sku_k,
-            "descripcion": desc_rescate,
+            "descripcion": desc_por_sku.get(sku_k, "Ingreso Directo"),
             "lote": lote_k,
             "vencimiento": info_lote["vencimiento"],
             "cantidad_lote": info_lote["unidades"],
             "unidades_po": unid_po,
+            # OC y diferencia se informan una sola vez por SKU (en su primer lote)
+            "txt_oc": str(unid_po) if primera_fila_sku else "",
+            "txt_dif": (f"{recibido_por_sku.get(sku_k, 0) - unid_po:+d}" if primera_fila_sku else ""),
         })
 
     for f in filas_conciliacion:
@@ -666,32 +710,46 @@ def generar_acta_recepcion_pdf(cabecera_po: dict, filas_conciliacion: list, rece
                 "lote": "SIN INGRESO",
                 "vencimiento": "-",
                 "cantidad_lote": 0,
-                "unidades_po": int(f.get("unidades_esperadas", 0) or 0),
+                "unidades_po": oc_por_sku.get(s_key, 0),
+                "txt_oc": str(oc_por_sku.get(s_key, 0)),
+                "txt_dif": f"{-oc_por_sku.get(s_key, 0):+d}",
             })
+            skus_con_recepcion.add(s_key)  # evita repetir el SKU si la OC trae varias líneas
 
     pdf.set_fill_color(226, 232, 240)
     pdf.set_font("Helvetica", "B", 8)
-    pdf.cell(28, 7, "SKU", border=1, fill=True)
-    pdf.cell(74, 7, "DESCRIPCION", border=1, fill=True)
-    pdf.cell(36, 7, "LOTE", border=1, align="C", fill=True)
-    pdf.cell(26, 7, "VENCIMIENTO", border=1, align="C", fill=True)
-    pdf.cell(26, 7, "CANT. LOTE", border=1, align="C", fill=True, ln=True)
+    pdf.cell(24, 7, "SKU", border=1, fill=True)
+    pdf.cell(56, 7, "DESCRIPCION", border=1, fill=True)
+    pdf.cell(30, 7, "LOTE", border=1, align="C", fill=True)
+    pdf.cell(22, 7, "VENCIMIENTO", border=1, align="C", fill=True)
+    pdf.cell(20, 7, "CANT. LOTE", border=1, align="C", fill=True)
+    pdf.cell(19, 7, "UNID. OC", border=1, align="C", fill=True)
+    pdf.cell(19, 7, "DIF. SKU", border=1, align="C", fill=True, ln=True)
 
     pdf.set_font("Helvetica", "", 8)
     total_general_unidades = 0
     for fv in filas_verticales_pdf:
         cant_l = fv["cantidad_lote"]
         total_general_unidades += cant_l
-        pdf.cell(28, 6, _texto_pdf_seguro(fv["sku"])[:15], border=1)
-        pdf.cell(74, 6, _texto_pdf_seguro(fv["descripcion"])[:40], border=1)
-        pdf.cell(36, 6, _texto_pdf_seguro(fv["lote"])[:18], border=1, align="C")
-        pdf.cell(26, 6, _texto_pdf_seguro(fv["vencimiento"])[:12], border=1, align="C")
-        pdf.cell(26, 6, str(cant_l), border=1, align="C", ln=True)
+        pdf.cell(24, 6, _texto_pdf_seguro(fv["sku"])[:13], border=1)
+        pdf.cell(56, 6, _texto_pdf_seguro(fv["descripcion"])[:31], border=1)
+        pdf.cell(30, 6, _texto_pdf_seguro(fv["lote"])[:15], border=1, align="C")
+        pdf.cell(22, 6, _texto_pdf_seguro(fv["vencimiento"])[:10], border=1, align="C")
+        pdf.cell(20, 6, str(cant_l), border=1, align="C")
+        pdf.cell(19, 6, fv.get("txt_oc", ""), border=1, align="C")
+        txt_dif = fv.get("txt_dif", "")
+        if txt_dif and txt_dif not in ("+0", "0"):
+            pdf.set_text_color(185, 28, 28)
+        pdf.cell(19, 6, txt_dif, border=1, align="C", ln=True)
+        pdf.set_text_color(0, 0, 0)
 
+    total_oc_general = sum(oc_por_sku.values())
     pdf.set_font("Helvetica", "B", 8)
     pdf.set_fill_color(241, 245, 249)
-    pdf.cell(164, 6, "TOTAL UNIDADES FISICAS RECIBIDAS (SUMA POR LOTES)", border=1, align="R", fill=True)
-    pdf.cell(26, 6, str(total_general_unidades), border=1, align="C", fill=True, ln=True)
+    pdf.cell(132, 6, "TOTALES (RECIBIDO FISICO / OC / DIFERENCIA)", border=1, align="R", fill=True)
+    pdf.cell(20, 6, str(total_general_unidades), border=1, align="C", fill=True)
+    pdf.cell(19, 6, str(total_oc_general), border=1, align="C", fill=True)
+    pdf.cell(19, 6, f"{total_general_unidades - total_oc_general:+d}", border=1, align="C", fill=True, ln=True)
 
     # --- FIRMAS AL FINAL ---
     pdf.ln(16)
@@ -1260,7 +1318,8 @@ def aplicar_responsive_a_vista(vista, perfil: dict):
 def cerrar_superficies_transitorias(page: ft.Page):
     """Cierra dialogos/snackbars al cambiar de modulo sin borrar datos persistidos."""
     try:
-        page.close_dialog()
+        # Flet 0.70+: los diálogos se cierran con pop_dialog() (close_dialog no existe).
+        page.pop_dialog()
     except Exception:
         try:
             if getattr(page, "dialog", None):

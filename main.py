@@ -719,7 +719,9 @@ def main(page: ft.Page):
             page.update()
             return
         try:
-            res = supabase.table("wms_usuarios").select("*").ilike("usuario", user_val).limit(1).execute()
+            # ilike trata "_" y "%" como comodines: se escapan para comparar el usuario exacto
+            user_patron = user_val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            res = supabase.table("wms_usuarios").select("*").ilike("usuario", user_patron).limit(1).execute()
             fila_u = res.data[0] if res.data else None
 
             if fila_u and fila_u.get("activo") and verificar_password_seguro(pass_val, fila_u.get("password", "")):
@@ -1076,21 +1078,28 @@ def main(page: ft.Page):
                 "PC_OLAS",
                 "PC_INVENTARIO",
                 "PC_ADMIN_MAESTRA",
-                "PC_IMPRESION",
+                # El orden DEBE coincidir con vistas_mapa: 7 = Ruteo, 8 = Etiquetas
                 "PC_RUTEO",
+                "PC_IMPRESION",
             ]
             if es_bodega_concepcion:
                 codigos_mod.append("PC_RECEPCION_CCP")
             if idx_sel < 0 or idx_sel >= len(vistas_mapa):
                 return
             rol_usr = str(getattr(page, "rol_actual", "")).upper()
-            permisos_str = str(getattr(page, "modulos_pc_usuario", "")).upper()
+            permisos_set = {
+                p.strip()
+                for p in str(getattr(page, "modulos_pc_usuario", "") or "").upper().replace(";", ",").split(",")
+                if p.strip()
+            }
             cod_req = codigos_mod[idx_sel] if idx_sel < len(codigos_mod) else "PC_RECEPCION_CCP"
             es_modulo_ccp = cod_req == "PC_RECEPCION_CCP"
             if es_modulo_ccp and not es_bodega_concepcion:
                 notificar_global(page, "Módulo exclusivo de Bodega Concepción.", "#B91C1C")
                 return
-            if not es_modulo_ccp and "ADMIN" not in rol_usr and permisos_str and cod_req not in permisos_str:
+            # Comparación exacta por código (antes "PC_RECEPCION" coincidía dentro de "PC_RECEPCION_CCP").
+            # Si el usuario no tiene permisos configurados se mantiene el acceso completo (compatibilidad).
+            if "ADMIN" not in rol_usr and permisos_set and cod_req not in permisos_set:
                 notificar_global(page, "Acceso restringido: tu perfil no tiene permisos para este módulo.", "#B91C1C")
                 return
 
@@ -1621,6 +1630,7 @@ def main(page: ft.Page):
         puede_cambiar_bodega_pc = bool(getattr(page, "tiene_acceso_multibodega", False))
 
         def cambiar_bodega_activa_pc(e=None):
+            nonlocal sesion_activa
             if not puede_cambiar_bodega_pc:
                 dd_bodega_header.value = getattr(page, "bodega_actual", "Bodega Santiago")
                 notificar_global(
@@ -1631,6 +1641,17 @@ def main(page: ft.Page):
                 page.update()
                 return
             page.bodega_actual = dd_bodega_header.value or "Bodega Santiago"
+            nueva_es_ccp = "CONCEPCION" in str(page.bodega_actual).upper().replace("Ó", "O")
+            if nueva_es_ccp != es_bodega_concepcion:
+                # El módulo "Recepción Traslados (Concepción)" se construye al iniciar la torre:
+                # al cruzar entre Santiago y Concepción se reconstruye para mostrarlo/ocultarlo.
+                sesion_activa = False
+                tarjetas_adaptables.clear()
+                kpis_adaptables.clear()
+                tablas_scroll_sesion.clear()
+                iniciar_torre_de_control()
+                notificar_global(page, f"Bodega activa cambiada a: {page.bodega_actual}", "#047857")
+                return
             notificar_global(page, f"Bodega activa cambiada a: {page.bodega_actual}", "#047857")
             if indice_modulo_activo != -1:
                 accion_recarga = vistas_mapa[indice_modulo_activo][3]

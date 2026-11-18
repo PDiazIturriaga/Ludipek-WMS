@@ -696,9 +696,10 @@ class PutawayModulo:
                 notificar(f"Error exportando Excel: {ex}", "#B91C1C")
 
         txt_cons_buscar.on_change = ejecutar_filtro_consultador
-        dd_cons_zona.on_change = ejecutar_filtro_consultador
-        dd_cons_nivel.on_change = ejecutar_filtro_consultador
-        dd_cons_qa.on_change = ejecutar_filtro_consultador
+        # En Flet 0.70+ Dropdown solo dispara on_select (on_change ya no existe)
+        dd_cons_zona.on_select = ejecutar_filtro_consultador
+        dd_cons_nivel.on_select = ejecutar_filtro_consultador
+        dd_cons_qa.on_select = ejecutar_filtro_consultador
 
         def renderizar_todo_el_modulo():
             bodega_act = obtener_bodega_actual()

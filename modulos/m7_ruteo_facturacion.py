@@ -8,6 +8,8 @@ from datetime import datetime, date, timedelta
 import pandas as pd
 import flet as ft
 from dependencias import *
+# Los nombres con guion bajo NO se exportan con "import *": se importan explícitamente.
+from dependencias import _texto_pdf_seguro
 
 
 # Lista oficial de los 24 SKUs de Arena de la Papeleta / Hoja de Ruta
@@ -654,8 +656,8 @@ class RuteoFacturacionModulo:
             try:
                 # 1. Leer pesos desde maestra_sku
                 mapa_peso_sku = {}
-                res_m = supabase.table("maestra_sku").select("sku, peso_kg, descripcion").limit(5000).execute()
-                for m in (res_m.data or []):
+                filas_maestra = leer_tabla_paginada(lambda: supabase.table("maestra_sku").select("sku, peso_kg, descripcion"))
+                for m in filas_maestra:
                     s_k = str(m.get("sku") or "").strip().upper()
                     if s_k:
                         p_kg = float(m.get("peso_kg") or 0.0)
@@ -675,9 +677,14 @@ class RuteoFacturacionModulo:
                 res_ovs = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=True).limit(350).execute()
                 ovs_lista = [r for r in (res_ovs.data or []) if coincide_bodega(r, bodega_act)]
 
-                res_det = supabase.table("netsuite_detalle_ov").select("*").limit(3000).execute()
+                # Antes .limit(3000) devolvía solo 1000 filas cualquiera: ahora se leen las líneas de las OV cargadas
+                try:
+                    filas_det = leer_por_lista("netsuite_detalle_ov", "orden_id", [o.get("id") for o in ovs_lista])
+                except Exception as ex_det:
+                    print(f"[WARN] Detalle OV por orden_id: {ex_det}")
+                    filas_det = (supabase.table("netsuite_detalle_ov").select("*").order("id", desc=True).limit(1000).execute().data or [])
                 det_por_id = {}
-                for d in (res_det.data or []):
+                for d in filas_det:
                     oid = d.get("orden_id")
                     if oid is not None:
                         det_por_id.setdefault(oid, []).append(d)
@@ -1636,8 +1643,9 @@ class RuteoFacturacionModulo:
             renderizar_tablas_ruteo()
 
         txt_filtro_fecha.on_change = renderizar_tablas_ruteo
-        dd_filtro_patente.on_change = renderizar_tablas_ruteo
-        dd_filtro_status.on_change = renderizar_tablas_ruteo
+        # En Flet 0.70+ Dropdown solo dispara on_select (on_change ya no existe)
+        dd_filtro_patente.on_select = renderizar_tablas_ruteo
+        dd_filtro_status.on_select = renderizar_tablas_ruteo
         txt_buscar_general.on_change = renderizar_tablas_ruteo
 
         def marcar_desmarcar_visibles(estado_bool: bool):
