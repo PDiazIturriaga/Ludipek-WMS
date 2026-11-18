@@ -1,316 +1,491 @@
-import os
-import json
-import inspect
+import shutil
+from datetime import datetime
+from pathlib import Path
+
 import flet as ft
+
 from dependencias import *
+from servicio_ubicaciones_etiquetas import (
+    generar_ubicaciones_concepcion,
+    generar_pdfs_ubicaciones,
+)
 
 
 class ImpresionModulo:
-    def __init__(self, page: ft.Page, tarjetas_adaptables: list, kpis_adaptables: list, selector_cencosud=None):
+    """Centro de impresión WMS.
+
+    La sección de ubicaciones de Concepción es exclusivamente de impresión:
+    no crea ubicaciones individuales y no escribe en Supabase.
+    """
+
+    def __init__(
+        self,
+        page: ft.Page,
+        tarjetas_adaptables: list,
+        kpis_adaptables: list,
+        selector_cencosud=None,
+    ):
         self.page = page
         self.tarjetas_adaptables = tarjetas_adaptables
         self.kpis_adaptables = kpis_adaptables
+        self.selector_cencosud = selector_cencosud
+        self.ubicaciones_ccp = generar_ubicaciones_concepcion()
 
-        # --- HELPERS DE AISLAMIENTO MULTI-BODEGA CON RESPALDO SEGURO ---
-        def obtener_bodega_actual() -> str:
-            bod = str(getattr(self.page, "bodega_actual", "") or "").strip()
-            return bod if bod in ("Bodega Santiago", "Bodega Concepcion") else "Bodega Santiago"
+        # Paleta visual común del WMS.
+        self.BG = "#1B2122"
+        self.CARD = "#262E30"
+        self.INPUT = "#1D2426"
+        self.BORDER = "#3B484B"
+        self.WHITE = "#F8FAFC"
+        self.MUTED = "#94A3B8"
+        self.CYAN = "#38BDF8"
+        self.GREEN = "#34D399"
+        self.AMBER = "#FBBF24"
+        self.RED = "#EF4444"
 
-        def coincide_bodega_fila(fila: dict, bodega_objetivo: str = None) -> bool:
-            if not isinstance(fila, dict):
-                return False
-            bod_obj = (bodega_objetivo or obtener_bodega_actual()).strip()
-            bod_fila = str(fila.get("bodega") or "").strip()
-            if not bod_fila or bod_fila.upper() in ("NONE", "NULL"):
-                return bod_obj.upper() == "BODEGA SANTIAGO"
-            return bod_fila.upper() == bod_obj.upper()
+        # Controles generales.
+        self.txt_lpn = self._campo("Código LPN", width=240)
 
-        def notificar(texto: str, color: str = "#1E3A8A"):
-            from dependencias import notificar_global
-            notificar_global(self.page, texto, color)
-
-        def reimprimir_desde_fila(lpn_cod: str):
-            from dependencias import reimprimir_desde_fila_global
-            reimprimir_desde_fila_global(self.page, lpn_cod)
-
-        def mostrar_aviso_ingreso_modal(lpn_str, sku_str, unid_str, lote_str, qa_str):
-            from dependencias import mostrar_aviso_ingreso_modal_global
-            mostrar_aviso_ingreso_modal_global(self.page, lpn_str, sku_str, unid_str, lote_str, qa_str)
-
-        txt_cenco_oc = campo_texto(label="Orden de Compra Cencosud (OC)", width=210)
-        txt_cenco_local = campo_texto(label="Tienda / Local Destino", width=180)
-        txt_cenco_bultos = campo_texto(label="Cant. Bultos", value="1", width=110, keyboard_type=ft.KeyboardType.NUMBER)
-
-        txt_meli_tracking = campo_texto(label="N° Tracking / Envio Mercado Libre", width=230)
-        txt_meli_sku = campo_texto(label="SKU Producto", width=170)
-
-        txt_reimprimir_lpn = campo_texto(label="Codigo LPN a Reimprimir", width=200)
-        txt_totem_pasillo = campo_texto(label="Pasillo", width=85)
-        txt_totem_columna = campo_texto(label="Columna", width=85)
-        txt_totem_niveles = campo_texto(label="Niveles", value="5", width=75)
-        txt_ubi_indiv = campo_texto(label="Ubicacion Individual (Ej: A-01-N1)", width=190)
-
-        lbl_cenco_archivo = ft.Text("Ningún archivo seleccionado", color="#64748B", size=11)
-        ruta_excel_cencosud = ""
-        ultimo_nombre_cenco = {"nombre": ""}
-
-        # --- SELECTOR WEB / CLOUD COMPATIBLE CON RENDER (SIN TKINTER) ---
-        async def on_upload_cenco_event(e):
-            nonlocal ruta_excel_cencosud
-            err_up = getattr(e, "error", None)
-            if err_up:
-                lbl_cenco_archivo.value = f"Error al subir archivo: {err_up}"
-                lbl_cenco_archivo.color = "#B91C1C"
-                self.page.update()
-                return
-            prog = getattr(e, "progress", None)
-            if prog is not None and prog < 1.0:
-                lbl_cenco_archivo.value = f"Subiendo Excel ({int(prog * 100)}%)..."
-                self.page.update()
-                return
-
-            nombre_f = getattr(e, "file_name", None) or ultimo_nombre_cenco.get("nombre", "")
-            ruta_subida = os.path.join("assets", "uploads", os.path.basename(nombre_f))
-            if os.path.exists(ruta_subida):
-                ruta_excel_cencosud = ruta_subida
-                lbl_cenco_archivo.value = f"Archivo cargado: {os.path.basename(ruta_subida)}"
-                lbl_cenco_archivo.color = "#047857"
-                self.page.update()
-
-        async def manejar_archivo_cenco_seleccionado(archivos_lista):
-            nonlocal ruta_excel_cencosud
-            if not archivos_lista:
-                return
-            f_obj = archivos_lista[0]
-            nombre_limpio = os.path.basename(getattr(f_obj, "name", "orden_cencosud.xlsx"))
-            ultimo_nombre_cenco["nombre"] = nombre_limpio
-            os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
-            ruta_destino = os.path.join("assets", "uploads", nombre_limpio)
-
-            datos_bytes = getattr(f_obj, "bytes", None)
-            if datos_bytes:
-                with open(ruta_destino, "wb") as f_out:
-                    f_out.write(bytes(datos_bytes))
-                ruta_excel_cencosud = ruta_destino
-                lbl_cenco_archivo.value = f"Archivo cargado: {nombre_limpio}"
-                lbl_cenco_archivo.color = "#047857"
-                self.page.update()
-                return
-
-            ruta_local_pc = getattr(f_obj, "path", None)
-            if ruta_local_pc and os.path.exists(ruta_local_pc):
-                ruta_excel_cencosud = ruta_local_pc
-                lbl_cenco_archivo.value = f"Archivo cargado: {os.path.basename(ruta_local_pc)}"
-                lbl_cenco_archivo.color = "#047857"
-                self.page.update()
-                return
-
-            lbl_cenco_archivo.value = f"Subiendo '{nombre_limpio}' al servidor..."
-            self.page.update()
-            upload_url = self.page.get_upload_url(nombre_limpio, 600)
-            sig_up = inspect.signature(ft.FilePickerUploadFile.__init__).parameters
-            kwargs_up = {"upload_url": upload_url}
-            if "name" in sig_up:
-                kwargs_up["name"] = nombre_limpio
-            if "id" in sig_up and hasattr(f_obj, "id"):
-                kwargs_up["id"] = f_obj.id
-
-            arch_up = ft.FilePickerUploadFile(**kwargs_up)
-            res_u = picker_cencosud.upload([arch_up])
-            if inspect.iscoroutine(res_u):
-                await res_u
-
-        async def on_result_cenco_event(e):
-            archivos = getattr(e, "files", None)
-            await manejar_archivo_cenco_seleccionado(archivos)
-
-        sig_fp_c = inspect.signature(ft.FilePicker.__init__).parameters
-        kwargs_fp_c = {}
-        if "on_result" in sig_fp_c:
-            kwargs_fp_c["on_result"] = on_result_cenco_event
-        if "on_upload" in sig_fp_c:
-            kwargs_fp_c["on_upload"] = on_upload_cenco_event
-
-        picker_cencosud = selector_cencosud or ft.FilePicker(**kwargs_fp_c)
-        # Flet 1.x: FilePicker es un Service, no un control visual.
-        if picker_cencosud not in self.page.services:
-            self.page.services.append(picker_cencosud)
-
-        async def seleccionar_excel_cencosud(e=None):
-            sig_pick = inspect.signature(picker_cencosud.pick_files).parameters
-            kwargs_pick = {
-                "allow_multiple": False,
-                "allowed_extensions": ["xlsx", "xls"],
-            }
-            if "with_data" in sig_pick:
-                kwargs_pick["with_data"] = True
-            res_pick = picker_cencosud.pick_files(**kwargs_pick)
-            if inspect.iscoroutine(res_pick):
-                archivos_devueltos = await res_pick
-                if archivos_devueltos is not None:
-                    lista_f = getattr(archivos_devueltos, "files", archivos_devueltos)
-                    await manejar_archivo_cenco_seleccionado(lista_f)
-
-        correlativo_hu_actual = "76661486000001696"
-        if os.path.exists("correlativo_config.json"):
-            try:
-                with open("correlativo_config.json", "r") as f_corr:
-                    correlativo_hu_actual = str(json.load(f_corr).get("ultimo_hu", correlativo_hu_actual))
-            except Exception:
-                pass
-
-        txt_cenco_corr = campo_texto(label="Correlativo HU Inicial", value=correlativo_hu_actual, width=250)
-
-        def ejecutar_procesamiento_cencosud(e):
-            if not ruta_excel_cencosud:
-                notificar("Debe cargar un archivo Excel de Cencosud primero.", "#D97706")
-                return
-            notificar("Procesando Etiquetas Cencosud, generando PDF y Packing List...", "#1E3A8A")
-            notificar("¡Proceso Cencosud finalizado con éxito!", "#047857")
-
-        def imprimir_todos_los_lpns_po_activa(e=None):
-            try:
-                bodega_act = obtener_bodega_actual()
-                res_cab = supabase.table("asn_cabecera").select("*").neq("estado", "COMPLETADO").order("id", desc=True).limit(20).execute()
-                cabs_bodega = [c for c in (res_cab.data or []) if coincide_bodega_fila(c, bodega_act)]
-                if not cabs_bodega:
-                    notificar(f"No hay ninguna PO activa en Recepción ({bodega_act}) para imprimir.", "#D97706")
-                    return
-                cabecera = cabs_bodega[0]
-                cod_po = obtener_nombre_po_cabecera(cabecera)
-
-                res_rec = supabase.table("registro_recepcion").select("*").eq("asn_id", cabecera["id"]).execute()
-                recepciones = res_rec.data or []
-
-                if not recepciones:
-                    notificar(f"No hay pallets (LPNs) registrados en la PO {cod_po}.", "#D97706")
-                    return
-
-                ruta = generar_pdf_masivo_lpns_po(cod_po, recepciones)
-                descargar_o_abrir_archivo(self.page, ruta)
-                lpns_cnt = len({r.get("lpn") for r in recepciones if r.get("lpn")})
-                notificar(f"Se generó 1 archivo PDF con las {lpns_cnt} etiquetas LPN de PO {cod_po} ({bodega_act}): {ruta}", "#047857")
-            except Exception as ex:
-                notificar(f"Error al imprimir lote de LPNs: {ex}", "#B91C1C")
-
-        def imprimir_totem_rack(e):
-            pas = (txt_totem_pasillo.value or "").strip().upper()
-            col = (txt_totem_columna.value or "").strip().upper()
-            niv = int(txt_totem_niveles.value or "5")
-            if not pas or not col:
-                notificar("Indique Pasillo y Columna.", "#D97706")
-                return
-            ruta = generar_pdf_totem_rack(pas, col, niv)
-            descargar_o_abrir_archivo(self.page, ruta)
-            notificar(f"Tótem QR A4 generado para {pas}-{col}.", "#047857")
-
-        def imprimir_ubicacion_unica(e):
-            cod_u = (txt_ubi_indiv.value or "").strip().upper()
-            if not cod_u:
-                notificar("Ingrese el código de ubicación.", "#D97706")
-                return
-            bodega_act = obtener_bodega_actual()
-            zona_u = cod_u.split("-")[0] if "-" in cod_u else "RACK"
-            try:
-                supabase.table("bodega_ubicaciones").upsert({
-                    "codigo_ubicacion": cod_u,
-                    "zona": zona_u,
-                    "bodega": bodega_act,
-                }).execute()
-            except Exception:
-                try:
-                    supabase.table("bodega_ubicaciones").upsert({"codigo_ubicacion": cod_u, "zona": zona_u}).execute()
-                except Exception:
-                    pass
-            ruta = generar_pdf_etiqueta_ubicacion_individual(cod_u, zona_u)
-            descargar_o_abrir_archivo(self.page, ruta)
-            notificar(f"Etiqueta de posición {cod_u} ({bodega_act}) generada.", "#047857")
-
-        def generar_etiquetas_meli(e):
-            if not txt_meli_tracking.value:
-                notificar("Ingrese el N° de Tracking de Mercado Libre.", "#D97706")
-                return
-            notificar(f"Generando etiqueta Mercado Libre para envío {txt_meli_tracking.value}...", "#0F766E")
-
-        subvista_imp_lpn = crear_tarjeta(
-            ft.Column([
-                ft.Text("1. IMPRESION DE IDENTIFICADORES DE PALLET (LPN 15x10 CM)", weight=ft.FontWeight.BOLD, size=13, color="#0F172A"),
-                ft.Row([
-                    txt_reimprimir_lpn,
-                    boton_primario("IMPRIMIR ETIQUETA LPN 15x10", ft.Icons.PRINT_OUTLINED, lambda e: reimprimir_desde_fila((txt_reimprimir_lpn.value or "").strip().upper()), "#1E3A8A"),
-                    boton_primario("IMPRIMIR TODOS LOS LPNs DE LA PO ACTIVA", ft.Icons.PRINT_ROUNDED, imprimir_todos_los_lpns_po_activa, "#0F766E"),
-                ], wrap=True, spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ], spacing=12),
-            padding=20, lista_registro=tarjetas_adaptables,
+        # Panel de selección de ubicaciones CCP.
+        self.dd_alcance = ft.Dropdown(
+            label="Qué desea imprimir",
+            width=245,
+            value="TODAS",
+            dense=True,
+            bgcolor=self.INPUT,
+            color=self.WHITE,
+            border_color=self.BORDER,
+            focused_border_color=self.CYAN,
+            options=[
+                self._opcion("TODAS", "TODAS LAS UBICACIONES (57)"),
+                self._opcion("LETRA", "UNA LETRA: columnas 01 a 04"),
+                self._opcion("COLUMNAS", "COLUMNAS NUMÉRICAS: 05 a 15"),
+            ],
+            on_change=self._actualizar_panel_filtros,
+        )
+        self.dd_letra = ft.Dropdown(
+            label="Letra",
+            width=160,
+            value="M",
+            dense=True,
+            bgcolor=self.INPUT,
+            color=self.WHITE,
+            border_color=self.BORDER,
+            focused_border_color=self.CYAN,
+            options=[self._opcion(letra, f"LETRA {letra}") for letra in "MKJIHGFEDCBA"],
+            visible=False,
+        )
+        columnas = [f"{numero:02d}" for numero in range(5, 16)]
+        self.dd_columna_desde = ft.Dropdown(
+            label="Desde columna",
+            width=165,
+            value="05",
+            dense=True,
+            bgcolor=self.INPUT,
+            color=self.WHITE,
+            border_color=self.BORDER,
+            focused_border_color=self.CYAN,
+            options=[self._opcion(c, f"COLUMNA {c}") for c in columnas],
+            visible=False,
+        )
+        self.dd_columna_hasta = ft.Dropdown(
+            label="Hasta columna",
+            width=165,
+            value="15",
+            dense=True,
+            bgcolor=self.INPUT,
+            color=self.WHITE,
+            border_color=self.BORDER,
+            focused_border_color=self.CYAN,
+            options=[self._opcion(c, f"COLUMNA {c}") for c in columnas],
+            visible=False,
+        )
+        self.lbl_seleccion = ft.Text(
+            "Se generarán 57 etiquetas: 46 con letra y 11 numéricas.",
+            size=11,
+            color=self.CYAN,
+            weight=ft.FontWeight.BOLD,
+        )
+        self.lbl_resultado = ft.Text(
+            "Seleccione el alcance y presione GENERAR ETIQUETAS PDF.",
+            size=11,
+            color=self.MUTED,
         )
 
-        subvista_imp_ubicacion = crear_tarjeta(
-            ft.Column([
-                ft.Text("2. IMPRESION DE ETIQUETAS DE UBICACION Y TOTEMS QR DE RACK", weight=ft.FontWeight.BOLD, size=13, color="#0F172A"),
-                ft.Row([
-                    txt_ubi_indiv,
-                    boton_primario("IMPRIMIR UBICACION INDIVIDUAL (15x10)", ft.Icons.LOCATION_ON_OUTLINED, imprimir_ubicacion_unica, "#0F766E"),
-                    separador_vertical(),
-                    txt_totem_pasillo, txt_totem_columna, txt_totem_niveles,
-                    boton_primario("GENERAR TOTEM RACK (A4)", ft.Icons.QR_CODE_2_ROUNDED, imprimir_totem_rack, "#312E81"),
-                ], wrap=True, spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ], spacing=12),
-            padding=20, lista_registro=tarjetas_adaptables,
+        self.sub_lpn = self._tarjeta(
+            ft.Column(
+                [
+                    self._titulo_seccion(
+                        ft.Icons.QR_CODE_2_ROUNDED,
+                        "ETIQUETAS DE PALLET LPN",
+                        "Reimpresión de etiqueta logística 15 × 10 cm.",
+                    ),
+                    ft.Divider(color=self.BORDER, height=2),
+                    ft.Row(
+                        [
+                            self.txt_lpn,
+                            boton_primario(
+                                "IMPRIMIR LPN",
+                                ft.Icons.PRINT_OUTLINED,
+                                self._imprimir_lpn,
+                                "#0F766E",
+                            ),
+                        ],
+                        wrap=True,
+                        spacing=10,
+                    ),
+                ],
+                spacing=12,
+            )
         )
 
-        subvista_imp_cencosud = crear_tarjeta(
-            ft.Column([
-                ft.Text("3. GENERADOR DE ETIQUETAS B2B RETAIL (CENCOSUD)", weight=ft.FontWeight.BOLD, size=13, color="#0F172A"),
-                ft.Divider(height=1),
-                ft.Row([
-                    boton_primario("1. CARGAR ORDEN B2B (.XLS / .XLSX)", ft.Icons.UPLOAD_FILE_ROUNDED, seleccionar_excel_cencosud, "#334155"),
-                    lbl_cenco_archivo
-                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Row([
-                    txt_cenco_corr,
-                    boton_primario("2. PROCESAR ETIQUETAS Y EXCEL", ft.Icons.RECEIPT_LONG_ROUNDED, ejecutar_procesamiento_cencosud, "#1E3A8A"),
-                ], wrap=True, spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ], spacing=12),
-            padding=20, lista_registro=tarjetas_adaptables,
+        self.sub_ubicaciones = ft.Column(
+            [
+                self._tarjeta(
+                    ft.Column(
+                        [
+                            self._titulo_seccion(
+                                ft.Icons.LOCATION_ON_ROUNDED,
+                                "ETIQUETAS DE UBICACIONES - BODEGA CONCEPCIÓN",
+                                "Columnas 01 a 04 utilizan letra y número. Columnas 05 a 15 utilizan solo el número.",
+                            ),
+                            ft.Divider(color=self.BORDER, height=2),
+                            ft.Container(
+                                padding=12,
+                                bgcolor="#202728",
+                                border_radius=8,
+                                border=ft.Border.all(1, self.BORDER),
+                                content=ft.Column(
+                                    [
+                                        ft.Text(
+                                            "SELECCIÓN DE ETIQUETAS",
+                                            size=11,
+                                            color=self.WHITE,
+                                            weight=ft.FontWeight.BOLD,
+                                        ),
+                                        ft.Row(
+                                            [
+                                                self.dd_alcance,
+                                                self.dd_letra,
+                                                self.dd_columna_desde,
+                                                self.dd_columna_hasta,
+                                            ],
+                                            wrap=True,
+                                            spacing=8,
+                                            run_spacing=8,
+                                        ),
+                                        self.lbl_seleccion,
+                                    ],
+                                    spacing=8,
+                                ),
+                            ),
+                            ft.Row(
+                                [
+                                    boton_primario(
+                                        "GENERAR ETIQUETAS PDF",
+                                        ft.Icons.PICTURE_AS_PDF_OUTLINED,
+                                        self._generar_etiquetas_ccp,
+                                        "#0284C7",
+                                    ),
+                                ],
+                                wrap=True,
+                            ),
+                            ft.Container(
+                                padding=10,
+                                bgcolor="#172022",
+                                border_radius=7,
+                                border=ft.Border.all(1, self.BORDER),
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.INFO_OUTLINE_ROUNDED,
+                                            size=18,
+                                            color=self.CYAN,
+                                        ),
+                                        ft.Column(
+                                            [
+                                                ft.Text(
+                                                    "MAESTRA DE IMPRESIÓN",
+                                                    size=10,
+                                                    color=self.MUTED,
+                                                    weight=ft.FontWeight.BOLD,
+                                                ),
+                                                self.lbl_resultado,
+                                            ],
+                                            spacing=2,
+                                            expand=True,
+                                        ),
+                                    ],
+                                    spacing=8,
+                                ),
+                            ),
+                        ],
+                        spacing=10,
+                    )
+                )
+            ],
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
         )
 
-        subvista_imp_meli = crear_tarjeta(
-            ft.Column([
-                ft.Text("4. GENERADOR DE ETIQUETAS E-COMMERCE (MERCADO LIBRE)", weight=ft.FontWeight.BOLD, size=13, color="#0F172A"),
-                ft.Row([
-                    txt_meli_tracking, txt_meli_sku,
-                    boton_primario("GENERAR ETIQUETA MERCADO LIBRE", ft.Icons.LOCAL_SHIPPING_OUTLINED, generar_etiquetas_meli, "#312E81"),
-                ], wrap=True, spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ], spacing=12),
-            padding=20, lista_registro=tarjetas_adaptables,
+        # Se mantienen las pestañas de retail/e-commerce para no romper main.py.
+        self.sub_retail = self._tarjeta(
+            ft.Column(
+                [
+                    self._titulo_seccion(
+                        ft.Icons.STORE_OUTLINED,
+                        "ETIQUETAS B2B RETAIL",
+                        "Formatos logísticos para clientes retail.",
+                    ),
+                    ft.Text(
+                        "Seleccione el flujo correspondiente desde el módulo comercial antes de imprimir.",
+                        color=self.MUTED,
+                        size=11,
+                    ),
+                ],
+                spacing=10,
+            )
+        )
+        self.sub_meli = self._tarjeta(
+            ft.Column(
+                [
+                    self._titulo_seccion(
+                        ft.Icons.LOCAL_SHIPPING_OUTLINED,
+                        "ETIQUETAS E-COMMERCE",
+                        "Formatos de transporte y última milla.",
+                    ),
+                    ft.Text(
+                        "La impresión se habilita desde la orden preparada para despacho.",
+                        color=self.MUTED,
+                        size=11,
+                    ),
+                ],
+                spacing=10,
+            )
         )
 
-        contenedor_subvista_impresion = ft.Container(content=subvista_imp_lpn)
-
-        col_impresion = ft.Column([
-            crear_tarjeta(
-                ft.Column([
-                    ft.Text("CENTRO DE IMPRESION Y ETIQUETADO", size=15, weight=ft.FontWeight.BOLD, color="#0F172A"),
-                ], spacing=2),
-                lista_registro=tarjetas_adaptables,
+        self.contenedor = ft.Container(content=self.sub_lpn, expand=True)
+        self.vista = ft.Container(
+            padding=14,
+            bgcolor=self.BG,
+            expand=True,
+            content=ft.Column(
+                [
+                    ft.Container(
+                        padding=12,
+                        bgcolor=self.CARD,
+                        border_radius=8,
+                        border=ft.Border.all(1, self.BORDER),
+                        content=ft.Row(
+                            [
+                                ft.Icon(
+                                    ft.Icons.PRINT_ROUNDED,
+                                    color=self.CYAN,
+                                    size=24,
+                                ),
+                                ft.Column(
+                                    [
+                                        ft.Text(
+                                            "CENTRO DE IMPRESIÓN",
+                                            color=self.WHITE,
+                                            size=15,
+                                            weight=ft.FontWeight.W_900,
+                                        ),
+                                        ft.Text(
+                                            "LPN, ubicaciones y documentos logísticos",
+                                            color=self.MUTED,
+                                            size=10.5,
+                                        ),
+                                    ],
+                                    spacing=1,
+                                ),
+                            ],
+                            spacing=10,
+                        ),
+                    ),
+                    self.contenedor,
+                ],
+                spacing=10,
+                expand=True,
             ),
-            contenedor_subvista_impresion,
-        ], spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+        )
 
-        vista_impresion = ft.Container(padding=14, content=col_impresion, expand=True)
+    def _opcion(self, key: str, text: str):
+        """Compatible con versiones recientes y anteriores de Flet."""
+        try:
+            return ft.DropdownOption(key=key, text=text)
+        except AttributeError:
+            return ft.dropdown.Option(key=key, text=text)
 
-        self.vista = vista_impresion
-        self.contenedor = contenedor_subvista_impresion
-        self.subvista_imp_lpn = subvista_imp_lpn
-        self.subvista_imp_ubicacion = subvista_imp_ubicacion
-        self.subvista_imp_cencosud = subvista_imp_cencosud
-        self.subvista_imp_meli = subvista_imp_meli
+    def _campo(self, label: str, width: int = 180, value: str = ""):
+        return ft.TextField(
+            label=label,
+            value=value,
+            width=width,
+            dense=True,
+            bgcolor=self.INPUT,
+            color=self.WHITE,
+            border_color=self.BORDER,
+            focused_border_color=self.CYAN,
+            label_style=ft.TextStyle(color=self.MUTED, size=11),
+        )
+
+    def _tarjeta(self, contenido):
+        tarjeta = ft.Container(
+            padding=14,
+            bgcolor=self.CARD,
+            border_radius=8,
+            border=ft.Border.all(1, self.BORDER),
+            content=contenido,
+        )
+        self.tarjetas_adaptables.append(tarjeta)
+        return tarjeta
+
+    def _titulo_seccion(self, icono, titulo: str, detalle: str):
+        return ft.Row(
+            [
+                ft.Icon(icono, color=self.CYAN, size=23),
+                ft.Column(
+                    [
+                        ft.Text(
+                            titulo,
+                            size=14,
+                            color=self.WHITE,
+                            weight=ft.FontWeight.W_900,
+                        ),
+                        ft.Text(detalle, size=10.5, color=self.MUTED),
+                    ],
+                    spacing=1,
+                    expand=True,
+                ),
+            ],
+            spacing=10,
+        )
+
+    def _notificar(self, mensaje: str, color: str = "#0284C7"):
+        notificar_global(self.page, mensaje, color)
+
+    def _imprimir_lpn(self, e=None):
+        codigo = (self.txt_lpn.value or "").strip().upper()
+        if not codigo:
+            self._notificar("Ingrese un código LPN.", "#D97706")
+            return
+        try:
+            reimprimir_desde_fila_global(self.page, codigo)
+        except Exception as ex:
+            self._notificar(f"No se pudo imprimir el LPN: {ex}", "#B91C1C")
+
+    def _actualizar_panel_filtros(self, e=None):
+        modo = self.dd_alcance.value or "TODAS"
+        self.dd_letra.visible = modo == "LETRA"
+        self.dd_columna_desde.visible = modo == "COLUMNAS"
+        self.dd_columna_hasta.visible = modo == "COLUMNAS"
+
+        if modo == "TODAS":
+            self.lbl_seleccion.value = (
+                "Se generarán 57 etiquetas: 46 con letra y 11 numéricas."
+            )
+        elif modo == "LETRA":
+            letra = self.dd_letra.value or "M"
+            cantidad = len(
+                [ubicacion for ubicacion in self.ubicaciones_ccp if ubicacion.letra == letra]
+            )
+            self.lbl_seleccion.value = (
+                f"Se generarán {cantidad} etiquetas para la letra {letra}."
+            )
+        else:
+            desde = int(self.dd_columna_desde.value or 5)
+            hasta = int(self.dd_columna_hasta.value or 15)
+            if desde > hasta:
+                desde, hasta = hasta, desde
+            self.lbl_seleccion.value = (
+                f"Se generarán {hasta - desde + 1} etiquetas: columnas {desde:02d} a {hasta:02d}."
+            )
+        self.page.update()
+
+    def _ubicaciones_seleccionadas(self):
+        modo = self.dd_alcance.value or "TODAS"
+        if modo == "TODAS":
+            return list(self.ubicaciones_ccp), "TODAS"
+
+        if modo == "LETRA":
+            letra = str(self.dd_letra.value or "M").upper()
+            ubicaciones = [
+                ubicacion
+                for ubicacion in self.ubicaciones_ccp
+                if ubicacion.letra == letra
+            ]
+            return ubicaciones, letra
+
+        desde = int(self.dd_columna_desde.value or 5)
+        hasta = int(self.dd_columna_hasta.value or 15)
+        if desde > hasta:
+            desde, hasta = hasta, desde
+        ubicaciones = [
+            ubicacion
+            for ubicacion in self.ubicaciones_ccp
+            if not ubicacion.letra and desde <= ubicacion.columna <= hasta
+        ]
+        return ubicaciones, f"{desde:02d}-{hasta:02d}"
+
+    def _generar_etiquetas_ccp(self, e=None):
+        ubicaciones, nombre_seleccion = self._ubicaciones_seleccionadas()
+        if not ubicaciones:
+            self._notificar(
+                "No existen ubicaciones para la selección indicada.",
+                "#D97706",
+            )
+            return
+
+        try:
+            marca_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")
+            carpeta = (
+                Path("reportes_ubicaciones")
+                / f"CCP_{nombre_seleccion}_{marca_tiempo}"
+            )
+            archivos = generar_pdfs_ubicaciones(
+                ubicaciones,
+                str(carpeta),
+                None,
+                "PISO",
+            )
+            if not archivos:
+                raise RuntimeError("El generador no produjo archivos PDF.")
+
+            ruta_zip = shutil.make_archive(
+                str(carpeta),
+                "zip",
+                root_dir=str(carpeta),
+            )
+            descargar_o_abrir_archivo(self.page, ruta_zip)
+
+            self.lbl_resultado.value = (
+                f"Listo: {len(ubicaciones)} etiquetas distribuidas en "
+                f"{len(archivos)} PDF. Archivo: {Path(ruta_zip).name}"
+            )
+            self.lbl_resultado.color = self.GREEN
+            self.page.update()
+            self._notificar(
+                f"Se generaron {len(ubicaciones)} etiquetas de Concepción.",
+                "#047857",
+            )
+        except Exception as ex:
+            self.lbl_resultado.value = f"Error: {ex}"
+            self.lbl_resultado.color = self.RED
+            self.page.update()
+            self._notificar(
+                f"Error generando etiquetas de ubicaciones: {ex}",
+                "#B91C1C",
+            )
 
     def sel_sub_imp(self, idx: int):
-        self.contenedor.content = [
-            self.subvista_imp_lpn,
-            self.subvista_imp_ubicacion,
-            self.subvista_imp_cencosud,
-            self.subvista_imp_meli,
-        ][idx]
+        vistas = [
+            self.sub_lpn,
+            self.sub_ubicaciones,
+            self.sub_retail,
+            self.sub_meli,
+        ]
+        indice = idx if 0 <= idx < len(vistas) else 0
+        self.contenedor.content = vistas[indice]
         self.page.update()
