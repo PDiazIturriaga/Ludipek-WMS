@@ -30,6 +30,10 @@ class ImpresionModulo:
         self.kpis_adaptables = kpis_adaptables
         self.selector_cencosud = selector_cencosud
         self.ubicaciones_ccp = generar_ubicaciones_concepcion()
+        # FilePicker con src_bytes fuerza una descarga real en Flet Web/Render.
+        self.file_picker = ft.FilePicker()
+        if hasattr(self.page, "services") and self.file_picker not in self.page.services:
+            self.page.services.append(self.file_picker)
 
         # Paleta visual común del WMS.
         self.BG = "#1B2122"
@@ -56,6 +60,7 @@ class ImpresionModulo:
             color=self.WHITE,
             border_color=self.BORDER,
             focused_border_color=self.CYAN,
+            text_style=ft.TextStyle(color=self.WHITE, size=12),
             options=[
                 self._opcion("TODAS", "TODAS LAS UBICACIONES (57)"),
                 self._opcion("LETRA", "UNA LETRA: columnas 01 a 04"),
@@ -72,6 +77,7 @@ class ImpresionModulo:
             color=self.WHITE,
             border_color=self.BORDER,
             focused_border_color=self.CYAN,
+            text_style=ft.TextStyle(color=self.WHITE, size=12),
             options=[self._opcion(letra, f"LETRA {letra}") for letra in "MKJIHGFEDCBA"],
             visible=False,
         )
@@ -85,6 +91,7 @@ class ImpresionModulo:
             color=self.WHITE,
             border_color=self.BORDER,
             focused_border_color=self.CYAN,
+            text_style=ft.TextStyle(color=self.WHITE, size=12),
             options=[self._opcion(c, f"COLUMNA {c}") for c in columnas],
             visible=False,
         )
@@ -97,6 +104,7 @@ class ImpresionModulo:
             color=self.WHITE,
             border_color=self.BORDER,
             focused_border_color=self.CYAN,
+            text_style=ft.TextStyle(color=self.WHITE, size=12),
             options=[self._opcion(c, f"COLUMNA {c}") for c in columnas],
             visible=False,
         )
@@ -314,9 +322,17 @@ class ImpresionModulo:
     def _opcion(self, key: str, text: str):
         """Compatible con versiones recientes y anteriores de Flet."""
         try:
-            return ft.DropdownOption(key=key, text=text)
+            return ft.DropdownOption(
+                key=key,
+                text=text,
+                content=ft.Text(text, color=self.WHITE, size=12),
+            )
         except AttributeError:
-            return ft.dropdown.Option(key=key, text=text)
+            return ft.dropdown.Option(
+                key=key,
+                text=text,
+                content=ft.Text(text, color=self.WHITE, size=12),
+            )
 
     def _campo(self, label: str, width: int = 180, value: str = ""):
         return ft.TextField(
@@ -429,7 +445,7 @@ class ImpresionModulo:
         ]
         return ubicaciones, f"{desde:02d}-{hasta:02d}"
 
-    def _generar_etiquetas_ccp(self, e=None):
+    async def _generar_etiquetas_ccp(self, e=None):
         ubicaciones, nombre_seleccion = self._ubicaciones_seleccionadas()
         if not ubicaciones:
             self._notificar(
@@ -458,16 +474,29 @@ class ImpresionModulo:
                 "zip",
                 root_dir=str(carpeta),
             )
-            descargar_o_abrir_archivo(self.page, ruta_zip)
+            nombre_zip = Path(ruta_zip).name
+            bytes_zip = Path(ruta_zip).read_bytes()
+            destino = await self.file_picker.save_file(
+                dialog_title="Guardar etiquetas de ubicaciones",
+                file_name=nombre_zip,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["zip"],
+                src_bytes=bytes_zip,
+            )
 
+            if destino:
+                detalle_descarga = f"Guardado en: {destino}"
+            else:
+                # En navegador, save_file puede devolver None aunque la descarga haya comenzado.
+                detalle_descarga = "Descarga enviada al navegador. Revise Descargas."
             self.lbl_resultado.value = (
                 f"Listo: {len(ubicaciones)} etiquetas distribuidas en "
-                f"{len(archivos)} PDF. Archivo: {Path(ruta_zip).name}"
+                f"{len(archivos)} PDF. {detalle_descarga}"
             )
             self.lbl_resultado.color = self.GREEN
             self.page.update()
             self._notificar(
-                f"Se generaron {len(ubicaciones)} etiquetas de Concepción.",
+                f"Se generaron {len(ubicaciones)} etiquetas. La descarga del ZIP fue solicitada al navegador.",
                 "#047857",
             )
         except Exception as ex:
