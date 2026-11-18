@@ -17,6 +17,8 @@ Cada script es una transacción (si falla, no cambia nada) y se puede volver a e
 | 4b | `01b_correccion_dia_00.sql` | **Ejecutar si ya corrió 01 antes del 18-11-2026 14:55.** Vencimientos GS1 con día `00` = último día del mes (01 los había dejado en día 01). |
 | 4d | `04b_recepciones_sin_ubicar.sql` | Planilla de LPN recibidos que nunca se almacenaron, bloqueo de recepciones cerradas y cierre controlado por fecha de corte (paso 3 comentado). |
 | 4c | `01c_resolver_lpn_repartidos.sql` | Plantilla para resolver LPN en dos ubicaciones **después del chequeo físico**. |
+| 7 | `07_estados_picking_packing.sql` | **Obligatorio para el celular nuevo.** Cierre de picking (`wms_cerrar_picking`) y de packing (`wms_cerrar_packing`) en una sola transacción, con historial de estados y errores visibles. Agrega al catálogo PENDIENTE_FACTURACION, FACTURADO, DESPACHADO, ANULADO, CERRADO. Corrige bodegas mal escritas que bloqueaban el cambio de estado. |
+| — | `07b_diagnostico_ov.sql` | Solo lectura: radiografía de una orden (cabecera, líneas, kardex, packing, historial). Cambiar el número en la primera línea. |
 
 Después de la Fase A: ejecutar de nuevo `00_diagnostico.sql`. Lo que quede son casos para conteo cíclico (filas duplicadas, LPN en dos ubicaciones).
 

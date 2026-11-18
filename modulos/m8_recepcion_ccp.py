@@ -19,7 +19,7 @@ class RecepcionTrasladosCcpModulo:
         WHITE = "#F8FAFC"; MUTED = "#94A3B8"; CYAN = "#38BDF8"; TEAL = "#0F766E"
 
         self.txt_buscar = ft.TextField(
-            label="Buscar OT-CCP / cliente", dense=True, width=300, bgcolor=INPUT,
+            label="Buscar OT / cliente", dense=True, width=300, bgcolor=INPUT,
             color=WHITE, border_color=BORDER, focused_border_color=CYAN,
             prefix_icon=ft.Icons.SEARCH_ROUNDED, on_submit=lambda e: self.cargar_bandeja(),
         )
@@ -125,7 +125,7 @@ class RecepcionTrasladosCcpModulo:
         return True
 
     def _cargar_datos_ot(self):
-        res_ov = supabase.table("netsuite_ordenes_venta").select("*").ilike("numero_ov", "OT-CCP-%").order("id", desc=True).limit(300).execute()
+        res_ov = supabase.table("netsuite_ordenes_venta").select("*").ilike("numero_ov", "OT-%").order("id", desc=True).limit(300).execute()
         res_pl = supabase.table("wms_packing_lists_fa").select("*").order("id", desc=True).limit(500).execute()
         mapa_pl = {}
         for pl in (res_pl.data or []):

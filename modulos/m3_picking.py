@@ -1457,7 +1457,7 @@ class PickingModulo:
                             "Total_Cajas": total_cajas_lpn,
                             "Total_Displays": total_displays_lpn,
                             "Total_Unidades": total_un_lpn,
-                            "Estado_Despacho": "EN_TRANSITO_CCP" if ov_limpia.startswith("OT-CCP-") else ov_item.get("estado", "PENDIENTE_FACTURACION"),
+                            "Estado_Despacho": "EN_TRANSITO_CCP" if ov_limpia.startswith("OT-") else ov_item.get("estado", "PENDIENTE_FACTURACION"),
                             "Recepcionado_CCP": "NO",
                             "Fecha_Recepcion_CCP": "",
                             "Usuario_Recepcion_CCP": "",
@@ -1495,7 +1495,7 @@ class PickingModulo:
                         "Total_Cajas": sum(int(i.get("cajas") or 0) for items in pallets_detalle.values() for i in items),
                         "Total_Displays": sum(int(i.get("displays") or 0) for items in pallets_detalle.values() for i in items),
                         "Total_Unidades_Facturar": unid_tot_emp,
-                        "Estado": "EN_TRANSITO_CCP" if ov_limpia.startswith("OT-CCP-") else ov_item.get("estado", "PENDIENTE_FACTURACION"),
+                        "Estado": "EN_TRANSITO_CCP" if ov_limpia.startswith("OT-") else ov_item.get("estado", "PENDIENTE_FACTURACION"),
                     })
 
                 with pd.ExcelWriter(ruta_xlsx, engine="openpyxl") as writer:

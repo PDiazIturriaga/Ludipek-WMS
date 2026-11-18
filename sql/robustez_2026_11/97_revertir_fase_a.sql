@@ -28,5 +28,9 @@ drop function if exists public.wms_almacenar_lpn(text, text, text, text);
 drop function if exists public.wms_mover_a_picking(bigint, integer, text, text);
 drop function if exists public.wms_salida_picking(text, text, text, integer, text, text, text);
 drop function if exists public.wms_registrar_conteo(text, text, text, text, text, text, integer, text, bigint, text);
+drop function if exists public.wms_cerrar_packing(bigint, text, jsonb, integer, text, text, text, numeric, numeric, bigint, text);
+drop function if exists public.wms_cerrar_picking(bigint, jsonb, text);
+drop function if exists public.wms_cambiar_estado_ov(bigint, text, text, text, boolean);
+drop function if exists public.wms_orden_estado_ov(text);
 -- wms_login y wms_cambiar_password se conservan: las apps nuevas las necesitan para entrar.
 commit;
