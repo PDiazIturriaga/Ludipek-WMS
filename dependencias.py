@@ -1291,11 +1291,11 @@ def obtener_perfil_responsive(page: ft.Page) -> dict:
     if ancho < 1100:
         modo, menu, maximo, columnas = "compacto", 68, ancho, 1
     elif ancho < 1440:
-        modo, menu, maximo, columnas = "notebook", 190, 1180, 2
+        modo, menu, maximo, columnas = "notebook", 190, 1400, 2
     elif ancho < 1920:
-        modo, menu, maximo, columnas = "escritorio", 215, 1480, 3
+        modo, menu, maximo, columnas = "escritorio", 215, 1600, 3
     else:
-        modo, menu, maximo, columnas = "amplio", 225, 1640, 4
+        modo, menu, maximo, columnas = "amplio", 225, 1720, 4
     return {
         "modo": modo,
         "ancho": ancho,
@@ -1316,7 +1316,10 @@ def aplicar_responsive_a_vista(vista, perfil: dict):
         return
     try:
         vista.padding = perfil["padding"]
-        vista.width = perfil["content_max"]
+        # Ancho = espacio realmente disponible (pantalla - menú lateral), con tope en monitores grandes.
+        # Antes era fijo (1180 px en notebook) y junto al menú superaba una pantalla de 1366 px.
+        disponible = int(perfil["ancho"] - perfil["menu_width"] - 12)
+        vista.width = max(340, min(perfil["content_max"], disponible))
         vista.expand = False
         vista.alignment = ft.Alignment.TOP_CENTER
         if isinstance(getattr(vista, "content", None), ft.Column):
@@ -1354,3 +1357,201 @@ try:
 except Exception as _wms_pro_error:
  WMS_PRO_DISPONIBLE=False
  print(f"[WARN] Servicios WMS Pro no disponibles: {_wms_pro_error}")
+
+
+# =====================================================================
+# 11. SISTEMA VISUAL LUDIPEK (componentes compartidos por todos los módulos)
+#     Un solo estilo de botón, tarjeta, KPI y menú de acciones.
+# =====================================================================
+UI = {
+    "bg": "#1B2122",
+    "card": "#232B2D",
+    "card_alt": "#1D2426",
+    "input": "#1D2426",
+    "borde": "#334044",
+    "texto": "#F1F5F9",
+    "texto_2": "#94A3B8",
+    "texto_3": "#64748B",
+    "primario": "#0284C7",
+    "acento": "#38BDF8",
+    "exito": "#10B981",
+    "alerta": "#F59E0B",
+    "peligro": "#DC2626",
+}
+
+
+def ui_boton(texto: str, icono=None, on_click=None, tipo: str = "primario", tooltip: str = None,
+             disabled: bool = False, expand=None):
+    """tipo: 'primario' (acción principal, 1 por pantalla), 'secundario', 'peligro' o 'texto'."""
+    contenido = ft.Text(texto, size=12, weight=ft.FontWeight.W_600)
+    forma = ft.RoundedRectangleBorder(radius=6)
+    relleno = ft.Padding.symmetric(horizontal=14, vertical=8)
+    if tipo == "secundario":
+        return ft.OutlinedButton(
+            content=contenido, icon=icono, on_click=on_click, tooltip=tooltip, disabled=disabled, expand=expand,
+            height=36,
+            style=ft.ButtonStyle(shape=forma, padding=relleno, color=UI["texto"],
+                                 side=ft.BorderSide(1, UI["borde"]), icon_color=UI["acento"]),
+        )
+    if tipo == "texto":
+        return ft.TextButton(
+            content=contenido, icon=icono, on_click=on_click, tooltip=tooltip, disabled=disabled, expand=expand,
+            height=36, style=ft.ButtonStyle(shape=forma, padding=relleno, color=UI["acento"]),
+        )
+    return ft.Button(
+        content=contenido, icon=icono, on_click=on_click, tooltip=tooltip, disabled=disabled, expand=expand,
+        height=36, bgcolor=UI["peligro"] if tipo == "peligro" else UI["primario"], color=ft.Colors.WHITE,
+        style=ft.ButtonStyle(shape=forma, padding=relleno),
+    )
+
+
+def ui_menu(texto: str, icono, items: list, tooltip: str = None):
+    """Botón con menú desplegable. items: (texto, icono, on_click) o None para un separador."""
+    entradas = []
+    for it in items:
+        if it is None:
+            entradas.append(ft.PopupMenuItem())
+            continue
+        txt, ico, fn = it[0], it[1], it[2]
+        peligro = len(it) > 3 and it[3]
+        entradas.append(ft.PopupMenuItem(
+            content=ft.Row([
+                ft.Icon(ico, size=18, color=UI["peligro"] if peligro else UI["acento"]),
+                ft.Text(txt, size=12, color=UI["peligro"] if peligro else None),
+            ], spacing=10),
+            on_click=fn,
+        ))
+    return ft.PopupMenuButton(
+        tooltip=tooltip or texto,
+        items=entradas,
+        content=ft.Container(
+            height=36,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=0),
+            border=ft.Border.all(1, UI["borde"]),
+            border_radius=6,
+            content=ft.Row([
+                ft.Icon(icono, size=18, color=UI["acento"]),
+                ft.Text(texto, size=12, weight=ft.FontWeight.W_600, color=UI["texto"]),
+                ft.Icon(ft.Icons.ARROW_DROP_DOWN_ROUNDED, size=18, color=UI["texto_2"]),
+            ], spacing=6, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ),
+    )
+
+
+def ui_encabezado(titulo: str, subtitulo: str = None, icono=None, acciones: list = None):
+    """Encabezado de pantalla: título a la izquierda, acciones a la derecha (bajan de línea si no caben)."""
+    bloque_titulo = ft.Row([
+        *([ft.Icon(icono, size=24, color=UI["acento"])] if icono else []),
+        ft.Column([
+            ft.Text(titulo, size=18, weight=ft.FontWeight.W_700, color=UI["texto"]),
+            *([ft.Text(subtitulo, size=12, color=UI["texto_2"])] if subtitulo else []),
+        ], spacing=1, tight=True),
+    ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    return ft.Row(
+        [bloque_titulo, ft.Row(acciones or [], spacing=8, wrap=True, run_spacing=8)],
+        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        wrap=True,
+        run_spacing=10,
+    )
+
+
+def ui_tarjeta(contenido, titulo: str = None, subtitulo: str = None, acciones: list = None, icono=None,
+               padding: int = 16, expand=None, col=None):
+    """Tarjeta estándar. 'col' permite usarla dentro de ft.ResponsiveRow."""
+    partes = []
+    if titulo:
+        partes.append(ft.Row([
+            ft.Row([
+                *([ft.Icon(icono, size=18, color=UI["acento"])] if icono else []),
+                ft.Column([
+                    ft.Text(titulo, size=14, weight=ft.FontWeight.W_600, color=UI["texto"]),
+                    *([ft.Text(subtitulo, size=11, color=UI["texto_2"])] if subtitulo else []),
+                ], spacing=1, tight=True),
+            ], spacing=8),
+            ft.Row(acciones or [], spacing=8, wrap=True, run_spacing=8),
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True, run_spacing=8))
+    partes.append(contenido)
+    return ft.Container(
+        content=ft.Column(partes, spacing=12, tight=True),
+        padding=padding,
+        bgcolor=UI["card"],
+        border_radius=10,
+        border=ft.Border.all(1, UI["borde"]),
+        expand=expand,
+        col=col,
+    )
+
+
+def ui_kpi(valor: ft.Text, etiqueta: str, icono, color: str, detalle: ft.Text = None, col=None):
+    """Indicador: valor grande, etiqueta y detalle opcional. Usar dentro de ft.ResponsiveRow."""
+    valor.size = 24
+    valor.weight = ft.FontWeight.W_700
+    valor.color = UI["texto"]
+    valor.font_family = None
+    return ft.Container(
+        col=col or {"xs": 12, "sm": 6, "md": 6, "lg": 3},
+        padding=14,
+        bgcolor=UI["card"],
+        border_radius=10,
+        border=ft.Border(left=ft.BorderSide(3, color), top=ft.BorderSide(1, UI["borde"]),
+                         right=ft.BorderSide(1, UI["borde"]), bottom=ft.BorderSide(1, UI["borde"])),
+        content=ft.Row([
+            ft.Container(
+                width=40, height=40, border_radius=8, bgcolor=ft.Colors.with_opacity(0.15, color),
+                alignment=ft.Alignment.CENTER, content=ft.Icon(icono, size=22, color=color),
+            ),
+            ft.Column([
+                ft.Text(etiqueta, size=11, color=UI["texto_2"], weight=ft.FontWeight.W_500),
+                valor,
+                *([detalle] if detalle else []),
+            ], spacing=0, tight=True, expand=True),
+        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+    )
+
+
+def ui_tabla(tabla: ft.DataTable, altura: int = 360):
+    """Tabla con encabezado fijo de estilo, scroll vertical y horizontal (nunca se corta)."""
+    tabla.heading_row_color = UI["card_alt"]
+    tabla.column_spacing = 18
+    tabla.horizontal_margin = 12
+    tabla.divider_thickness = 0.5
+    cont = ft.Container(
+        height=altura,
+        border=ft.Border.all(1, UI["borde"]),
+        border_radius=8,
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        content=ft.Column(
+            [ft.Row([tabla], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.START)],
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        ),
+    )
+    TABLAS_SCROLL_ADAPTABLES.append((cont, altura))
+    return cont
+
+
+def ui_pestanas(opciones: list, al_cambiar, seleccion: int = 0):
+    """Selector de vistas dentro de una pantalla (estilo pestañas). opciones: [(texto, icono)]."""
+    fila = ft.Row(spacing=4, wrap=True)
+
+    def construir(activo: int):
+        fila.controls = []
+        for i, (txt, ico) in enumerate(opciones):
+            sel = i == activo
+            fila.controls.append(ft.Container(
+                padding=ft.Padding.symmetric(horizontal=14, vertical=8),
+                border_radius=6,
+                bgcolor=ft.Colors.with_opacity(0.15, UI["acento"]) if sel else None,
+                border=ft.Border(bottom=ft.BorderSide(2, UI["acento"] if sel else "transparent")),
+                ink=True,
+                on_click=lambda e, idx=i: (construir(idx), al_cambiar(idx)),
+                content=ft.Row([
+                    ft.Icon(ico, size=16, color=UI["acento"] if sel else UI["texto_2"]),
+                    ft.Text(txt, size=12, weight=ft.FontWeight.W_600, color=UI["texto"] if sel else UI["texto_2"]),
+                ], spacing=6, tight=True),
+            ))
+
+    construir(seleccion)
+    fila.data = construir  # permite re-marcar desde código: fila.data(idx)
+    return fila

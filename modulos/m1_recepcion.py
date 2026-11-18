@@ -5,6 +5,7 @@ import base64
 import shutil
 import inspect
 import asyncio
+import threading
 import urllib.parse
 from datetime import datetime
 import requests
@@ -1922,183 +1923,188 @@ class RecepcionModulo:
                 notificar(f"Error generando Acta PDF: {ex}", "#B91C1C")
 
         def enviar_correo_acta_po(e=None):
+            """Envía el acta de recepción (PDF adjunto) por correo.
+
+            Envío directo: requiere en el archivo .env las variables SMTP_USER y SMTP_PASS
+            (opcionales: SMTP_HOST, por defecto smtp.office365.com; SMTP_PORT, por defecto 587;
+            SMTP_FROM y CORREOS_ACTA_RECEPCION con los destinatarios habituales).
+            Sin esas variables se puede descargar el acta y abrir Outlook con el mensaje listo.
+            """
             auditar_asn_seleccionado()
             if not filas_conciliacion_export and not recepciones_asn_actual:
-                notificar("No hay datos de recepción activos para enviar por correo.", "#D97706")
+                notificar("Seleccione una OC con recepción para enviar el acta.", "#D97706")
                 return
             try:
-                ruta = generar_acta_pdf_completa(
-                    cabecera_asn_actual,
-                    filas_conciliacion_export,
-                    recepciones_asn_actual,
-                )
+                ruta = generar_acta_pdf_completa(cabecera_asn_actual, filas_conciliacion_export, recepciones_asn_actual)
             except Exception as ex:
-                notificar(f"Error generando PDF para correo: {ex}", "#B91C1C")
+                notificar(f"No se pudo generar el acta PDF: {ex}", "#B91C1C")
                 return
 
-            nombre_orig = os.path.basename(ruta)
-            base_nom, ext_nom = os.path.splitext(nombre_orig)
-            nombre_seguro = f"{_nombre_archivo_seguro_local(base_nom)}{ext_nom.lower()}"
-            raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            for carp in (os.path.join(os.getcwd(), "assets", "descargas"), os.path.join(raiz_proyecto, "assets", "descargas")):
-                try:
-                    os.makedirs(carp, exist_ok=True)
-                    shutil.copy2(ruta, os.path.join(carp, nombre_seguro))
-                except Exception:
-                    pass
-            url_pdf_web = f"/descargas/{urllib.parse.quote(nombre_seguro)}"
-
             cod_po_str = obtener_nombre_po_cabecera(cabecera_asn_actual)
-            nota_asn = str(cabecera_asn_actual.get("codigo_asn") or "").strip()
             prov_str = str(cabecera_asn_actual.get("proveedor") or "PROVEEDOR").strip()
             cont_ref = str(cabecera_asn_actual.get("contenedor_referencia") or "").strip()
-
             tot_esp = sum(int(x.get("unidades_esperadas") or 0) for x in filas_conciliacion_export)
             tot_rec = sum(int(x.get("unidades_recibidas") or 0) for x in filas_conciliacion_export)
-            dif_tot = tot_rec - tot_esp
+            con_diferencia = [
+                f for f in filas_conciliacion_export
+                if int(f.get("unidades_recibidas") or 0) != int(f.get("unidades_esperadas") or 0)
+            ]
+            lineas_dif = [
+                f"  - {f.get('sku')}: OC {int(f.get('unidades_esperadas') or 0)} UN / recibido {int(f.get('unidades_recibidas') or 0)} UN "
+                f"({int(f.get('unidades_recibidas') or 0) - int(f.get('unidades_esperadas') or 0):+d})"
+                for f in con_diferencia[:15]
+            ]
+            if len(con_diferencia) > 15:
+                lineas_dif.append(f"  ... y {len(con_diferencia) - 15} SKU más (ver acta adjunta)")
 
-            resumen_skus = []
-            for f in filas_conciliacion_export[:25]:
-                resumen_skus.append(
-                    f"- {f.get('sku')}: OC {f.get('unidades_esperadas', 0)} UN | Recibido {f.get('unidades_recibidas', 0)} UN ({f.get('estado', '')})"
-                )
-
-            asunto_default = f"Acta de Recepción - OC {cod_po_str} ({prov_str}) | LUDIPEK WMS"
+            asunto_default = f"Acta de recepción OC {cod_po_str} - {prov_str}"
             cuerpo_default = (
-                f"Estimado equipo,\n\n"
-                f"Se informa la recepción de la Orden de Compra N° {cod_po_str} ({nota_asn}) en LUDIPEK WMS:\n\n"
-                f"• Proveedor: {prov_str}\n"
-                + (f"• Contenedor / Guía: {cont_ref}\n" if cont_ref else "")
-                + f"• Total Unidades OC: {tot_esp} UN  |  Total Físico Recibido: {tot_rec} UN (Dif: {dif_tot:+d} UN)\n\n"
-                f"Resumen por SKU:\n" + "\n".join(resumen_skus) + "\n\n"
-                f"Saludos cordiales,\nTorre de Control LUDIPEK WMS"
+                f"Estimados:\n\n"
+                f"Adjuntamos el acta de recepción de la OC {cod_po_str} ({prov_str}).\n"
+                + (f"Contenedor / guía: {cont_ref}\n" if cont_ref else "")
+                + f"\nUnidades OC: {tot_esp} | Recibidas: {tot_rec} | Diferencia: {tot_rec - tot_esp:+d}\n"
+                + (("\nSKU con diferencia:\n" + "\n".join(lineas_dif) + "\n") if lineas_dif else "\nSin diferencias por SKU.\n")
+                + "\nSaludos,\nLudipek - Bodega"
             )
 
-            txt_para = texto_dark("Para (separar correos con coma)", width=580, value="compras@ludipek.cl, logistica@ludipek.cl")
-            txt_asunto = texto_dark("Asunto", width=580, value=asunto_default)
+            smtp_user = os.getenv("SMTP_USER", "").strip()
+            smtp_pass = os.getenv("SMTP_PASS", "").strip()
+            smtp_listo = bool(smtp_user and smtp_pass)
+            destinatarios_default = os.getenv("CORREOS_ACTA_RECEPCION", "compras@ludipek.cl, logistica@ludipek.cl")
+            nombre_pdf = f"Acta_Recepcion_OC_{_nombre_archivo_seguro_local(cod_po_str)}.pdf"
+
+            txt_para = texto_dark("Para (separe con coma)", value=destinatarios_default)
+            txt_cc = texto_dark("CC (opcional)")
+            txt_asunto = texto_dark("Asunto", value=asunto_default)
             txt_mensaje = ft.TextField(
-                label="Cuerpo del Correo",
-                value=cuerpo_default,
-                multiline=True,
-                min_lines=6,
-                max_lines=9,
-                width=580,
-                text_style=ft.TextStyle(size=11, color=TEXT_WHITE),
-                bgcolor=BG_INPUT,
-                border_color=BORDER_COLOR,
+                label="Mensaje", value=cuerpo_default, multiline=True, min_lines=7, max_lines=12,
+                text_style=ft.TextStyle(size=12, color=TEXT_WHITE), bgcolor=BG_INPUT,
+                border_color=BORDER_COLOR, focused_border_color=ACCENT_CYAN, border_radius=6,
+                label_style=ft.TextStyle(size=11, color=TEXT_MUTED),
             )
-            lbl_info_envio = ft.Text(
-                f"PDF generado y listo: {nombre_seguro}",
-                size=11,
-                color="#34D399",
-                weight=ft.FontWeight.BOLD,
+            lbl_estado = ft.Text(
+                f"Adjunto: {nombre_pdf}" if smtp_listo else
+                "Envío directo no configurado (faltan SMTP_USER / SMTP_PASS en .env). "
+                "Use 'Abrir en Outlook' y adjunte el acta descargada.",
+                size=11, color="#94A3B8" if smtp_listo else "#FBBF24",
             )
+            barra_progreso = ft.ProgressBar(visible=False, color=ACCENT_CYAN)
 
-            mailto_inicial = (
-                f"mailto:compras@ludipek.cl,logistica@ludipek.cl"
-                f"?subject={urllib.parse.quote(asunto_default)}"
-                f"&body={urllib.parse.quote(cuerpo_default)}"
-            )
+            patron_correo = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}$")
 
-            btn_abrir_cliente_pc = ft.Button(
-                content=ft.Text("2. ABRIR OUTLOOK / CORREO EN MI PC", size=11, weight=ft.FontWeight.BOLD),
-                icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
-                bgcolor=ACCENT_BLUE,
-                color=ft.Colors.WHITE,
-                url=mailto_inicial,
-            )
+            def _lista_correos(texto):
+                return [x.strip() for x in (texto or "").replace(";", ",").split(",") if x.strip()]
 
-            def actualizar_link_mailto(ev=None):
-                para_limpio = (txt_para.value or "").replace(";", ",").strip()
-                btn_abrir_cliente_pc.url = (
-                    f"mailto:{para_limpio}"
-                    f"?subject={urllib.parse.quote(txt_asunto.value or '')}"
-                    f"&body={urllib.parse.quote(txt_mensaje.value or '')}"
-                )
-                page.update()
+            def _validar():
+                para = _lista_correos(txt_para.value)
+                cc = _lista_correos(txt_cc.value)
+                malos = [c for c in para + cc if not patron_correo.match(c)]
+                if not para:
+                    return None, None, "Indique al menos un destinatario."
+                if malos:
+                    return None, None, f"Correo no válido: {', '.join(malos)}"
+                return para, cc, None
 
-            txt_para.on_change = actualizar_link_mailto
-            txt_asunto.on_change = actualizar_link_mailto
-            txt_mensaje.on_change = actualizar_link_mailto
+            def descargar_acta(ev=None):
+                descargar_archivo_web(ruta, f"Acta de recepción OC {cod_po_str}")
 
-            def enviar_directo_smtp(ev=None):
-                smtp_user = os.getenv("SMTP_USER", "").strip()
-                smtp_pass = os.getenv("SMTP_PASS", "").strip()
-                smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-                smtp_port = int(os.getenv("SMTP_PORT", "587"))
-
-                if not smtp_user or not smtp_pass:
-                    lbl_info_envio.value = "Para envío automático sin Outlook, agregue SMTP_USER y SMTP_PASS en Render. Use los botones 1 y 2 para enviar desde su PC."
-                    lbl_info_envio.color = "#FBBF24"
+            async def abrir_outlook(ev=None):
+                para, cc, err = _validar()
+                if err:
+                    lbl_estado.value, lbl_estado.color = err, "#F87171"
                     page.update()
                     return
+                cuerpo = (txt_mensaje.value or "")[:1500]  # los clientes de correo cortan enlaces largos
+                url = (
+                    f"mailto:{','.join(para)}?subject={urllib.parse.quote(txt_asunto.value or '')}"
+                    + (f"&cc={','.join(cc)}" if cc else "")
+                    + f"&body={urllib.parse.quote(cuerpo)}"
+                )
+                res = page.launch_url(url)
+                if inspect.iscoroutine(res):
+                    await res
+                lbl_estado.value = "Outlook abierto con el mensaje. Adjunte el acta (botón 'Descargar acta') y envíe."
+                lbl_estado.color = "#34D399"
+                page.update()
 
-                try:
-                    import smtplib
-                    from email.message import EmailMessage
-
-                    msg = EmailMessage()
-                    msg["Subject"] = txt_asunto.value or asunto_default
-                    msg["From"] = smtp_user
-                    destinatarios = [x.strip() for x in (txt_para.value or "").replace(";", ",").split(",") if x.strip()]
-                    msg["To"] = ", ".join(destinatarios)
-                    msg.set_content(txt_mensaje.value or cuerpo_default)
-
-                    with open(ruta, "rb") as f_pdf:
-                        msg.add_attachment(
-                            f_pdf.read(),
-                            maintype="application",
-                            subtype="pdf",
-                            filename=nombre_seguro,
-                        )
-
-                    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            def _enviar_smtp(para, cc):
+                import smtplib
+                from email.message import EmailMessage
+                host = os.getenv("SMTP_HOST", "smtp.office365.com").strip()
+                port = int(os.getenv("SMTP_PORT", "587"))
+                msg = EmailMessage()
+                msg["Subject"] = txt_asunto.value or asunto_default
+                msg["From"] = os.getenv("SMTP_FROM", smtp_user).strip()
+                msg["To"] = ", ".join(para)
+                if cc:
+                    msg["Cc"] = ", ".join(cc)
+                msg.set_content(txt_mensaje.value or cuerpo_default)
+                with open(ruta, "rb") as f_pdf:
+                    msg.add_attachment(f_pdf.read(), maintype="application", subtype="pdf", filename=nombre_pdf)
+                if port == 465:
+                    with smtplib.SMTP_SSL(host, port, timeout=30) as server:
+                        server.login(smtp_user, smtp_pass)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(host, port, timeout=30) as server:
                         server.starttls()
                         server.login(smtp_user, smtp_pass)
                         server.send_message(msg)
 
-                    page.pop_dialog()
-                    notificar(f"Correo enviado con el PDF adjunto a {', '.join(destinatarios)}.", "#047857")
-                except Exception as ex_s:
-                    lbl_info_envio.value = f"Error SMTP: {ex_s}"
-                    lbl_info_envio.color = "#F87171"
+            def enviar_directo(ev=None):
+                para, cc, err = _validar()
+                if err:
+                    lbl_estado.value, lbl_estado.color = err, "#F87171"
                     page.update()
+                    return
+                btn_enviar.disabled = True
+                barra_progreso.visible = True
+                lbl_estado.value, lbl_estado.color = "Enviando...", "#94A3B8"
+                page.update()
+
+                def tarea():
+                    try:
+                        _enviar_smtp(para, cc)
+                        page.pop_dialog()
+                        notificar(f"Acta de la OC {cod_po_str} enviada a {', '.join(para + cc)}.", "#047857")
+                    except Exception as ex_s:
+                        detalle = str(ex_s)
+                        if "535" in detalle or "Authentication" in detalle:
+                            detalle = "usuario o contraseña SMTP rechazados (en Microsoft 365 debe estar habilitado 'SMTP autenticado' para ese buzón)"
+                        lbl_estado.value, lbl_estado.color = f"No se pudo enviar: {detalle}", "#F87171"
+                        btn_enviar.disabled = False
+                        barra_progreso.visible = False
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+
+                threading.Thread(target=tarea, daemon=True).start()
+
+            btn_enviar = ui_boton(
+                "Enviar", ft.Icons.SEND_ROUNDED, enviar_directo, "primario", disabled=not smtp_listo,
+                tooltip=None if smtp_listo else "Configure SMTP_USER y SMTP_PASS en el archivo .env",
+            )
 
             dlg_mail = ft.AlertDialog(
                 modal=True,
-                bgcolor="#1E293B",
-                title=ft.Row(
-                    [
-                        ft.Icon(ft.Icons.MARK_EMAIL_READ_ROUNDED, color=ACCENT_CYAN, size=22),
-                        ft.Text(f"Descargar Acta PDF y Enviar Correo (OC {cod_po_str})", size=15, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ],
-                    spacing=8,
-                ),
+                bgcolor=UI["card"],
+                title=ft.Row([
+                    ft.Icon(ft.Icons.EMAIL_OUTLINED, color=ACCENT_CYAN, size=22),
+                    ft.Text(f"Enviar acta · OC {cod_po_str}", size=16, weight=ft.FontWeight.W_600, color=TEXT_WHITE),
+                ], spacing=8),
                 content=ft.Container(
-                    width=600,
-                    content=ft.Column(
-                        [
-                            lbl_info_envio,
-                            txt_para,
-                            txt_asunto,
-                            txt_mensaje,
-                        ],
-                        spacing=8,
-                        tight=True,
-                    ),
+                    width=560,
+                    content=ft.Column([txt_para, txt_cc, txt_asunto, txt_mensaje, barra_progreso, lbl_estado],
+                                      spacing=10, tight=True, scroll=ft.ScrollMode.AUTO),
                 ),
                 actions=[
-                    ft.TextButton("CERRAR", on_click=lambda e: page.pop_dialog()),
-                    ft.Button(
-                        content=ft.Text("1. DESCARGAR ACTA PDF", size=11, weight=ft.FontWeight.BOLD),
-                        icon=ft.Icons.DOWNLOAD_ROUNDED,
-                        bgcolor=ACCENT_TEAL,
-                        color=ft.Colors.WHITE,
-                        url=url_pdf_web,
-                    ),
-                    btn_abrir_cliente_pc,
-                    boton_primario("ENVIAR CON PDF (CLOUD SMTP)", ft.Icons.SEND_ROUNDED, enviar_directo_smtp, "#047857", height_val=34),
+                    ui_boton("Cancelar", None, lambda ev: page.pop_dialog(), "texto"),
+                    ui_boton("Descargar acta", ft.Icons.DOWNLOAD_ROUNDED, descargar_acta, "secundario"),
+                    ui_boton("Abrir en Outlook", ft.Icons.OPEN_IN_NEW_ROUNDED, abrir_outlook, "secundario"),
+                    btn_enviar,
                 ],
+                actions_alignment=ft.MainAxisAlignment.END,
             )
             page.show_dialog(dlg_mail)
             page.update()
@@ -3426,449 +3432,324 @@ class RecepcionModulo:
         txt_po_netsuite.on_submit = descargar_po_netsuite_inbound
 
         # --- 6. COMPOSICIÓN DE VISTAS (ARMADO FINAL DE LA INTERFAZ) ---
+        # Pantallas del módulo: 0 Recepción y validación · 1 Indicadores · 2 Historial · 3 Calidad · 4 Ajustes
         es_admin_usuario = "ADMIN" in str(getattr(self.page, "rol_actual", "")).upper()
 
-        controles_superiores_po = [
-            txt_po_netsuite,
-            boton_primario(
-                "LLAMAR OC",
-                ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
-                descargar_po_netsuite_inbound,
-                ACCENT_BLUE,
-                height_val=34,
-            ),
-            txt_contenedor,
-            btn_guardar_contenedor,
-            dd_accion_po,
-            ft.IconButton(
-                icon=ft.Icons.SYNC_ROUNDED,
-                icon_color=ACCENT_CYAN,
-                tooltip="Sincronizar recepción en vivo",
-                on_click=auditar_asn_seleccionado,
-            ),
-            boton_primario(
-                "CARGAR PACKING PDF",
-                ft.Icons.UPLOAD_FILE_ROUNDED,
-                seleccionar_y_procesar_packing_ia,
-                "#4F46E5",
-                height_val=34,
-            ),
-        ]
+        # Resumen corto de la OC visible en la pantalla de operación (se actualiza tras cada auditoría)
+        lbl_resumen_operacion = ft.Text("Seleccione una orden de compra para ver su conciliación.", size=12, color=UI["texto_2"])
+        _auditar_base = auditar_asn_seleccionado
 
-        if es_admin_usuario:
-            controles_superiores_po.append(
-                boton_primario(
-                    "ADMIN: LIMPIAR OCs",
-                    ft.Icons.DELETE_SWEEP_ROUNDED,
-                    abrir_gestor_limpieza_ocs_admin,
-                    "#B91C1C",
-                    height_val=34,
+        def auditar_asn_seleccionado(e=None):
+            _auditar_base(e)
+            if dd_asn.value:
+                lbl_resumen_operacion.value = (
+                    f"Avance {lbl_inb_avance.value}   ·   Cajas físicas/OC {lbl_inb_cajas.value}   ·   "
+                    f"{lbl_inb_unidades.value} UN recibidas   ·   {lbl_inb_pallets.value} LPN"
                 )
-            )
+                lbl_resumen_operacion.color = UI["texto"]
+            try:
+                page.update()
+            except Exception:
+                pass
 
-        barra_titulo_monitor = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
-            bgcolor="#222A2C",
-            border_radius=8,
-            border=ft.Border.all(1, BORDER_COLOR),
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, color=ACCENT_CYAN, size=22),
-                                    ft.Text("KPI RECEPCIÓN & CONCILIACIÓN 3-WAY MATCH", size=15, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                                    ft.Container(width=10),
-                                    txt_estado_ia,
-                                ],
-                                spacing=8,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                            ft.Row(
-                                controles_superiores_po,
-                                spacing=8,
-                                wrap=True,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
+        dd_asn.on_select = auditar_asn_seleccionado
+
+        # ---------- Barra de OC activa (común a operación, indicadores, calidad y ajustes) ----------
+        dd_asn.label = "Orden de compra activa"
+        txt_po_netsuite.label = "N° OC en NetSuite"
+        txt_po_netsuite.width = 150
+        txt_contenedor.label = "Contenedor / guía"
+        txt_contenedor.width = 170
+        btn_guardar_contenedor.tooltip = "Guardar contenedor / guía en la OC"
+        sw_auto_sync_rf.label = "En vivo"
+        sw_auto_sync_rf.tooltip = "Actualiza la recepción del andén cada 8 segundos"
+        txt_estado_ia.size = 11
+        txt_estado_ia.color = UI["texto_2"]
+
+        menu_importar = ui_menu("Importar", ft.Icons.FILE_UPLOAD_OUTLINED, [
+            ("Packing list del proveedor (PDF, IA)", ft.Icons.UPLOAD_FILE_ROUNDED, seleccionar_y_procesar_packing_ia),
+            ("Certificado de análisis CoA (PDF, IA)", ft.Icons.VERIFIED_OUTLINED, anexar_certificado_coa_ia),
+        ])
+        menu_documentos = ui_menu("Documentos", ft.Icons.DESCRIPTION_OUTLINED, [
+            ("Acta de recepción (PDF)", ft.Icons.PICTURE_AS_PDF_OUTLINED, click_exportar_pdf_recepcion),
+            ("Enviar acta por correo", ft.Icons.EMAIL_OUTLINED, enviar_correo_acta_po),
+            ("Conciliación a Excel", ft.Icons.TABLE_VIEW_OUTLINED, click_exportar_excel_recepcion),
+            ("CSV Item Receipt para NetSuite", ft.Icons.DATASET_OUTLINED, lambda e: exportar_csv_recepcion_netsuite()),
+            None,
+            ("Imprimir todas las etiquetas LPN (15x10)", ft.Icons.PRINT_ROUNDED, imprimir_todos_los_lpns_po_activa),
+        ])
+        acciones_barra_oc = [menu_importar, menu_documentos]
+        if es_admin_usuario:
+            acciones_barra_oc.append(ui_menu("Administrar", ft.Icons.ADMIN_PANEL_SETTINGS_OUTLINED, [
+                ("Cerrar o eliminar OCs antiguas", ft.Icons.DELETE_SWEEP_ROUNDED, abrir_gestor_limpieza_ocs_admin, True),
+            ]))
+
+        barra_oc = ft.Container(
+            padding=ft.Padding.symmetric(horizontal=16, vertical=12),
+            bgcolor=UI["card"],
+            border_radius=10,
+            border=ft.Border.all(1, UI["borde"]),
+            content=ft.Column([
+                ft.Row([
                     dd_asn,
-                ],
-                spacing=8,
-            ),
+                    ft.IconButton(
+                        icon=ft.Icons.REFRESH_ROUNDED, icon_color=UI["acento"],
+                        tooltip="Actualizar recepción del andén", on_click=auditar_asn_seleccionado,
+                    ),
+                    sw_auto_sync_rf,
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row([
+                    ft.Row([
+                        txt_po_netsuite,
+                        ui_boton("Importar OC", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, descargar_po_netsuite_inbound, "secundario",
+                                 tooltip="Descarga la OC desde NetSuite"),
+                        ft.Container(width=1, height=28, bgcolor=UI["borde"]),
+                        txt_contenedor,
+                        btn_guardar_contenedor,
+                    ], spacing=8, wrap=True, run_spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Row(acciones_barra_oc, spacing=8, wrap=True, run_spacing=8),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True, run_spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                txt_estado_ia,
+            ], spacing=10, tight=True),
         )
 
-        panel_relojes_izquierdo = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Text("Tiempo promedio de recepción y descarga en andén", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Row(
-                        [
-                            crear_caja_digital(lbl_dig_dias, "Días", "#8B5CF6", 92),
-                            crear_caja_digital(lbl_dig_horas, "Horas", "#8B5CF6", 92),
-                            crear_caja_digital(lbl_dig_min, "Minutos", "#8B5CF6", 92),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_AROUND,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=10),
-                    ft.Text("Indicadores físicos de conciliación por partida (OC)", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Row(
-                        [
-                            crear_caja_digital(lbl_inb_cajas, "Cajas (Fís/OC)", ACCENT_TEAL, 86),
-                            crear_caja_digital(lbl_inb_unidades, "Unid. Recibidas", ACCENT_BLUE, 86),
-                            crear_caja_digital(lbl_inb_pallets, "LPNs Activos", "#D97706", 78),
-                            crear_caja_digital(lbl_inb_avance, "Avance OC", "#10B981", 78),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                ],
-                spacing=8,
-            ),
-            width_val=415,
-        )
+        # ---------- PANTALLA 0: RECEPCIÓN Y VALIDACIÓN ----------
+        tabla_conciliacion_ui = ui_tabla(tabla_cruce_inbound, 430)
+        tabla_lpns_ui = ui_tabla(tabla_lpns_del_asn, 430)
+        cont_tabla_operacion = ft.Container(content=tabla_conciliacion_ui)
 
-        panel_grafico_derecho = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Text("Volumen y avance físico de recepción por SKU (Unidades)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            ft.Row(
-                                [
-                                    ft.Container(width=12, height=12, bgcolor=ACCENT_BLUE, border_radius=2),
-                                    ft.Text("En Proceso", size=10, color=TEXT_MUTED),
-                                    ft.Container(width=12, height=12, bgcolor="#10B981", border_radius=2),
-                                    ft.Text("100% Validado", size=10, color=TEXT_MUTED),
-                                    ft.Container(width=12, height=12, bgcolor="#EF4444", border_radius=2),
-                                    ft.Text("Sobrante / Fuera OC", size=10, color=TEXT_MUTED),
-                                ],
-                                spacing=6,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=6),
+        def cambiar_tabla_operacion(idx):
+            cont_tabla_operacion.content = [tabla_conciliacion_ui, tabla_lpns_ui][idx]
+            page.update()
+
+        subvista_inb_recepcion = ft.Column([
+            ui_tarjeta(
+                ft.Column([
+                    lbl_resumen_operacion,
+                    ui_pestanas([
+                        ("Conciliación por SKU", ft.Icons.FACT_CHECK_OUTLINED),
+                        ("Pallets (LPN) recibidos", ft.Icons.PALLET),
+                    ], cambiar_tabla_operacion),
+                    cont_tabla_operacion,
+                ], spacing=10, tight=True),
+                titulo="Recepción y validación",
+                subtitulo="Unidades de la OC comparadas con lo escaneado en andén (3-way match)",
+                icono=ft.Icons.FACT_CHECK_OUTLINED,
+                acciones=[
+                    ui_boton("Cerrar OC", ft.Icons.TASK_ALT_ROUNDED, cerrar_conciliacion_asn, "primario",
+                             tooltip="Cierra la OC y genera el CSV de Item Receipt para NetSuite"),
+                ],
+            ),
+        ], spacing=12)
+
+        # ---------- PANTALLA 1: INDICADORES ----------
+        for lbl_dig in (lbl_dig_dias, lbl_dig_horas, lbl_dig_min):
+            lbl_dig.size = 30
+            lbl_dig.weight = ft.FontWeight.W_700
+            lbl_dig.color = UI["texto"]
+            lbl_dig.font_family = None
+
+        def bloque_tiempo(lbl, unidad):
+            return ft.Container(
+                expand=True, padding=12, border_radius=8, bgcolor=UI["card_alt"],
+                content=ft.Column([lbl, ft.Text(unidad, size=11, color=UI["texto_2"])],
+                                  spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
+            )
+
+        leyenda_barras = ft.Row([
+            ft.Container(width=10, height=10, bgcolor=ACCENT_BLUE, border_radius=2), ft.Text("En proceso", size=11, color=UI["texto_2"]),
+            ft.Container(width=10, height=10, bgcolor="#10B981", border_radius=2), ft.Text("Completo", size=11, color=UI["texto_2"]),
+            ft.Container(width=10, height=10, bgcolor="#EF4444", border_radius=2), ft.Text("Sobrante / fuera de OC", size=11, color=UI["texto_2"]),
+        ], spacing=6, wrap=True)
+
+        subvista_inb_kpi = ft.Column([
+            ft.ResponsiveRow([
+                ui_kpi(lbl_inb_avance, "Avance de la OC", ft.Icons.DONUT_LARGE_ROUNDED, "#10B981"),
+                ui_kpi(lbl_inb_cajas, "Cajas físicas / OC", ft.Icons.INVENTORY_2_OUTLINED, ACCENT_CYAN),
+                ui_kpi(lbl_inb_unidades, "Unidades recibidas", ft.Icons.NUMBERS_ROUNDED, ACCENT_BLUE),
+                ui_kpi(lbl_inb_pallets, "Pallets (LPN) recibidos", ft.Icons.PALLET, "#F59E0B"),
+            ], spacing=12, run_spacing=12),
+            ft.ResponsiveRow([
+                ui_tarjeta(
+                    ft.Row([bloque_tiempo(lbl_dig_dias, "días"), bloque_tiempo(lbl_dig_horas, "horas"),
+                            bloque_tiempo(lbl_dig_min, "minutos")], spacing=8),
+                    titulo="Tiempo de descarga en andén",
+                    subtitulo="Desde el primer al último pallet escaneado",
+                    icono=ft.Icons.TIMER_OUTLINED,
+                    col={"xs": 12, "lg": 4},
+                ),
+                ui_tarjeta(
                     ft.Container(
-                        height=155,
-                        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-                        bgcolor="#181E20",
-                        border_radius=6,
-                        alignment=ft.Alignment.BOTTOM_LEFT,
-                        content=fila_barras_po,
+                        height=190, padding=ft.Padding.symmetric(horizontal=8, vertical=6),
+                        bgcolor=UI["card_alt"], border_radius=8,
+                        alignment=ft.Alignment.BOTTOM_LEFT, content=fila_barras_po,
                     ),
-                ],
-                spacing=8,
-            ),
-            expand_val=True,
-        )
-
-        # PANEL 1: Recepción Activa
-        subvista_inb_recepcion = ft.Column(
-            [
-                barra_titulo_monitor,
-                ft.Row([panel_relojes_izquierdo, panel_grafico_derecho], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Text("Detalle de órdenes y conciliación 3-Way Match por partida (OC vs Recepción RF)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                                    ft.Row(
-                                        [
-                                            sw_auto_sync_rf,
-                                            boton_primario("ACTA PDF", ft.Icons.PICTURE_AS_PDF_OUTLINED, click_exportar_pdf_recepcion, ACCENT_TEAL, height_val=30),
-                                            boton_primario("ENVIAR CORREO", ft.Icons.EMAIL_OUTLINED, enviar_correo_acta_po, "#0F766E", height_val=30),
-                                            boton_primario("EXCEL", ft.Icons.TABLE_VIEW_OUTLINED, click_exportar_excel_recepcion, "#0284C7", height_val=30),
-                                            boton_primario("IMPRIMIR LPNs (15x10)", ft.Icons.PRINT_ROUNDED, imprimir_todos_los_lpns_po_activa, "#4F46E5", height_val=30),
-                                        ],
-                                        spacing=8,
-                                    ),
-                                ],
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                wrap=True,
-                            ),
-                            ft.Divider(color=BORDER_COLOR, height=1),
-                            cont_tabla_inb_cruce,
-                            ft.Divider(color=BORDER_COLOR, height=8),
-                            ft.Text("Trazabilidad de Pallets (LPNs) escaneados en andén para esta Orden de Compra", size=12, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
-                            cont_tabla_inb_lpns,
-                        ],
-                        spacing=6,
-                    )
+                    titulo="Avance físico por SKU (unidades)",
+                    acciones=[leyenda_barras],
+                    icono=ft.Icons.BAR_CHART_ROUNDED,
+                    col={"xs": 12, "lg": 8},
                 ),
-            ],
-            spacing=10,
-        )
+            ], spacing=12, run_spacing=12),
+        ], spacing=12)
 
-        # PANEL 2: Consultor Histórico
-        subvista_inb_consultas = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    ft.Text("2. CONSULTOR HISTÓRICO DE RECEPCIONES POR DÍA Y OC/PO REAL", size=14, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                                    ft.Text("Filtre por Fecha o haga clic en 'SOLO SIN PO', marque los artículos deseados y descargue sus etiquetas LPN, Acta PDF o Excel.", size=11, color=TEXT_MUTED),
-                                ],
-                                spacing=2,
-                            ),
-                            ft.Row(
-                                [
-                                    dd_fecha_hist_rec,
-                                    txt_fecha_hist_rec,
-                                    txt_buscar_hist_rec,
-                                    boton_primario("SOLO SIN PO", ft.Icons.INVENTORY_2_OUTLINED, filtrar_solo_sin_po_hist, "#D97706"),
-                                    boton_primario("FILTRAR", ft.Icons.SEARCH_ROUNDED, cargar_historico_recepciones, ACCENT_TEAL),
-                                    boton_primario("LIMPIAR", ft.Icons.FILTER_ALT_OFF_OUTLINED, limpiar_filtros_historico, "#475569"),
-                                ],
-                                spacing=8,
-                                wrap=True,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=4),
-                    ft.Row(
-                        [
-                            ft.Row(
-                                [
-                                    boton_primario("MARCAR TODOS", ft.Icons.CHECK_BOX_OUTLINED, lambda e: marcar_desmarcar_hist(True), "#334155", height_val=28),
-                                    boton_primario("DESMARCAR TODOS", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED, lambda e: marcar_desmarcar_hist(False), "#475569", height_val=28),
-                                ],
-                                spacing=6,
-                            ),
-                            ft.Row(
-                                [
-                                    boton_primario("IMPRIMIR LPNs MARCADOS (15x10)", ft.Icons.PRINT_ROUNDED, imprimir_lpns_seleccionados_hist, "#4F46E5", height_val=30),
-                                    boton_primario("BAJAR ACTA PDF (MARCADOS)", ft.Icons.PICTURE_AS_PDF_OUTLINED, descargar_pdf_historico_filtrado, ACCENT_TEAL, height_val=30),
-                                    boton_primario("BAJAR EXCEL (MARCADOS)", ft.Icons.TABLE_VIEW_OUTLINED, exportar_excel_seleccionados_hist, ACCENT_BLUE, height_val=30),
-                                ],
-                                spacing=8,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Text("DESGLOSE RÁPIDO POR DÍA DE RECEPCIÓN Y N° DE OC/PO (CLIC PARA FILTRAR DÍA):", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
+        # ---------- PANTALLA 2: HISTORIAL ----------
+        dd_fecha_hist_rec.width = 190
+        txt_fecha_hist_rec.width = 150
+        txt_buscar_hist_rec.width = 220
+        txt_buscar_hist_rec.label = "Buscar LPN, SKU, lote u OC"
+        tabla_hist_ui = ui_tabla(tabla_historico_recepciones, 440)
+
+        subvista_inb_consultas = ft.Column([
+            ui_tarjeta(
+                ft.Column([
+                    ft.Row([
+                        dd_fecha_hist_rec,
+                        txt_fecha_hist_rec,
+                        txt_buscar_hist_rec,
+                        ui_boton("Buscar", ft.Icons.SEARCH_ROUNDED, cargar_historico_recepciones, "primario"),
+                        ui_boton("Solo sin OC", ft.Icons.INVENTORY_2_OUTLINED, filtrar_solo_sin_po_hist, "secundario"),
+                        ui_boton("Limpiar", ft.Icons.FILTER_ALT_OFF_OUTLINED, limpiar_filtros_historico, "texto"),
+                    ], spacing=8, wrap=True, run_spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Text("Recepciones por día y OC (clic para filtrar ese día):", size=11, color=UI["texto_2"]),
                     fila_resumen_dias_hist,
-                    ft.Divider(color=BORDER_COLOR, height=4),
-                    cont_tabla_hist_rec,
-                ],
-                spacing=8,
-            )
-        )
+                    ft.Row([
+                        ft.Row([
+                            ui_boton("Marcar todo", ft.Icons.CHECK_BOX_OUTLINED, lambda e: marcar_desmarcar_hist(True), "texto"),
+                            ui_boton("Desmarcar", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED, lambda e: marcar_desmarcar_hist(False), "texto"),
+                        ], spacing=4),
+                        ui_menu("Con los marcados", ft.Icons.CHECKLIST_ROUNDED, [
+                            ("Imprimir etiquetas LPN (15x10)", ft.Icons.PRINT_ROUNDED, imprimir_lpns_seleccionados_hist),
+                            ("Acta de recepción (PDF)", ft.Icons.PICTURE_AS_PDF_OUTLINED, descargar_pdf_historico_filtrado),
+                            ("Exportar a Excel", ft.Icons.TABLE_VIEW_OUTLINED, exportar_excel_seleccionados_hist),
+                        ]),
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True, run_spacing=8),
+                    tabla_hist_ui,
+                ], spacing=12, tight=True),
+                titulo="Historial de recepciones",
+                subtitulo="Consulte por día u OC, marque registros y reimprima etiquetas o documentos",
+                icono=ft.Icons.MANAGE_SEARCH_ROUNDED,
+            ),
+        ], spacing=12)
 
-        # PANEL 3: Aseguramiento de Calidad (QA)
-        subvista_inb_qa = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Text("3. ASEGURAMIENTO DE CALIDAD (QA): BLOQUEO Y LIBERACIÓN DE LOTES", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Divider(color=BORDER_COLOR, height=1),
-                    ft.Row(
-                        [
-                            dd_qa_po_base,
-                            dd_qa_lpn,
-                            dd_qa_estado,
-                            boton_primario("APLICAR A LPN", ft.Icons.VERIFIED_USER_OUTLINED, actualizar_dictamen_qa_lpn, ACCENT_BLUE),
-                            boton_primario("LIBERAR TODA LA OC", ft.Icons.DONE_ALL_ROUNDED, aplicar_qa_masivo_toda_la_po, ACCENT_TEAL),
-                        ],
-                        wrap=True,
-                        spacing=8,
+        # ---------- PANTALLA 3: CALIDAD (QA) ----------
+        dd_qa_po_base.visible = False          # la OC se elige en la barra superior
+        dd_qa_lpn.label = "Pallet (LPN)"
+        dd_qa_estado.label = "Dictamen de calidad"
+        tabla_qa_ui = ui_tabla(tabla_qa_lotes_po, 380)
+
+        subvista_inb_qa = ft.Column([
+            ui_tarjeta(
+                ft.Column([
+                    ft.Row([
+                        dd_qa_po_base,
+                        dd_qa_lpn,
+                        dd_qa_estado,
+                        ui_boton("Aplicar al pallet", ft.Icons.VERIFIED_USER_OUTLINED, actualizar_dictamen_qa_lpn, "primario"),
+                    ], spacing=8, wrap=True, run_spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    tabla_qa_ui,
+                ], spacing=12, tight=True),
+                titulo="Control de calidad",
+                subtitulo="Bloquee o libere pallets de la OC activa. Un lote en cuarentena no puede ir a picking.",
+                icono=ft.Icons.VERIFIED_USER_OUTLINED,
+                acciones=[ui_boton("Liberar toda la OC", ft.Icons.DONE_ALL_ROUNDED, aplicar_qa_masivo_toda_la_po, "secundario")],
+            ),
+        ], spacing=12)
+
+        # ---------- PANTALLA 4: AJUSTES DE OC Y PALLETS ----------
+        dd_mod_po_base.visible = False         # la OC se elige en la barra superior
+        tabla_mod_ui = ui_tabla(tabla_mod_lpns, 320)
+
+        subvista_inb_modificacion = ft.Column([
+            ui_tarjeta(
+                ft.Row([
+                    dd_mod_po_base,
+                    dd_edit_sku_asn,
+                    txt_nuevo_sku_po,
+                    txt_edit_desc_po,
+                    txt_edit_cajas_esp,
+                    txt_edit_mult_esp,
+                    txt_edit_unid_esp,
+                    txt_edit_lote_sug,
+                    txt_edit_venc_sug,
+                ], spacing=8, wrap=True, run_spacing=10),
+                titulo="Líneas de la orden de compra",
+                subtitulo="Corrija cantidades, lote o vencimiento esperado, o agregue un SKU que no venía en la OC",
+                icono=ft.Icons.DESCRIPTION_OUTLINED,
+                acciones=[
+                    ui_boton("Eliminar línea", ft.Icons.DELETE_OUTLINE, eliminar_linea_po_seleccionada, "texto"),
+                    ui_boton("Guardar línea", ft.Icons.SAVE_OUTLINED, guardar_ajuste_linea_asn, "primario"),
+                ],
+            ),
+            ui_tarjeta(
+                ft.Column([
+                    ft.Row([
+                        dd_filtro_sku_mod_lpn,
+                        dd_edit_lpn_id,
+                        txt_buscar_lpn_mod,
+                        ui_boton("Buscar", ft.Icons.SEARCH_ROUNDED,
+                                 lambda ev: actualizar_tabla_y_selector_lpns(mantener_lpn_actual=False), "secundario"),
+                    ], spacing=8, wrap=True, run_spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    lbl_resumen_lista_lpns,
+                    ft.Container(
+                        padding=14, border_radius=8, bgcolor=UI["card_alt"], border=ft.Border.all(1, UI["borde"]),
+                        content=ft.Column([
+                            ft.Row([
+                                lbl_lpn_unitario_activo,
+                                ft.Row([
+                                    ui_boton("Eliminar", ft.Icons.DELETE_FOREVER_OUTLINED, eliminar_lpn_fisico, "texto"),
+                                    ui_boton("Reimprimir 15x10", ft.Icons.PRINT_OUTLINED,
+                                             lambda ev: reimprimir_desde_fila((txt_mod_lpn_cod.value or "").strip()), "secundario"),
+                                    ui_boton("Guardar pallet", ft.Icons.SAVE_AS_OUTLINED, guardar_modificacion_lpn_fisico, "primario"),
+                                ], spacing=8, wrap=True),
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True, run_spacing=8),
+                            ft.Row([
+                                txt_mod_lpn_cod, txt_mod_lpn_sku, txt_mod_lpn_cajas, txt_mod_lpn_mult,
+                                txt_mod_lpn_sueltas, txt_mod_lpn_totales, txt_mod_lpn_lote, txt_mod_lpn_venc, dd_mod_lpn_qa,
+                            ], spacing=8, wrap=True, run_spacing=10),
+                        ], spacing=10, tight=True),
                     ),
-                    ft.Divider(color=BORDER_COLOR, height=6),
-                    cont_tabla_qa_po,
-                ],
-                spacing=8,
-            )
-        )
+                    tabla_mod_ui,
+                ], spacing=12, tight=True),
+                titulo="Pallets (LPN) recibidos",
+                subtitulo="Filtre por SKU o busque un LPN; use 'Editar' en la tabla para cargarlo en el editor",
+                icono=ft.Icons.PALLET,
+            ),
+        ], spacing=12)
 
-        # PANEL 4: 4.1 Modificación de Líneas OC (Arriba) + 4.2 Modificación de Pallets Físicos con Tabla y Editor Unitario (Abajo)
-        subvista_inb_modificacion = ft.Column(
-            [
-                # 4.1 PRIMERO: MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color=ACCENT_CYAN, size=20),
-                                            ft.Text("4.1 MODIFICACIÓN DOCUMENTAL DE LÍNEAS DE LA ORDEN DE COMPRA (OC)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                                        ],
-                                        spacing=8,
-                                    ),
-                                    dd_mod_po_base,
-                                ],
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                wrap=True,
-                            ),
-                            ft.Divider(color=BORDER_COLOR, height=1),
-                            ft.Row(
-                                [
-                                    dd_edit_sku_asn,
-                                    txt_nuevo_sku_po,
-                                    txt_edit_desc_po,
-                                    txt_edit_cajas_esp,
-                                    txt_edit_mult_esp,
-                                    txt_edit_unid_esp,
-                                    txt_edit_lote_sug,
-                                    txt_edit_venc_sug,
-                                    boton_primario("GUARDAR EN OC", ft.Icons.SAVE_OUTLINED, guardar_ajuste_linea_asn, ACCENT_TEAL),
-                                    boton_primario("ELIMINAR LÍNEA", ft.Icons.DELETE_OUTLINE, eliminar_linea_po_seleccionada, "#B91C1C"),
-                                ],
-                                wrap=True,
-                                spacing=8,
-                            ),
-                        ],
-                        spacing=8,
-                    )
-                ),
+        lbl_resumen_lista_lpns.color = UI["texto_2"]
+        lbl_resumen_lista_lpns.weight = ft.FontWeight.W_500
+        lbl_lpn_unitario_activo.size = 13
+        lbl_lpn_unitario_activo.weight = ft.FontWeight.W_600
 
-                # 4.2 ABAJO: MODIFICACIÓN DE PALLETS FÍSICOS (ELEGIR ENTRE SKU O LPN + EDITOR UNITARIO + TABLA DE LPNs)
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Column(
-                                        [
-                                            ft.Row(
-                                                [
-                                                    ft.Icon(ft.Icons.PALLET, color=ACCENT_CYAN, size=20),
-                                                    ft.Text("4.2 MODIFICACIÓN DE PALLETS FÍSICOS (LPNs) INGRESADOS", size=13, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
-                                                ],
-                                                spacing=8,
-                                            ),
-                                            lbl_resumen_lista_lpns,
-                                        ],
-                                        spacing=2,
-                                    ),
-                                    ft.Row(
-                                        [
-                                            dd_filtro_sku_mod_lpn,
-                                            dd_edit_lpn_id,
-                                            txt_buscar_lpn_mod,
-                                            boton_primario(
-                                                "LLAMAR LPNs",
-                                                ft.Icons.SEARCH_ROUNDED,
-                                                lambda ev: actualizar_tabla_y_selector_lpns(mantener_lpn_actual=False),
-                                                ACCENT_BLUE,
-                                                height_val=34,
-                                            ),
-                                            boton_primario(
-                                                "VER TODOS",
-                                                ft.Icons.LIST_ALT_ROUNDED,
-                                                lambda ev: (
-                                                    setattr(dd_filtro_sku_mod_lpn, "value", "TODOS"),
-                                                    setattr(txt_buscar_lpn_mod, "value", ""),
-                                                    actualizar_tabla_y_selector_lpns(mantener_lpn_actual=False),
-                                                ),
-                                                "#475569",
-                                                height_val=34,
-                                            ),
-                                        ],
-                                        spacing=8,
-                                        wrap=True,
-                                    ),
-                                ],
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                wrap=True,
-                            ),
-                            ft.Divider(color=BORDER_COLOR, height=4),
-
-                            # BLOQUE DE EDICIÓN DE LPN UNITARIO
-                            ft.Container(
-                                padding=12,
-                                bgcolor="#181E20",
-                                border_radius=8,
-                                border=ft.Border.all(1.2, ACCENT_CYAN),
-                                content=ft.Column(
-                                    [
-                                        lbl_lpn_unitario_activo,
-                                        ft.Row(
-                                            [
-                                                txt_mod_lpn_cod,
-                                                txt_mod_lpn_sku,
-                                                txt_mod_lpn_cajas,
-                                                txt_mod_lpn_mult,
-                                                txt_mod_lpn_sueltas,
-                                                txt_mod_lpn_totales,
-                                                txt_mod_lpn_lote,
-                                                txt_mod_lpn_venc,
-                                                dd_mod_lpn_qa,
-                                                boton_primario(
-                                                    "GUARDAR CAMBIOS EN LPN",
-                                                    ft.Icons.SAVE_AS_OUTLINED,
-                                                    guardar_modificacion_lpn_fisico,
-                                                    "#047857",
-                                                    height_val=34,
-                                                ),
-                                                boton_primario(
-                                                    "IMPRIMIR 15x10",
-                                                    ft.Icons.PRINT_OUTLINED,
-                                                    lambda ev: reimprimir_desde_fila((txt_mod_lpn_cod.value or "").strip()),
-                                                    ACCENT_TEAL,
-                                                    height_val=34,
-                                                ),
-                                                boton_primario(
-                                                    "ELIMINAR LPN",
-                                                    ft.Icons.DELETE_FOREVER_OUTLINED,
-                                                    eliminar_lpn_fisico,
-                                                    "#B91C1C",
-                                                    height_val=34,
-                                                ),
-                                            ],
-                                            wrap=True,
-                                            spacing=8,
-                                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                        ),
-                                    ],
-                                    spacing=8,
-                                ),
-                            ),
-
-                            ft.Text(
-                                "TABLA DE PALLETS (LPNs) DEL SKU SELECCIONADO (Haga clic en 'EDITAR' en cualquier fila para cargarla arriba):",
-                                size=11,
-                                weight=ft.FontWeight.BOLD,
-                                color=TEXT_MUTED,
-                            ),
-                            cont_tabla_mod_lpns,
-                        ],
-                        spacing=8,
-                    )
-                ),
-            ],
-            spacing=10,
-        )
-
+        # ---------- Armado del módulo ----------
         contenedor_subvista_inbound = ft.Container(content=subvista_inb_recepcion)
-
-        col_inbound = ft.Column([contenedor_subvista_inbound], spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+        col_inbound = ft.Column([barra_oc, contenedor_subvista_inbound], spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
 
         self.vista = ft.Container(padding=14, bgcolor=BG_MODULO, content=col_inbound, expand=True)
         self.contenedor = contenedor_subvista_inbound
-        self.sub_recepcion = subvista_inb_recepcion
-        self.sub_consultas = subvista_inb_consultas
-        self.sub_qa = subvista_inb_qa
-        self.sub_modificacion = subvista_inb_modificacion
+        self.barra_oc = barra_oc
+        self.subvistas = [
+            subvista_inb_recepcion,
+            subvista_inb_kpi,
+            subvista_inb_consultas,
+            subvista_inb_qa,
+            subvista_inb_modificacion,
+        ]
         self.cargar_lista_asns_func = cargar_lista_asns
         self.cargar_historico_recepciones_func = cargar_historico_recepciones
         self.auditar_asn_seleccionado_func = auditar_asn_seleccionado
+        self.dd_asn = dd_asn
 
     def cargar_lista_asns(self):
         self.cargar_lista_asns_func()
 
     def sel_sub_inb(self, idx: int):
-        self.contenedor.content = [self.sub_recepcion, self.sub_consultas, self.sub_qa, self.sub_modificacion][idx]
-        if idx == 1:
+        """0 Recepción y validación · 1 Indicadores · 2 Historial · 3 Calidad · 4 Ajustes"""
+        idx = idx if 0 <= idx < len(self.subvistas) else 0
+        self.contenedor.content = self.subvistas[idx]
+        self.barra_oc.visible = idx != 2
+        if idx == 2:
             self.cargar_historico_recepciones_func()
-        elif idx in (2, 3):
+        elif idx != 0 and self.dd_asn.value:
             self.auditar_asn_seleccionado_func()
-        self.page.update()
