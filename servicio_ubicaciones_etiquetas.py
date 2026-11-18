@@ -97,7 +97,7 @@ def generar_pdfs_ubicaciones(ubicaciones, carpeta_salida: str, solo_pasillo=None
             pdf.add_page()
             qr = _qr(u.codigo_ubicacion, qr_dir)
             pdf.set_font("Helvetica", "B", 27)
-            pdf.set_xy(5, 14); pdf.cell(108, 12, "UBICACION A PISO", align="C")
+            pdf.set_xy(5, 14); pdf.cell(108, 12, "UBICACION", align="C")
             pdf.set_font("Helvetica", "B", 43)
             pdf.set_xy(5, 44); pdf.cell(108, 18, u.codigo_ubicacion, align="C")
             pdf.line(115, 7, 115, 79)
