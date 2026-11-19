@@ -500,11 +500,22 @@ class PutawayModulo:
 
             stock_en_racks = sorted(ubicados_map.values(), key=lambda x: (x["ubicacion"], x["lpn"]))
 
+            # Pendientes de ubicar según el servidor (excluye recepciones cerradas/dadas de baja
+            # y pallets ya almacenados que después se consumieron). Sin el script 21: regla local.
+            lpns_anden_srv = None
+            try:
+                lpns_anden_srv = {str(x.get("lpn") or "").strip().upper()
+                                  for x in (supabase.rpc("wms_lpns_en_anden", {"p_bodega": bodega_act}).execute().data or [])}
+            except Exception:
+                lpns_anden_srv = None
+
             anden_temp = []
             vistos_anden = set()
             for r in filas_recepcion:
                 lpn_r = str(r.get("lpn") or "").strip().upper()
                 if not lpn_r or lpn_r in lpns_ubicados_set or lpn_r in vistos_anden:
+                    continue
+                if lpns_anden_srv is not None and lpn_r not in lpns_anden_srv:
                     continue
                 vistos_anden.add(lpn_r)
                 sku_r = str(r.get("sku") or "-").strip().upper()
@@ -530,6 +541,75 @@ class PutawayModulo:
                 bgcolor=ft.Colors.with_opacity(0.14, color), border=ft.Border.all(1, ft.Colors.with_opacity(0.5, color)),
                 content=ft.Text(texto, size=11, weight=ft.FontWeight.W_600, color=color),
             )
+
+        # --- BAJA DE PALLET (solo administradores) ---
+        def es_administrador() -> bool:
+            return "ADMIN" in str(getattr(self.page, "rol_actual", "") or "").upper()
+
+        MOTIVOS_BAJA = ["Despachado directo a cliente", "Pallet no existe en bodega", "Recepción duplicada", "Otro"]
+
+        def abrir_baja_pallet(it: dict):
+            if not es_administrador():
+                notificar("Solo un administrador puede dar de baja un pallet.", "#B91C1C")
+                return
+            es_anden = it["rack"] == "RECEPCION"
+            donde = "el andén" if es_anden else it["ubicacion"]
+            dd_motivo = dropdown_dark("Motivo", width=420, value=MOTIVOS_BAJA[0],
+                                      options=[ft.DropdownOption(key=m, text=m) for m in MOTIVOS_BAJA])
+            txt_detalle = texto_dark("Detalle (N° de OV, guía, cliente…)", width=420)
+            lbl_error = ft.Text("", size=12, color="#F87171")
+
+            def cerrar(e=None):
+                try:
+                    self.page.pop_dialog()
+                except Exception:
+                    pass
+
+            def confirmar(e=None):
+                motivo = str(dd_motivo.value or "").strip()
+                detalle = (txt_detalle.value or "").strip()
+                if motivo == "Otro" and len(detalle) < 4:
+                    lbl_error.value = "Escriba el detalle del motivo."
+                    self.page.update()
+                    return
+                texto_motivo = motivo + (f" · {detalle}" if detalle else "")
+                try:
+                    r = supabase.rpc("wms_eliminar_pallet", {
+                        "p_bodega": obtener_bodega_actual(), "p_lpn": it["lpn"],
+                        "p_ubicacion": "ANDEN" if es_anden else it["ubicacion"],
+                        "p_motivo": texto_motivo,
+                        "p_usuario": str(getattr(self.page, "usuario_actual", "") or ""),
+                    }).execute().data or {}
+                except Exception as ex:
+                    msg = str(getattr(ex, "message", None) or ex)
+                    if "wms_eliminar_pallet" in msg and ("not find" in msg or "does not exist" in msg):
+                        msg = "falta ejecutar 21_baja_pallet.sql en Supabase"
+                    lbl_error.value = f"No se dio de baja: {msg.replace('WMS: ', '')}"
+                    self.page.update()
+                    return
+                cerrar()
+                un = int(r.get("unidades") or 0)
+                notificar(f"Pallet {it['lpn']} dado de baja de {donde} ({un:,} UN).".replace(",", "."), "#047857")
+                cargar_inventario_ubicaciones()
+
+            dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"Dar de baja {it['lpn']}", weight=ft.FontWeight.BOLD),
+                content=ft.Container(width=440, content=ft.Column([
+                    ft.Text(f"{it['sku']} · {it['descripcion'][:40]}", size=12.5),
+                    ft.Text(f"{it['unidades']:,} UN · lote {it['lote']} · en {donde}".replace(",", "."), size=12.5),
+                    ft.Text("El pallet sale del stock" + (" pendiente del andén" if es_anden else " de esa ubicación")
+                            + ". Queda registrado en el kardex (BAJA_PALLET) con su motivo y su usuario.",
+                            size=11.5, color=UI["texto_2"]),
+                    dd_motivo, txt_detalle, lbl_error,
+                ], spacing=10, tight=True)),
+                actions=[
+                    ui_boton("Cancelar", None, cerrar, "texto"),
+                    ui_boton("Dar de baja", ft.Icons.DELETE_FOREVER_OUTLINED, confirmar, "peligro"),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+            self.page.show_dialog(dlg)
 
         def crear_fila_tabla_stock(it: dict) -> ft.DataRow:
             es_anden = it["rack"] == "RECEPCION"
@@ -558,9 +638,15 @@ class PutawayModulo:
                 ft.DataCell(ft.Text(it["lote"], size=12, color=UI["texto"])),
                 ft.DataCell(ft.Text(it["vencimiento"], size=12, color=UI["texto"])),
                 ft.DataCell(qa),
-                ft.DataCell(ft.IconButton(icon=ft.Icons.PRINT_OUTLINED, icon_size=18, icon_color=UI["acento"],
-                                          tooltip="Reimprimir etiqueta LPN 15x10",
-                                          on_click=lambda ev, cod=lpn_c: reimprimir_desde_fila(cod))),
+                ft.DataCell(ft.Row([
+                    ft.IconButton(icon=ft.Icons.PRINT_OUTLINED, icon_size=18, icon_color=UI["acento"],
+                                  tooltip="Reimprimir etiqueta LPN 15x10",
+                                  on_click=lambda ev, cod=lpn_c: reimprimir_desde_fila(cod)),
+                    *([ft.IconButton(icon=ft.Icons.DELETE_FOREVER_OUTLINED, icon_size=18, icon_color=UI["peligro"],
+                                     tooltip="Dar de baja este pallet (solo administradores)",
+                                     on_click=lambda ev, item=it: abrir_baja_pallet(item))]
+                      if es_administrador() and lpn_c else []),
+                ], spacing=0, tight=True)),
             ])
 
         def crear_boton_zona_rack(
