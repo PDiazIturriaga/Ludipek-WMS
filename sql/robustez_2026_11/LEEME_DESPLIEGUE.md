@@ -22,6 +22,7 @@ Cada script es una transacción (si falla, no cambia nada) y se puede volver a e
 | 9 | `09_tareas_conteo.sql` | Tareas de conteo (pasillo, vacías de un pasillo o SKU) asignadas desde el PC → el operador las ve en su celular con su avance. Convierte las asignaciones antiguas "RACK A" al formato nuevo. |
 | 10 | `10_packing_faltantes.sql` | Packing: mensaje claro si se empaca más de lo pickeado y opción de **cerrar con faltante** (con motivo). El faltante queda en la orden, en el historial y en el kardex como FALTANTE_PACKING; el PC lo muestra en rojo. |
 | 11 | `11_mesas_packing.sql` | Mesas de packing (MESA 1–6): el picker indica en qué mesa deja el pedido; el packer escanea la mesa y ve sus OV; el PC muestra qué hay en cada mesa. |
+| 12 | `12_despacho_y_version.sql` | Tabla `wms_despacho_ov` (bultos, empaque, comuna, peso, faltante y mesa de cada OV empacada) y paso automático a Ruteo al cerrar el packing. `wms_config.version_minima_rf`: la app del celular no deja entrar a versiones antiguas. |
 | — | `07b_diagnostico_ov.sql` | Solo lectura: radiografía de una orden (cabecera, líneas, kardex, packing, historial). Cambiar el número en la primera línea. |
 
 Después de la Fase A: ejecutar de nuevo `00_diagnostico.sql`. Lo que quede son casos para conteo cíclico (filas duplicadas, LPN en dos ubicaciones).
@@ -48,3 +49,8 @@ select * from wms_auditoria_inventario where origen = 'DIRECTO' order by ocurrid
 -- Picking sin stock registrado (programar conteo cíclico)
 select * from historial_movimientos where tipo_movimiento like 'SALIDA_PICKING_SIN_STOCK%' order by fecha desc;
 ```
+
+## Publicar una versión nueva de la app del celular
+1. En `main.dart`, subir `kVersionApp` (ej. `2026.11.20`) y publicar en Render.
+2. En Supabase: `update wms_config set valor = '2026.11.20' where clave = 'version_minima_rf';`
+3. Los celulares con la versión anterior ven el aviso y no pueden iniciar sesión hasta recargar.

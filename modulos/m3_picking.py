@@ -986,6 +986,24 @@ class PickingModulo:
             except Exception:
                 pass
 
+            # Datos de despacho guardados por el cierre de packing (script 12): mandan sobre canal_venta y el JSON local
+            try:
+                ids_cargados = list(mapa_id_a_ov_base.keys())
+                for dsp in (leer_por_lista("wms_despacho_ov", "orden_id", ids_cargados) if ids_cargados else []):
+                    ov_d = mapa_id_a_ov_base.get(dsp.get("orden_id"))
+                    if ov_d and ov_d in agrupado_por_ov:
+                        reg = agrupado_por_ov[ov_d]
+                        reg["bultos"] = int(dsp.get("bultos") or reg.get("bultos") or 1)
+                        reg["tipo_empaque"] = str(dsp.get("tipo_empaque") or reg.get("tipo_empaque") or "BULTO").upper()
+                        reg["comuna"] = str(dsp.get("comuna") or reg.get("comuna") or "SANTIAGO").upper()
+                        if dsp.get("lpn"):
+                            reg["lpn"] = str(dsp.get("lpn")).upper()
+                        reg["faltante"] = int(dsp.get("faltante_un") or 0)
+                        reg["motivo_faltante"] = str(dsp.get("motivo_faltante") or "")
+                        reg["peso_kg"] = dsp.get("peso_real_kg") or dsp.get("peso_esperado_kg")
+            except Exception as ex_dsp:
+                print(f"[WARN] wms_despacho_ov (¿script 12 ejecutado?): {ex_dsp}")
+
             mapa_lineas_pl_por_ov = {}
             mapa_pallets_pl_por_ov = {}
             try:

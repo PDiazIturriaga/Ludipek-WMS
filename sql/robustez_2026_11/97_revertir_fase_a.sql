@@ -28,6 +28,8 @@ drop function if exists public.wms_almacenar_lpn(text, text, text, text);
 drop function if exists public.wms_mover_a_picking(bigint, integer, text, text);
 drop function if exists public.wms_salida_picking(text, text, text, integer, text, text, text);
 drop function if exists public.wms_registrar_conteo(text, text, text, text, text, text, integer, text, bigint, text);
+drop function if exists public.wms_version_minima();
+drop function if exists public.wms_despacho_de_orden(bigint);
 drop function if exists public.wms_crear_tarea_conteo(text, text, text, text, text, text);
 drop function if exists public.wms_tareas_conteo(text, text, boolean);
 drop function if exists public.wms_actualizar_tarea_conteo(bigint, text, text);

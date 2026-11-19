@@ -612,14 +612,17 @@ class RuteoFacturacionModulo:
                     if oid is not None:
                         det_por_id.setdefault(oid, []).append(d)
 
-                # 3. Leer metadatos de bultos y comunas guardados en Packing
+                # 3. Datos de despacho del cierre de packing (tabla wms_despacho_ov, script 12)
                 meta_packing_local = {}
-                if os.path.exists("config_despacho_packing.json"):
-                    try:
-                        with open("config_despacho_packing.json", "r", encoding="utf-8") as f_mp:
-                            meta_packing_local = json.load(f_mp)
-                    except Exception:
-                        pass
+                try:
+                    for dsp in leer_por_lista("wms_despacho_ov", "orden_id", [o.get("id") for o in ovs_lista]):
+                        num_d = str(dsp.get("numero_ov") or "").strip().upper()
+                        meta_packing_local[num_d] = {
+                            "comuna": dsp.get("comuna"), "tipo_empaque": dsp.get("tipo_empaque"), "bultos": dsp.get("bultos"),
+                            "peso_kg": dsp.get("peso_real_kg") or dsp.get("peso_esperado_kg"),
+                        }
+                except Exception as ex_dsp:
+                    print(f"[WARN] wms_despacho_ov: {ex_dsp}")
 
                 res_existentes = supabase.table("wms_despacho_rutas").select("numero_ov").execute()
                 ovs_ya_en_rutas = {str(x.get("numero_ov") or "").strip().upper() for x in (res_existentes.data or [])}
@@ -674,7 +677,7 @@ class RuteoFacturacionModulo:
                         "zona": resolver_zona_por_comuna(comuna_str),
                         "ejecutivo_ventas": str(ov_row.get("ejecutivo") or ""),
                         "monto_neto": float(ov_row.get("monto_neto") or 0),
-                        "peso_kg": round(peso_total_ov, 2),
+                        "peso_kg": round(float(meta_pk.get("peso_kg") or peso_total_ov), 2),
                         "tipo_empaque": tipo_emp,
                         "cantidad_bultos": cant_b,
                         "etiqueta_bultos": f"{pref_b} {cant_b}",
