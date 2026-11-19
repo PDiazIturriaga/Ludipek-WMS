@@ -283,10 +283,12 @@ begin
   -- 13) SKU con stock y sin peso en la maestra (estado): el packing no puede estimar el peso
   return query
   with x as (
-    select m.sku, m.descripcion descr, sum(i.cantidad_unidades) un
-    from maestra_sku m join bodega_inventario_ubicacion i on i.sku = m.sku and i.bodega = v_bodega and i.cantidad_unidades > 0
-    where coalesce(m.peso_gr, 0) <= 0 and coalesce(m.peso_kg, 0) <= 0
-    group by m.sku, m.descripcion
+    select i.sku, max(m.descripcion) descr, sum(i.cantidad_unidades) un
+    from bodega_inventario_ubicacion i
+    join (select sku, max(descripcion) descripcion from maestra_sku
+           group by sku having max(coalesce(peso_gr, 0)) <= 0 and max(coalesce(peso_kg, 0)) <= 0) m on m.sku = i.sku
+    where i.bodega = v_bodega and i.cantidad_unidades > 0
+    group by i.sku
   )
   select 'SKU_SIN_PESO', 'BAJA', 'Productos con stock y sin peso en la maestra',
          'Sin peso el packing no puede validar los bultos ni Ruteo calcular la carga.',

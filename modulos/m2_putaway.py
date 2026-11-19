@@ -34,6 +34,7 @@ class PutawayModulo:
         stock_en_racks = []
         mapa_descripciones_sku = {}
         mapa_multiplos_sku = {}
+        mapa_picking_fijo = {}   # sku -> ubicación de picking asignada (wms_ubicacion_picking_sku)
         zona_seleccionada = "TODOS_RACKS"
         ubicaciones_bodega = []          # códigos de bodega_ubicaciones (para ocupación y gemelo 3D)
         ultima_bodega_sincronizada = None
@@ -361,7 +362,7 @@ class PutawayModulo:
             }
 
         def sincronizar_datos_supabase():
-            nonlocal lpns_en_anden, stock_en_racks, mapa_descripciones_sku, mapa_multiplos_sku, ultima_bodega_sincronizada, ubicaciones_bodega
+            nonlocal lpns_en_anden, stock_en_racks, mapa_descripciones_sku, mapa_multiplos_sku, ultima_bodega_sincronizada, ubicaciones_bodega, mapa_picking_fijo
             bodega_act = obtener_bodega_actual()
             try:
                 ubicaciones_bodega = sorted({
@@ -389,6 +390,12 @@ class PutawayModulo:
                             pass
             except Exception:
                 mapa_descripciones_sku = {}
+            try:
+                filas_pf = supabase.table("wms_ubicacion_picking_sku").select("sku, ubicacion").eq(
+                    "bodega", obtener_bodega_activa(self.page)).execute().data or []
+                mapa_picking_fijo = {str(f.get("sku") or "").upper(): str(f.get("ubicacion") or "").upper() for f in filas_pf}
+            except Exception:
+                mapa_picking_fijo = {}
                 mapa_multiplos_sku = {}
 
             mapa_rec_por_lpn = {}
@@ -862,7 +869,9 @@ class PutawayModulo:
                                 ft.DataCell(ft.Text(f"{d_n['res']} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
                                 ft.DataCell(ft.Text(f"{cand['lpn']}{venc_cand_txt}", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                                 ft.DataCell(ft.Text(cand["ubicacion"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                                ft.DataCell(ft.Text("Bajar con el celular", size=11.5, color=UI["texto_3"])),
+                                ft.DataCell(ft.Text(f"Bajar a {mapa_picking_fijo[sk]}" if mapa_picking_fijo.get(sk) else "Sin picking asignado",
+                                                    size=11.5, weight=ft.FontWeight.BOLD if mapa_picking_fijo.get(sk) else None,
+                                                    color="#34D399" if mapa_picking_fijo.get(sk) else UI["texto_3"])),
                             ]
                         )
                     )

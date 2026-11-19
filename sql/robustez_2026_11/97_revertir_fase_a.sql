@@ -35,6 +35,17 @@ drop function if exists public.wms_traslados_ccp(boolean);
 drop function if exists public.wms_traslado_lineas_despachadas(bigint);
 drop function if exists public.wms_alertas_operacion(text);
 drop function if exists public.wms_marcar_alerta_revisada(text, text[], text, text, text);
+drop function if exists public.wms_sugerir_ubicacion_lpn(text, text);
+drop function if exists public.wms_asignar_picking_fijo(text, text, text, text);
+drop function if exists public.wms_picking_fijo_skus(text, text[]);
+drop function if exists public.wms_picking_fijo_sku(text, text);
+-- La tabla wms_ubicacion_picking_sku se conserva (asignaciones de picking).
+drop function if exists public.wms_asignar_ovs_por_equipo(text, text);
+drop function if exists public.wms_mover_usuario_equipo(text, text, text);
+drop function if exists public.wms_ov_sin_iniciar(bigint);
+drop function if exists public.wms_tipo_picking_ov(text, text);
+drop function if exists public.wms_multiplo_sku(text, text, text);
+-- La corrección de unidades queda en wms_respaldo_unidades_cajas (columna antes) por si hay que deshacerla.
 drop function if exists public.wms_mis_almacenamientos(text, text, integer);
 drop function if exists public.wms_crear_reporte_operacion(text, text, text, text, text, text, text, text);
 drop function if exists public.wms_eliminar_stock_duplicado(bigint, text, text);

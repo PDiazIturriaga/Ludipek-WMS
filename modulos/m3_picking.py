@@ -150,30 +150,8 @@ class PickingModulo:
                         ultimo = max(ultimo, int(sufijo))
                 num_ot = f"{prefijo_ot}{ultimo + 1:04d}"
 
-                # Asignación automática al operador RF activo con menor carga en la bodega.
-                operador_elegido = "SIN ASIGNAR"
-                carga = {}
-                try:
-                    usuarios = supabase.table("wms_usuarios").select("*").eq("activo", True).execute()
-                    for u in (usuarios.data or []):
-                        codigo = str(u.get("usuario") or "").strip().upper()
-                        bodega_u = str(u.get("bodega") or "").strip().upper()
-                        if codigo and (coincide_bodega(u, bodega_act) or bodega_u in ("AMBAS", "TODAS")):
-                            carga[codigo] = 0
-                    pendientes = (supabase.table("netsuite_ordenes_venta")
-                                  .select("operador_asignado,bodega")
-                                  .eq("estado_ns", "PENDIENTE_PICKING")
-                                  .execute())
-                    for orden in (pendientes.data or []):
-                        if coincide_bodega(orden, bodega_act):
-                            op = str(orden.get("operador_asignado") or "").strip().upper()
-                            if op in carga:
-                                carga[op] += 1
-                    if carga:
-                        operador_elegido = min(carga, key=carga.get)
-                except Exception:
-                    # La OT sigue visible para asignación manual aunque no se pueda balancear.
-                    pass
+                # Sin operador: el supervisor reparte la cola desde Monitor de usuarios (equipos de trabajo).
+                operador_elegido = None
 
                 payload_ot = {
                     "bodega": bodega_act,
@@ -2136,35 +2114,6 @@ class PickingModulo:
             ovs_liberadas_set = set()
             bodega_act = obtener_bodega_activa(self.page)
 
-            operadores_disponibles = []
-            carga_por_operador = {}
-            try:
-                res_u = supabase.table("wms_usuarios").select("*").eq("activo", True).execute()
-                for u in (res_u.data or []):
-                    rol_u = str(u.get("rol") or "OPERADOR").strip().upper()
-                    bod_u = str(u.get("bodega") or "").strip().upper()
-                    cod_u = str(u.get("usuario") or "").strip().upper()
-                    if not cod_u:
-                        continue
-                    if coincide_bodega(u, bodega_act) or "AMBAS" in bod_u or "TODAS" in bod_u:
-                        operadores_disponibles.append(cod_u)
-                        carga_por_operador[cod_u] = 0
-
-                res_pend = (
-                    supabase.table("netsuite_ordenes_venta")
-                    .select("operador_asignado, estado_ns, bodega")
-                    .eq("estado_ns", "PENDIENTE_PICKING")
-                    .execute()
-                )
-                for p in (res_pend.data or []):
-                    if not coincide_bodega(p, bodega_act):
-                        continue
-                    op_act = str(p.get("operador_asignado") or "").strip().upper()
-                    if op_act in carga_por_operador:
-                        carga_por_operador[op_act] += 1
-            except Exception:
-                pass
-
             for item in seleccionadas:
                 es_fa = bool(item.get("es_farmacia"))
                 ov_final = str(item["ov"]).strip()
@@ -2175,11 +2124,9 @@ class PickingModulo:
                 canal_str = "FARMACIA (-FA)" if es_fa else "ESTANDAR"
                 id_ext_str = str(item.get("id_externo_ns") or item.get("ov_original") or ov_final).strip()
 
-                operador_elegido = "SIN ASIGNAR"
-                if operadores_disponibles:
-                    operadores_disponibles.sort(key=lambda op: carga_por_operador.get(op, 0))
-                    operador_elegido = operadores_disponibles[0]
-                    carga_por_operador[operador_elegido] = carga_por_operador.get(operador_elegido, 0) + 1
+                # Generar olas ya NO asigna operador: la OV queda sin asignar hasta que el supervisor
+                # presione "Cargar OV a los equipos" en Monitor de usuarios (por equipo Farmacia / Picking).
+                operador_elegido = None
 
                 payload_ov = {
                     "bodega": bodega_act,

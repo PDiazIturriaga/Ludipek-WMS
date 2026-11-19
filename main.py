@@ -328,56 +328,118 @@ class MonitorUsuariosColaModulo:
                 notificar_global(self.page, f"Error asignando OV: {ex}", "#B91C1C")
 
         def auto_asignar_todas_las_ovs_en_cola(e=None):
-            """Reparte automáticamente todas las OVs en PENDIENTE_PICKING entre los operadores activos de la bodega."""
+            """Reparte las OV sin asignar SOLO entre los usuarios de los equipos Farmacia y Picking (wms_asignar_ovs_por_equipo)."""
             bodega_act = obtener_bodega_activa(self.page)
             try:
-                res_u = supabase.table("wms_usuarios").select("*").eq("activo", True).execute()
-                operadores = [
-                    str(u.get("usuario") or "").strip().upper()
-                    for u in (res_u.data or [])
-                    if str(u.get("usuario") or "").strip()
-                    and (
-                        coincide_bodega(u, bodega_act)
-                        or "AMBAS" in str(u.get("bodega") or "").upper()
-                        or "TODAS" in str(u.get("bodega") or "").upper()
-                    )
-                ]
-                if not operadores:
-                    notificar_global(self.page, "No hay operadores activos en esta bodega para asignar.", "#D97706")
-                    return
-
-                res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=False).limit(400).execute()
-                carga_op = {op: 0 for op in operadores}
-                ovs_sin_asignar = []
-
-                for r in (res_ov.data or []):
-                    if not coincide_bodega(r, bodega_act):
-                        continue
-                    est = str(r.get("estado_ns") or r.get("estado") or "PENDIENTE_PICKING").strip().upper()
-                    if est != "PENDIENTE_PICKING":
-                        continue
-                    op_actual = str(r.get("operador_asignado") or "").strip().upper()
-                    if op_actual in carga_op:
-                        carga_op[op_actual] += 1
-                    else:
-                        ovs_sin_asignar.append(r)
-
-                if not ovs_sin_asignar:
-                    notificar_global(self.page, "Todas las OVs en cola ya están asignadas a un operador.", "#0284C7")
-                    return
-
-                asignadas_cnt = 0
-                for ov_r in ovs_sin_asignar:
-                    operadores.sort(key=lambda x: carga_op.get(x, 0))
-                    elegido = operadores[0]
-                    supabase.table("netsuite_ordenes_venta").update({"operador_asignado": elegido}).eq("id", ov_r["id"]).execute()
-                    carga_op[elegido] += 1
-                    asignadas_cnt += 1
-
-                notificar_global(self.page, f"¡{asignadas_cnt} OVs cargadas automáticamente a los operadores!", "#047857")
-                refrescar_monitor_usuarios_y_cola()
+                r = supabase.rpc("wms_asignar_ovs_por_equipo", {
+                    "p_bodega": bodega_act, "p_por": str(getattr(self.page, "usuario_actual", None) or "PC"),
+                }).execute().data or {}
             except Exception as ex:
-                notificar_global(self.page, f"Error en auto-asignación: {ex}", "#B91C1C")
+                msg = getattr(ex, "message", None) or str(ex)
+                notificar_global(self.page, f"No se pudo repartir: {msg} (¿falta ejecutar 18_equipos_trabajo.sql?)", "#B91C1C")
+                return
+            far, pick = int(r.get("farmacia_asignadas") or 0), int(r.get("picking_asignadas") or 0)
+            sin_far, sin_pick = int(r.get("farmacia_sin_equipo") or 0), int(r.get("picking_sin_equipo") or 0)
+            texto = f"Repartidas: {far} OV de farmacia y {pick} OV normales."
+            if sin_far or sin_pick:
+                texto += f" Quedan sin asignar {sin_far} de farmacia y {sin_pick} normales: no hay usuarios en ese equipo."
+            elif not far and not pick:
+                texto = "No hay OV sin asignar en la cola."
+            notificar_global(self.page, texto, "#B45309" if (sin_far or sin_pick) else "#047857")
+            refrescar_monitor_usuarios_y_cola()
+
+        # ------------------------------------------------------------------
+        # EQUIPOS DE TRABAJO: cada usuario en una caja (Farmacia, Picking, ...)
+        # ------------------------------------------------------------------
+        EQUIPOS = [
+            ("SIN_EQUIPO", "Sin equipo", "No recibe OV", "#64748B", "HELP_OUTLINE_ROUNDED"),
+            ("FARMACIA", "Picking farmacia", "Recibe OV -FA y OT", "#F59E0B", "LOCAL_PHARMACY_OUTLINED"),
+            ("PICKING", "Picking normal", "Recibe OV normales", "#38BDF8", "SHOPPING_CART_OUTLINED"),
+            ("PACKING", "Packing", "No recibe OV de picking", "#A78BFA", "INVENTORY_2_OUTLINED"),
+            ("RECEPCION", "Recepción y almacenamiento", "No recibe OV de picking", "#34D399", "MOVE_TO_INBOX_ROUNDED"),
+            ("INACTIVO", "Inactivo", "No recibe OV", "#EF4444", "BEDTIME_OUTLINED"),
+        ]
+        fila_equipos = ft.ResponsiveRow(spacing=10, run_spacing=10)
+
+        def mover_usuario_equipo(cod_usuario: str, equipo: str):
+            try:
+                r = supabase.rpc("wms_mover_usuario_equipo", {
+                    "p_usuario": cod_usuario, "p_equipo": None if equipo == "SIN_EQUIPO" else equipo,
+                    "p_por": str(getattr(self.page, "usuario_actual", None) or "PC"),
+                }).execute().data or {}
+            except Exception as ex:
+                msg = getattr(ex, "message", None) or str(ex)
+                notificar_global(self.page, f"No se movió: {msg} (¿falta ejecutar 18_equipos_trabajo.sql?)", "#B91C1C")
+                return
+            lib = int(r.get("ov_liberadas") or 0)
+            nombre_eq = next((t for k, t, *_ in EQUIPOS if k == equipo), equipo)
+            notificar_global(self.page, f"{cod_usuario} pasó a {nombre_eq}."
+                             + (f" {lib} OV no iniciadas volvieron a la cola." if lib else ""), "#047857")
+            refrescar_monitor_usuarios_y_cola()
+
+        def tarjeta_usuario_equipo(u: dict, equipo_actual: str, ovs: list, actividad: dict):
+            cod = str(u.get("usuario") or "").strip().upper()
+            nom = str(u.get("nombre_completo") or cod).strip().title()
+            menu = ft.PopupMenuButton(
+                icon=ft.Icons.SWAP_HORIZ_ROUNDED, icon_color=TEXT_MUTED, tooltip="Mover a otro equipo",
+                items=[
+                    ft.PopupMenuItem(
+                        content=ft.Row([ft.Icon(_ico(ico, "CIRCLE"), size=16, color=col), ft.Text(f"Mover a {tit}", size=12)], spacing=10),
+                        on_click=lambda e, c=cod, k=k: mover_usuario_equipo(c, k),
+                    )
+                    for k, tit, _d, col, ico in EQUIPOS if k != equipo_actual
+                ],
+            )
+            detalle = []
+            if ovs:
+                detalle.append(ft.Text(f"{len(ovs)} OV · activa {ovs[0]}", size=10.5, color="#FBBF24"))
+            if actividad.get("ultimo_mov"):
+                detalle.append(ft.Text(str(actividad["ultimo_mov"])[:34], size=10, color=TEXT_MUTED))
+            return ft.Container(
+                padding=ft.Padding.symmetric(horizontal=10, vertical=7), border_radius=8, bgcolor="#1D2426",
+                border=ft.Border.all(1, BORDER_COLOR),
+                content=ft.Row([
+                    ft.Container(width=28, height=28, border_radius=14, bgcolor="#334155", alignment=ft.Alignment.CENTER,
+                                 content=ft.Text(nom[:1], size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)),
+                    ft.Column([ft.Text(nom, size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE, max_lines=1,
+                                       overflow=ft.TextOverflow.ELLIPSIS),
+                               ft.Text(cod, size=10, color=ACCENT_CYAN), *detalle],
+                              spacing=1, tight=True, expand=True),
+                    menu,
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            )
+
+        def pintar_equipos(usuarios_lista: list, ovs_por_operador: dict, mapa_actividad: dict, ov_sin_asignar: dict):
+            cajas = []
+            for k, tit, desc, col, ico in EQUIPOS:
+                miembros = [u for u in usuarios_lista
+                            if (str(u.get("equipo_trabajo") or "").strip().upper() or "SIN_EQUIPO") == k]
+                tarjetas = []
+                for u in miembros:
+                    cod = str(u.get("usuario") or "").strip().upper()
+                    nom = str(u.get("nombre_completo") or cod).strip().upper()
+                    tarjetas.append(tarjeta_usuario_equipo(
+                        u, k, ovs_por_operador.get(cod, []) or ovs_por_operador.get(nom, []),
+                        mapa_actividad.get(cod) or mapa_actividad.get(nom) or {}))
+                esperando = ov_sin_asignar.get(k, 0)
+                cajas.append(ft.Container(
+                    col={"xs": 12, "sm": 6, "lg": 4, "xl": 2},
+                    padding=10, border_radius=10, bgcolor=BG_CARD,
+                    border=ft.Border(top=ft.BorderSide(3, col), left=ft.BorderSide(1, BORDER_COLOR),
+                                     right=ft.BorderSide(1, BORDER_COLOR), bottom=ft.BorderSide(1, BORDER_COLOR)),
+                    content=ft.Column([
+                        ft.Row([ft.Icon(_ico(ico, "GROUPS_ROUNDED"), color=col, size=18),
+                                ft.Text(tit, size=12.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE, expand=True),
+                                ft.Container(padding=ft.Padding.symmetric(horizontal=8, vertical=2), border_radius=10,
+                                             bgcolor=ft.Colors.with_opacity(0.18, col),
+                                             content=ft.Text(str(len(miembros)), size=11, weight=ft.FontWeight.BOLD, color=col))],
+                               spacing=6),
+                        ft.Text(desc + (f" · {esperando} OV esperando" if esperando else ""), size=10.5,
+                                color="#FBBF24" if esperando else TEXT_MUTED),
+                        *(tarjetas or [ft.Container(padding=10, content=ft.Text("Sin usuarios", size=11, color=TEXT_MUTED))]),
+                    ], spacing=6, tight=True),
+                ))
+            fila_equipos.controls = cajas
 
         def refrescar_monitor_usuarios_y_cola(e=None):
             bodega_act = obtener_bodega_activa(self.page)
@@ -418,6 +480,7 @@ class MonitorUsuariosColaModulo:
 
                 res_ov = supabase.table("netsuite_ordenes_venta").select("*").order("id", desc=False).limit(400).execute()
                 ovs_por_operador = {}
+                ov_sin_asignar = {}
                 filas_cola = []
                 ovs_vistas = set()
                 cnt_pend_pick = 0
@@ -436,7 +499,11 @@ class MonitorUsuariosColaModulo:
                         continue
 
                     ovs_vistas.add(ov_base)
-                    op_asig = str(r.get("operador_asignado") or "SIN ASIGNAR").strip().upper()
+                    op_asig = str(r.get("operador_asignado") or "SIN ASIGNAR").strip().upper() or "SIN ASIGNAR"
+                    if est_ov in ("PENDIENTE_PICKING", "PENDIENTE") and op_asig == "SIN ASIGNAR":
+                        tipo_ov = ("FARMACIA" if (ov_raw.endswith("-FA") or ov_raw.startswith("OT-")
+                                                  or "FARM" in str(r.get("canal_venta") or "").upper()) else "PICKING")
+                        ov_sin_asignar[tipo_ov] = ov_sin_asignar.get(tipo_ov, 0) + 1
                     if est_ov == "PENDIENTE_PACKING":
                         cnt_pend_pack += 1
                     else:
@@ -533,6 +600,7 @@ class MonitorUsuariosColaModulo:
 
                 tabla_usuarios_rf.rows = filas_u
                 tabla_cola_picking.rows = filas_cola
+                pintar_equipos(usuarios_lista, ovs_por_operador, mapa_actividad_usr, ov_sin_asignar)
                 lbl_kpi_usr_activos.value = str(len(usuarios_lista))
                 lbl_kpi_cola_pend.value = str(cnt_pend_pick)
                 lbl_kpi_en_pack.value = str(cnt_pend_pack)
@@ -566,7 +634,7 @@ class MonitorUsuariosColaModulo:
                         [
                             txt_buscar_cola,
                             boton_primario(
-                                "CARGAR OVs AUTOMÁTICAMENTE A USUARIOS",
+                                "CARGAR OV A LOS EQUIPOS",
                                 _ico("BOLT_ROUNDED", "SEND_ROUNDED"),
                                 auto_asignar_todas_las_ovs_en_cola,
                                 "#047857",
@@ -642,9 +710,32 @@ class MonitorUsuariosColaModulo:
             ),
         )
 
-        self.sub_completo = ft.Column([fila_kpis, tarjeta_usuarios, tarjeta_cola], spacing=10)
+        tarjeta_equipos = ft.Container(
+            padding=12,
+            bgcolor="#202829",
+            border_radius=8,
+            border=ft.Border.all(1, BORDER_COLOR),
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(_ico("GROUPS_ROUNDED", "PEOPLE_OUTLINE"), color=ACCENT_CYAN, size=18),
+                            ft.Text("EQUIPOS DE TRABAJO", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                            ft.Text("Mueva a cada usuario a su equipo con ⇄ y luego presione CARGAR OV A LOS EQUIPOS. "
+                                    "Generar olas ya no asigna operador.", size=11, color=TEXT_MUTED, expand=True),
+                        ],
+                        spacing=8,
+                        wrap=True,
+                    ),
+                    fila_equipos,
+                ],
+                spacing=10,
+            ),
+        )
+
+        self.sub_completo = ft.Column([fila_kpis, tarjeta_equipos, tarjeta_usuarios, tarjeta_cola], spacing=10)
         self.sub_solo_cola = ft.Column([fila_kpis, tarjeta_cola], spacing=10)
-        self.sub_solo_usuarios = ft.Column([fila_kpis, tarjeta_usuarios], spacing=10)
+        self.sub_solo_usuarios = ft.Column([fila_kpis, tarjeta_equipos, tarjeta_usuarios], spacing=10)
         self.contenedor = ft.Container(content=self.sub_completo)
 
         self.vista = ft.Container(
