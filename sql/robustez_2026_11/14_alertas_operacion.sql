@@ -83,6 +83,23 @@ begin
          coalesce(jsonb_agg(jsonb_build_object('ref', ref, 'texto', txt, 'fecha', f) order by f desc), '[]')
   from x having count(*) > 0;
 
+  -- 3b) Reportes enviados por los operadores desde el celular (evento; requiere 16)
+  if to_regclass('public.wms_reportes_operacion') is not null then
+    return query
+    with x as (
+      select r.id::text ref, r.creado_en f,
+             format('%s · %s%s%s · %s', r.tipo, coalesce('LPN ' || r.lpn || ' ', ''), coalesce('en ' || r.ubicacion || ' ', ''),
+                    coalesce(nullif(r.detalle, ''), 'sin detalle'), r.usuario) txt
+      from wms_reportes_operacion r
+      where r.bodega = v_bodega and r.estado = 'ABIERTO'
+    )
+    select 'REPORTE_OPERADOR', 'ALTA', 'Reportes de operadores',
+           'Problemas informados desde el celular (ubicación equivocada, cantidad, daño...). Revise y marque como resuelto.',
+           'ALMACENAMIENTO', true, count(*)::int,
+           coalesce(jsonb_agg(jsonb_build_object('ref', ref, 'texto', txt, 'fecha', f) order by f desc), '[]')
+    from x having count(*) > 0;
+  end if;
+
   -- 4) Lotes vencidos con stock (estado)
   return query
   with x as (
@@ -288,7 +305,7 @@ declare
   v_cod text := upper(btrim(coalesce(p_codigo, '')));
   v_n int;
 begin
-  if v_cod not in ('PACKING_FALTANTE', 'TRASLADO_DIFERENCIA', 'PICKING_SIN_STOCK') then
+  if v_cod not in ('PACKING_FALTANTE', 'TRASLADO_DIFERENCIA', 'PICKING_SIN_STOCK', 'REPORTE_OPERADOR') then
     raise exception 'WMS: la alerta % se resuelve corrigiendo la causa, no se marca como revisada', v_cod;
   end if;
   if coalesce(array_length(p_referencias, 1), 0) = 0 then
@@ -303,6 +320,12 @@ begin
   on conflict (codigo, referencia) do update
     set nota = excluded.nota, revisado_por = excluded.revisado_por, revisado_en = now();
   get diagnostics v_n = row_count;
+  -- Los reportes de operadores además quedan resueltos en su tabla
+  if v_cod = 'REPORTE_OPERADOR' and to_regclass('public.wms_reportes_operacion') is not null then
+    execute 'update public.wms_reportes_operacion set estado = ''RESUELTO'', resuelto_por = $1, resuelto_en = now(), nota = $2
+             where estado = ''ABIERTO'' and id::text = any ($3)'
+      using upper(btrim(p_usuario)), nullif(btrim(coalesce(p_nota, '')), ''), p_referencias;
+  end if;
   return v_n;
 end $$;
 
