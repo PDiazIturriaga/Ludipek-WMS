@@ -3784,9 +3784,10 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       final mUn = RegExp(r'\((\d+)\s*UN\)').allMatches(b).toList();
       final unidades = mUn.isEmpty ? 0 : int.parse(mUn.last.group(1)!);
       final cabeza = b.split('(').first.split('[Rack:').first.trim();
-      final partes = cabeza.split('/');
+      // El separador es " / " (hay lotes con barra: EBA2362/24 / 31/10/2027)
+      final partes = cabeza.contains(' / ') ? cabeza.split(' / ') : cabeza.split('/');
       final lote = partes.first.trim().isEmpty ? 'S/L' : partes.first.trim().toUpperCase();
-      String venc = partes.length > 1 ? partes.sublist(1).join('/').trim() : '';
+      String venc = partes.length > 1 ? partes.sublist(1).join(' / ').trim() : '';
       venc = (venc.isEmpty || venc.toUpperCase() == 'S/F') ? 'S/F' : (normalizarFechaSql(venc) ?? venc);
       salida.add({'lote': lote, 'venc': venc, 'unidades': unidades});
     }
@@ -4100,7 +4101,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         if (rawLotes.isNotEmpty) {
           final primerBloque = rawLotes.split('|').first.split('(').first.split('[Rack:').first.trim();
           if (primerBloque.contains('/')) {
-            final partes = primerBloque.split('/');
+            final partes = primerBloque.contains(' / ') ? primerBloque.split(' / ') : primerBloque.split('/');
             loteInicial = partes.first.trim().toUpperCase();
             vencInicial = normalizarFechaSql(partes.last.trim()) ?? partes.last.trim();
           } else {

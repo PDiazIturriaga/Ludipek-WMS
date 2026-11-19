@@ -355,26 +355,30 @@ class PickingModulo:
             )
             procesar_excel_traslado_scl_ccp(ruta_encontrada)
 
-        picker_excel_traslado = ft.FilePicker(
-            on_result=on_result_traslado_event,
-            on_upload=on_upload_traslado_event,
-        )
+        _params_fp = inspect.signature(ft.FilePicker.__init__).parameters
+        _kw_fp = {}
+        if "on_result" in _params_fp:
+            _kw_fp["on_result"] = on_result_traslado_event
+        if "on_upload" in _params_fp:
+            _kw_fp["on_upload"] = on_upload_traslado_event
+        picker_excel_traslado = ft.FilePicker(**_kw_fp)
         if picker_excel_traslado not in self.page.services:
             self.page.services.append(picker_excel_traslado)
 
-        btn_subir_traslado = boton_primario(
-            "SUBIR EXCEL TRASLADO SCL->CCP",
-            ft.Icons.UPLOAD_FILE_ROUNDED,
-            None,
-            "#B45309",
-            height_val=34,
-        )
-        btn_subir_traslado.action = ft.PickFiles(
-            picker_excel_traslado,
-            allow_multiple=False,
-            allowed_extensions=["xlsx", "xls"],
-            with_data=False,
-        )
+        async def abrir_selector_traslado(e=None):
+            # Antes el botón no tenía on_click y no abría nada
+            try:
+                kw = {"allow_multiple": False, "allowed_extensions": ["xlsx", "xls"]}
+                if "with_data" in inspect.signature(picker_excel_traslado.pick_files).parameters:
+                    kw["with_data"] = True
+                res = picker_excel_traslado.pick_files(**kw)
+                if inspect.isawaitable(res):
+                    res = await res
+                    if res is not None:
+                        from types import SimpleNamespace
+                        await al_seleccionar_excel_traslado(SimpleNamespace(files=getattr(res, "files", res)))
+            except Exception as ex:
+                notificar(f"No se pudo abrir el selector de archivos: {ex}", "#B91C1C")
 
         def descargar_archivo_web(ruta_archivo: str, titulo_doc: str = "Documento Generado"):
             if not ruta_archivo or not os.path.exists(ruta_archivo):
@@ -681,23 +685,30 @@ class PickingModulo:
             ],
         )
 
-        lbl_fecha_calendario_ov = ft.Text("📅 TODAS LAS FECHAS", size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)
+        # Filtro por día: un botón en el resumen y otro en seguimiento comparten el mismo filtro
+        etiquetas_dia = []
+
+        def refrescar_etiquetas_dia():
+            for lbl in etiquetas_dia:
+                lbl.value = "Todas las fechas" if filtro_dia_ov_activo == "TODOS" else f"Día {filtro_dia_ov_activo}"
+                lbl.color = UI["texto"] if filtro_dia_ov_activo == "TODOS" else UI["exito"]
+            for b in botones_limpiar_dia:
+                b.visible = filtro_dia_ov_activo != "TODOS"
 
         def al_elegir_fecha_calendario(e):
             nonlocal filtro_dia_ov_activo
             val_dt = getattr(e.control, "value", None)
             if val_dt:
                 filtro_dia_ov_activo = val_dt.strftime("%Y-%m-%d") if hasattr(val_dt, "strftime") else str(val_dt)[:10]
-                lbl_fecha_calendario_ov.value = f"📅 DÍA: {filtro_dia_ov_activo}"
-                lbl_fecha_calendario_ov.color = "#34D399"
+                refrescar_etiquetas_dia()
                 renderizar_monitor_cortes_y_tablas()
 
         selector_calendario_ov = ft.DatePicker(
             first_date=datetime(2024, 1, 1),
             last_date=datetime(2030, 12, 31),
-            help_text="SELECCIONE EL DÍA DE LAS ÓRDENES DE VENTA",
+            help_text="DÍA DE LAS ÓRDENES",
             cancel_text="Cancelar",
-            confirm_text="Filtrar Día",
+            confirm_text="Filtrar",
             on_change=al_elegir_fecha_calendario,
         )
         try:
@@ -718,141 +729,121 @@ class PickingModulo:
         def limpiar_fecha_calendario_ov(e=None):
             nonlocal filtro_dia_ov_activo
             filtro_dia_ov_activo = "TODOS"
-            lbl_fecha_calendario_ov.value = "📅 TODAS LAS FECHAS"
-            lbl_fecha_calendario_ov.color = TEXT_WHITE
+            refrescar_etiquetas_dia()
             renderizar_monitor_cortes_y_tablas()
 
-        btn_abrir_calendario_ov = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=12, vertical=0),
-            height=34,
-            bgcolor="#1D2426",
-            border_radius=6,
-            border=ft.Border.all(1, ACCENT_CYAN),
-            ink=True,
-            tooltip="Abrir calendario para elegir el día de las OVs",
-            on_click=abrir_calendario_ov,
-            content=ft.Row(
-                [
-                    ft.Icon(ft.Icons.CALENDAR_MONTH_ROUNDED, color=ACCENT_CYAN, size=16),
-                    lbl_fecha_calendario_ov,
-                    ft.Icon(ft.Icons.ARROW_DROP_DOWN_ROUNDED, color=TEXT_MUTED, size=18),
-                ],
-                spacing=6,
-                tight=True,
-            ),
-        )
+        botones_limpiar_dia = []
+
+        def crear_boton_dia():
+            lbl = ft.Text("Todas las fechas", size=12, weight=ft.FontWeight.W_600, color=UI["texto"])
+            etiquetas_dia.append(lbl)
+            btn = ft.Container(
+                height=36,
+                padding=ft.Padding.symmetric(horizontal=12, vertical=0),
+                border=ft.Border.all(1, UI["borde"]),
+                border_radius=6,
+                ink=True,
+                tooltip="Filtrar las órdenes por día",
+                on_click=abrir_calendario_ov,
+                content=ft.Row([ft.Icon(ft.Icons.CALENDAR_MONTH_OUTLINED, size=18, color=UI["acento"]), lbl],
+                               spacing=6, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            )
+            limpiar = ft.IconButton(icon=ft.Icons.CLOSE_ROUNDED, icon_size=18, icon_color=UI["texto_2"],
+                                    tooltip="Quitar filtro de día", on_click=limpiar_fecha_calendario_ov, visible=False)
+            botones_limpiar_dia.append(limpiar)
+            return btn, limpiar
+
+        btn_abrir_calendario_ov, btn_limpiar_dia = crear_boton_dia()
+        btn_dia_resumen, btn_limpiar_dia_resumen = crear_boton_dia()
 
         dd_filtro_canal_ov = dropdown_dark(
-            label="Canal OV",
-            width=175,
+            label="Canal",
+            width=170,
             value="TODOS",
             options=[
-                opt_w("TODOS", "TODAS (NORMAL + FA)"),
-                opt_w("NORMAL", "SOLO OV NORMAL"),
-                opt_w("FARMACIA", "SOLO FARMACIA (-FA)"),
+                opt_w("TODOS", "Todos los canales"),
+                opt_w("NORMAL", "Normal"),
+                opt_w("FARMACIA", "Farmacia (-FA)"),
+            ],
+        )
+        dd_filtro_corte.label = "Corte"
+        dd_filtro_corte.width = 150
+        dd_filtro_corte.options = [
+            opt_w("TODOS", "Todos los cortes"),
+            opt_w("09:00", "09:00 hrs"),
+            opt_w("10:00", "10:00 hrs"),
+            opt_w("12:00", "12:00 hrs"),
+            opt_w("13:00", "13:00 hrs"),
+            opt_w(">13:00", "Después de 13:00"),
+        ]
+        dd_filtro_etapa = dropdown_dark(
+            label="Etapa",
+            width=190,
+            value="TODAS",
+            options=[
+                opt_w("TODAS", "Todas las etapas"),
+                opt_w("0", "En picking"),
+                opt_w("1", "En packing"),
+                opt_w("2", "En facturación / tránsito"),
+                opt_w("3", "Facturada / recibida"),
             ],
         )
 
-        txt_buscar_ov_unificada = texto_dark(label="Buscar OV, Cliente o Comuna...", width=220)
+        txt_buscar_ov_unificada = texto_dark(label="Buscar OV, cliente, comuna o LPN")
         txt_estado_erp = ft.Text(
-            f"Estado ERP: {'Módulo conexion_erp activo.' if NETSUITE_CONECTADO else 'Modo Cloud Supabase activo.'}",
+            "Conexión directa con NetSuite activa." if NETSUITE_CONECTADO else "Sin conexión directa a NetSuite: se usan las órdenes de Supabase.",
             size=11,
-            color="#34D399" if NETSUITE_CONECTADO else "#FBBF24",
+            color=UI["exito"] if NETSUITE_CONECTADO else UI["alerta"],
         )
 
-        lbl_corte_09 = ft.Text("00", size=22, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
-        lbl_corte_10 = ft.Text("00", size=22, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
-        lbl_corte_12 = ft.Text("00", size=22, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
-        lbl_corte_13 = ft.Text("00", size=22, weight=ft.FontWeight.W_900, color=ACCENT_CYAN, font_family="Consolas")
+        lbl_kpi_total_ovs = ft.Text("0")
+        lbl_kpi_picking = ft.Text("0")
+        lbl_kpi_packing = ft.Text("0")
+        lbl_kpi_fact = ft.Text("0")
+        lbl_det_total = ft.Text("", size=11, color=UI["texto_3"])
+        lbl_det_fact = ft.Text("", size=11, color=UI["texto_3"])
+        col_cortes_resumen = ft.Column(spacing=8, tight=True)
+        lbl_conteo_seguimiento = ft.Text("", size=12, color=UI["texto_2"])
+        lbl_resumen_prev = ft.Text("Sin órdenes extraídas", size=12, color=UI["texto_2"])
 
-        lbl_kpi_total_ovs = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color=TEXT_WHITE, font_family="Consolas")
-        lbl_kpi_ov_normal = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#38BDF8", font_family="Consolas")
-        lbl_kpi_ov_farma = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#FBBF24", font_family="Consolas")
-        lbl_kpi_pend_fact = ft.Text("0", size=17, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
-        lbl_kpi_avance_pack = lbl_kpi_pend_fact
+        def tabla_base(columnas: list, fila_alta: int = 44):
+            return ft.DataTable(
+                heading_row_color=UI["card_alt"],
+                heading_row_height=40,
+                data_row_min_height=fila_alta,
+                data_row_max_height=fila_alta + 8,
+                column_spacing=22,
+                horizontal_margin=14,
+                divider_thickness=0.5,
+                show_checkbox_column=False,
+                columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in columnas],
+                rows=[],
+            )
 
-        fila_barras_cortes = ft.Row(spacing=14, alignment=ft.MainAxisAlignment.SPACE_AROUND, vertical_alignment=ft.CrossAxisAlignment.END)
-        col_detalle_ovs_por_corte = ft.Column(spacing=6, scroll=ft.ScrollMode.ALWAYS, expand=True)
+        def contenedor_tabla(tabla: ft.DataTable, altura: int):
+            # Igual que ui_tabla, pero su alto lo calcula este módulo según la ventana
+            return ft.Container(
+                height=altura,
+                border=ft.Border.all(1, UI["borde"]),
+                border_radius=8,
+                clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                content=ft.Column(
+                    [ft.Row([tabla], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.START)],
+                    scroll=ft.ScrollMode.AUTO,
+                    expand=True,
+                ),
+            )
 
-        # --- 6. TABLAS EN MODO OSCURO ---
-        tabla_previsualizacion_ns = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=32,
-            data_row_min_height=30,
-            data_row_max_height=36,
-            column_spacing=14,
-            horizontal_margin=10,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("LIBERAR", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("ORDEN DE VENTA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("FECHA OV", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("CORTE HORARIO", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
-                ft.DataColumn(ft.Text("CANAL / ZONA (CLIC CAMBIAR)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("LÍNEAS", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("UNIDADES", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("DETALLE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
-            rows=[],
-        )
+        tabla_previsualizacion_ns = tabla_base(["", "OV", "Fecha", "Corte", "Canal (toque para cambiar)", "Cliente", "Líneas", "Unidades", ""], 40)
+        tabla_listado_unico_ovs = tabla_base(["OV / OT", "Canal", "Fecha · corte", "Cliente", "Pickeado", "Etapa", "Bultos", ""])
+        txt_buscar_facturacion = texto_dark(label="Buscar OV, cliente, comuna o LPN", width=320)
+        sw_ver_ya_facturadas = ft.Switch(label="Incluir facturadas", value=False, active_color=UI["exito"])
+        lbl_resumen_facturacion = ft.Text("", size=12, color=UI["texto_2"])
+        tabla_facturacion_ns = tabla_base(["", "OV / OT", "Canal", "Fecha", "Cliente", "Comuna", "Bultos", "Unidades", "Estado", ""])
 
-        tabla_listado_unico_ovs = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=36,
-            data_row_min_height=38,
-            data_row_max_height=44,
-            column_spacing=16,
-            horizontal_margin=10,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("OV / OT", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("TIPO / CANAL", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("DÍA OV / CORTE", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("PICKING", weight=ft.FontWeight.BOLD, size=10.5, color="#FBBF24")),
-                ft.DataColumn(ft.Text("PACKING", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("ENVIADO A FACTURACIÓN", weight=ft.FontWeight.BOLD, size=10.5, color="#34D399")),
-                ft.DataColumn(ft.Text("CONSULTA / ETIQUETA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
-            rows=[],
-        )
-
-        txt_buscar_facturacion = texto_dark(label="Buscar por N° OV, Cliente, Comuna o LPN...", width=280)
-        sw_ver_ya_facturadas = ft.Switch(label="Ver también Facturadas", value=False, active_color="#10B981")
-        lbl_resumen_facturacion = ft.Text(
-            "0 OVs listas en Pendiente de Facturación para subir a NetSuite.",
-            size=12,
-            weight=ft.FontWeight.BOLD,
-            color="#34D399",
-        )
-
-        tabla_facturacion_ns = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=34,
-            data_row_min_height=34,
-            data_row_max_height=40,
-            column_spacing=14,
-            horizontal_margin=10,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("SEL.", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("OV / OT", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("FECHA", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("CANAL", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
-                ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("COMUNA DESPACHO", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("EMPAQUE / BULTOS", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
-                ft.DataColumn(ft.Text("UNID. EMPACADAS", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("ESTADO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("DOCUMENTOS Y ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
-            rows=[],
-        )
-
-        cont_tabla_prev_ns = envolver_tabla_fluida(tabla_previsualizacion_ns, 200)
-        cont_tabla_listado_unico = envolver_tabla_fluida(tabla_listado_unico_ovs, 390)
-        cont_tabla_facturacion = envolver_tabla_fluida(tabla_facturacion_ns, 390)
+        cont_tabla_prev_ns = contenedor_tabla(tabla_previsualizacion_ns, 420)
+        cont_tabla_listado_unico = contenedor_tabla(tabla_listado_unico_ovs, 520)
+        cont_tabla_facturacion = contenedor_tabla(tabla_facturacion_ns, 520)
 
         # --- 7. CONEXIÓN Y SINCRONIZACIÓN CON SUPABASE ---
         def detectar_es_farmacia_texto(*textos) -> bool:
@@ -904,10 +895,18 @@ class PickingModulo:
             except Exception:
                 unid_val = 1
 
-            meta_ov = (mapa_meta_desp or {}).get(ov_val) or (mapa_meta_desp or {}).get(ov_limpia) or {}
+            meta_ov = dict((mapa_meta_desp or {}).get(ov_val) or (mapa_meta_desp or {}).get(ov_limpia) or {})
+            for parte in str(r.get("canal_venta") or "").split("|"):
+                clave, _, valor = parte.partition(":")
+                clave = clave.strip().upper()
+                if valor.strip() and clave in ("BULTOS", "TIPO", "COMUNA", "LPN", "PESO_KG"):
+                    meta_ov[{"TIPO": "tipo_empaque"}.get(clave, clave.lower())] = valor.strip()
             comuna_str = str(r.get("comuna") or meta_ov.get("comuna") or ("CONCEPCIÓN" if "CONCEPCION" in cli_val.upper() else "SANTIAGO")).strip().upper()
             tipo_emp_str = str(meta_ov.get("tipo_empaque") or "BULTO").strip().upper()
-            bultos_cnt = int(meta_ov.get("bultos") or 1)
+            try:
+                bultos_cnt = int(float(meta_ov.get("bultos") or 1))
+            except Exception:
+                bultos_cnt = 1
             lpn_str = str(meta_ov.get("lpn") or f"LPN-PK-{ov_limpia}").strip().upper()
 
             return {
@@ -1231,28 +1230,26 @@ class PickingModulo:
 
         def mostrar_modal_detalle_ov(ov_num: str, info_ov: dict):
             lineas_det = info_ov.get("lineas_detalle", [])
-            filas_d = []
+            filas = []
             for ld in lineas_det:
-                es_sku_fa = ld.get("es_farmacia", False)
                 cant_sol = int(ld.get("cantidad_pedida") or ld.get("cantidad") or 0)
                 cant_pk = int(ld.get("cantidad_pickeada") or 0)
-                lotes_str = str(ld.get("lotes") or "").strip()
-                txt_cant = f"{cant_pk}/{cant_sol} UN" if cant_pk > 0 else f"{cant_sol} UN"
-                sub_lote = f"  • Lotes: {lotes_str}" if lotes_str else ""
-                filas_d.append(
-                    ft.Row(
-                        [
-                            ft.Text(str(ld.get("sku", "-")), size=11, weight=ft.FontWeight.BOLD, color="#FBBF24" if es_sku_fa else ACCENT_CYAN, width=110),
-                            ft.Text(f"{str(ld.get('descripcion', '-'))[:34]}{sub_lote}", size=11, color=TEXT_WHITE, expand=True),
-                            ft.Text(txt_cant, size=11, weight=ft.FontWeight.BOLD, color="#34D399"),
-                        ],
-                        spacing=8,
-                    )
-                )
-            if not filas_d:
-                filas_d.append(ft.Text(f"Cliente: {info_ov.get('cliente', '-')}", size=12, color=TEXT_WHITE))
-                filas_d.append(ft.Text(f"Comuna: {info_ov.get('comuna', 'SANTIAGO')}", size=12, color=ACCENT_CYAN))
-                filas_d.append(ft.Text(f"Estado Actual: {info_ov.get('estado', '-')}", size=12, color="#34D399"))
+                color = UI["exito"] if cant_sol and cant_pk >= cant_sol else (UI["alerta"] if cant_pk else UI["texto_2"])
+                filas.append(ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+                    border=ft.Border(bottom=ft.BorderSide(0.5, UI["borde"])),
+                    content=ft.Row([
+                        ft.Column([
+                            ft.Text(str(ld.get("sku", "-")), size=12.5, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                            ft.Text(str(ld.get("descripcion") or ""), size=11.5, color=UI["texto_2"], max_lines=1,
+                                    overflow=ft.TextOverflow.ELLIPSIS),
+                            *([ft.Text(f"Lotes: {ld.get('lotes')}", size=11, color=UI["texto_3"])] if str(ld.get("lotes") or "").strip() else []),
+                        ], spacing=1, expand=True, tight=True),
+                        ft.Text(f"{cant_pk} / {cant_sol} UN", size=12.5, weight=ft.FontWeight.W_700, color=color),
+                    ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
+                ))
+            if not filas:
+                filas.append(ft.Text("Esta orden no tiene líneas cargadas.", size=12, color=UI["texto_2"]))
 
             def cerrar_d(ev=None):
                 try:
@@ -1261,23 +1258,39 @@ class PickingModulo:
                     dlg_det.open = False
                 page.update()
 
+            datos = ft.Row([
+                chip_canal(info_ov),
+                chip(nombre_etapa(info_ov), COLORES_ETAPA[etapa_ov(info_ov.get("estado"))]),
+                ft.Text(f"{info_ov.get('fecha_ov', '-')} · corte {info_ov.get('corte', '-')} · {info_ov.get('comuna') or 'SANTIAGO'}",
+                        size=12, color=UI["texto_2"]),
+            ], spacing=8, wrap=True)
+            acciones = [ui_boton("Cerrar", None, cerrar_d, "texto")]
+            if info_ov.get("pallets_detalle"):
+                acciones.insert(0, ui_boton("PDF pallets", ft.Icons.PICTURE_AS_PDF_OUTLINED,
+                                            lambda ev: (cerrar_d(), descargar_pdf_contenido_pallets(info_ov)), "secundario"))
+            acciones[0:0] = [
+                ui_boton("Packing list", ft.Icons.TABLE_VIEW_OUTLINED, lambda ev: (cerrar_d(), exportar_ov_farmacia_excel_pdf(info_ov)), "secundario"),
+                ui_boton("Etiquetas de bultos", ft.Icons.QR_CODE_2_ROUNDED, lambda ev: (cerrar_d(), imprimir_etiqueta_packing_bultos_ov(info_ov))),
+            ]
             dlg_det = ft.AlertDialog(
-                title=ft.Text(f"Detalle Orden #{ov_num} | {info_ov.get('cliente', '')[:30]}", color=TEXT_WHITE, size=15, weight=ft.FontWeight.BOLD),
-                bgcolor=BG_CARD,
+                title=ft.Column([
+                    ft.Text(f"{ov_num}", size=18, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                    ft.Text(str(info_ov.get("cliente") or ""), size=12.5, color=UI["texto_2"]),
+                ], spacing=2, tight=True),
+                bgcolor=UI["card"],
                 content=ft.Container(
-                    width=560,
-                    height=260,
-                    padding=10,
-                    bgcolor="#181E20",
-                    border_radius=6,
-                    content=ft.Column(filas_d, spacing=6, scroll=ft.ScrollMode.ALWAYS),
+                    width=640,
+                    content=ft.Column([
+                        datos,
+                        ft.Container(
+                            height=min(420, 60 + 58 * len(filas)),
+                            border=ft.Border.all(1, UI["borde"]),
+                            border_radius=8,
+                            content=ft.Column(filas, spacing=0, scroll=ft.ScrollMode.AUTO),
+                        ),
+                    ], spacing=12, tight=True),
                 ),
-                actions=[
-                    boton_primario("PDF CONTENIDO PALLETS", ft.Icons.PICTURE_AS_PDF_ROUNDED, lambda ev: (cerrar_d(), descargar_pdf_contenido_pallets(info_ov)), "#B91C1C", height_val=32),
-                    boton_primario("ETIQUETA BULTOS (15x10)", ft.Icons.QR_CODE_2_ROUNDED, lambda ev: (cerrar_d(), imprimir_etiqueta_packing_bultos_ov(info_ov)), ACCENT_TEAL, height_val=32),
-                    boton_primario("PACKING LIST (EXCEL)", ft.Icons.TABLE_VIEW_OUTLINED, lambda ev: (cerrar_d(), exportar_ov_farmacia_excel_pdf(info_ov)), "#B45309", height_val=32),
-                    ft.TextButton("Cerrar", on_click=cerrar_d),
-                ],
+                actions=acciones,
             )
             page.show_dialog(dlg_det)
             page.update()
@@ -1543,264 +1556,258 @@ class PickingModulo:
         def exportar_ov_farmacia_excel_pdf(info_ov: dict = None):
             exportar_excel_facturacion_netsuite(solo_ov=info_ov)
 
+        # =====================================================================
+        # ETAPAS Y COMPONENTES VISUALES DEL SEGUIMIENTO
+        # =====================================================================
+        def etapa_ov(estado: str) -> int:
+            """0 picking · 1 packing · 2 en facturación / tránsito · 3 facturada / recibida."""
+            est = str(estado or "").upper()
+            if est in ("FACTURADO", "DESPACHADO", "CERRADO", "RECIBIDO_CCP", "RECIBIDO_CCP_CON_DIFERENCIAS"):
+                return 3
+            if est in ("PENDIENTE_FACTURACION", "EN_TRANSITO_CCP", "RECEPCION_CCP_EN_PROCESO"):
+                return 2
+            if est in ("PENDIENTE_PACKING", "PACKING_EN_PROCESO", "PICKING_COMPLETO"):
+                return 1
+            return 0
+
+        COLORES_ETAPA = [UI["alerta"], UI["acento"], "#818CF8", UI["exito"]]
+
+        def nombre_etapa(r: dict) -> str:
+            et = etapa_ov(r.get("estado"))
+            es_ot = str(r.get("ov") or "").upper().startswith("OT-")
+            if et == 2:
+                return "En tránsito a CCP" if es_ot else "En facturación"
+            if et == 3:
+                return "Recibida en CCP" if es_ot else "Facturada"
+            return ("En picking", "En packing")[et]
+
+        def chip(texto: str, color: str, size: float = 11):
+            return ft.Container(
+                padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+                bgcolor=ft.Colors.with_opacity(0.14, color),
+                border=ft.Border.all(1, ft.Colors.with_opacity(0.55, color)),
+                border_radius=12,
+                content=ft.Text(texto, size=size, weight=ft.FontWeight.W_600, color=color),
+            )
+
+        def chip_canal(r: dict):
+            ov_u = str(r.get("ov") or "").upper()
+            if ov_u.startswith("OT-"):
+                return chip("Traslado", "#A78BFA")
+            return chip("Farmacia", "#FBBF24") if r.get("es_farmacia") else chip("Normal", UI["texto_2"])
+
+        def pasos_avance(r: dict):
+            """Picking → Packing → Facturación: tres segmentos y el nombre de la etapa actual."""
+            et = etapa_ov(r.get("estado"))
+            segmentos = []
+            for i in range(3):
+                color = UI["exito"] if i < et or et == 3 else (COLORES_ETAPA[et] if i == et else "#3B484B")
+                segmentos.append(ft.Container(width=26, height=6, border_radius=3, bgcolor=color))
+            return ft.Row(
+                [ft.Row(segmentos, spacing=3, tight=True),
+                 ft.Text(nombre_etapa(r), size=12, weight=ft.FontWeight.W_600, color=COLORES_ETAPA[et])],
+                spacing=10, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+
+        def menu_fila(items: list):
+            """Acciones de una fila en un solo botón ⋮ (evita varios botones por fila)."""
+            return ft.PopupMenuButton(
+                icon=ft.Icons.MORE_VERT_ROUNDED,
+                icon_color=UI["texto_2"],
+                tooltip="Acciones",
+                items=[
+                    ft.PopupMenuItem(
+                        content=ft.Row([ft.Icon(ico, size=18, color=UI["acento"]), ft.Text(txt, size=12)], spacing=10),
+                        on_click=fn,
+                    )
+                    for txt, ico, fn in items
+                ],
+            )
+
+        def altura_tabla(reservado: int) -> int:
+            """Las tablas usan el alto real de la ventana (antes quedaban fijas en 390 px)."""
+            try:
+                return max(320, int(float(page.height or 800) - reservado))
+            except Exception:
+                return 420
+
+        def cumple_filtros_comunes(r: dict) -> bool:
+            if filtro_dia_ov_activo != "TODOS" and str(r.get("fecha_ov") or "")[:10] != filtro_dia_ov_activo:
+                return False
+            if filtro_canal_ov_activo == "NORMAL" and r.get("es_farmacia"):
+                return False
+            if filtro_canal_ov_activo == "FARMACIA" and not r.get("es_farmacia"):
+                return False
+            return True
+
         def renderizar_monitor_cortes_y_tablas():
-            nonlocal filtro_dia_ov_activo, filtro_canal_ov_activo
+            # ---------- 1. Resumen: KPI y avance por corte ----------
+            base_resumen = [r for r in registros_packing_db if cumple_filtros_comunes(r)]
+            por_etapa = [0, 0, 0, 0]
+            for r in base_resumen:
+                por_etapa[etapa_ov(r.get("estado"))] += 1
+            n_fa = sum(1 for r in base_resumen if r.get("es_farmacia"))
+            lbl_kpi_total_ovs.value = str(len(base_resumen))
+            lbl_det_total.value = f"{len(base_resumen) - n_fa} normales · {n_fa} farmacia"
+            lbl_kpi_picking.value = str(por_etapa[0])
+            lbl_kpi_packing.value = str(por_etapa[1])
+            lbl_kpi_fact.value = str(por_etapa[2] + por_etapa[3])
+            lbl_det_fact.value = f"{por_etapa[3]} ya facturadas / recibidas"
 
-            mapa_ovs_unicas = {}
-            for item_db in registros_packing_db:
-                k_base = str(item_db.get("ov_base") or item_db.get("ov") or "").removesuffix("-FA").strip()
-                if k_base and k_base not in mapa_ovs_unicas:
-                    mapa_ovs_unicas[k_base] = item_db
-            for item_ns in olas_extraidas_ns:
-                k_base = str(item_ns.get("ov") or "").removesuffix("-FA").strip()
-                if k_base and k_base not in mapa_ovs_unicas:
-                    mapa_ovs_unicas[k_base] = item_ns
+            cortes_orden = ["09:00", "10:00", "12:00", "13:00", ">13:00"]
+            agrupado = {c: [] for c in cortes_orden}
+            for r in base_resumen:
+                agrupado[r.get("corte") if r.get("corte") in agrupado else ">13:00"].append(r)
 
-            todas_ovs_unicas = list(mapa_ovs_unicas.values())
+            col_cortes_resumen.controls.clear()
+            for c in cortes_orden:
+                lista_c = agrupado[c]
+                n = len(lista_c)
+                cuenta = [0, 0, 0, 0]
+                for r in lista_c:
+                    cuenta[etapa_ov(r.get("estado"))] += 1
+                listas = cuenta[2] + cuenta[3]
+                pct = int(round(100 * listas / n)) if n else 0
+                barra = ft.Row(
+                    [ft.Container(expand=cuenta[i], height=10, bgcolor=COLORES_ETAPA[i]) for i in range(4) if cuenta[i] > 0]
+                    or [ft.Container(expand=1, height=10, bgcolor="#2B3537")],
+                    spacing=2, expand=True,
+                )
+                chips = [
+                    ft.Container(
+                        content=chip(r["ov"], COLORES_ETAPA[etapa_ov(r.get("estado"))], 11.5),
+                        on_click=lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it),
+                        tooltip=f"{r.get('cliente', '')} · {nombre_etapa(r)}",
+                        ink=True, border_radius=12,
+                    )
+                    for r in lista_c[:40]
+                ]
+                if n > 40:
+                    chips.append(ft.Text(f"+{n - 40} más", size=11, color=UI["texto_2"]))
+                activo = filtro_corte_activo == c
+                col_cortes_resumen.controls.append(ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+                    border_radius=8,
+                    bgcolor=UI["card_alt"],
+                    border=ft.Border.all(1, UI["acento"] if activo else UI["borde"]),
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Text(f"Corte {c}", size=13, weight=ft.FontWeight.W_700, color=UI["texto"], width=96),
+                            ft.Text(f"{n} OV", size=13, weight=ft.FontWeight.W_600, color=UI["texto_2"], width=56),
+                            ft.Container(content=barra, expand=True, border_radius=5, clip_behavior=ft.ClipBehavior.HARD_EDGE),
+                            ft.Text(f"{pct}% lista" if n else "—", size=12, weight=ft.FontWeight.W_600,
+                                    color=UI["exito"] if n and pct == 100 else UI["texto_2"], width=74,
+                                    text_align=ft.TextAlign.RIGHT),
+                            ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT_ROUNDED, icon_color=UI["acento"], icon_size=20,
+                                          tooltip=f"Ver las OV del corte {c} en Seguimiento",
+                                          on_click=lambda e, cc=c: ir_a_seguimiento_corte(cc), disabled=n == 0),
+                        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        *([ft.Row(chips, wrap=True, spacing=6, run_spacing=6)] if chips else []),
+                    ], spacing=8, tight=True),
+                ))
 
+            # ---------- 2. Seguimiento ----------
             q_busq = (txt_buscar_ov_unificada.value or "").strip().upper()
-            ovs_filtradas_listado = []
+            etapa_sel = dd_filtro_etapa.value or "TODAS"
+            filtradas = []
             for r in registros_packing_db:
-                if filtro_dia_ov_activo != "TODOS" and str(r.get("fecha_ov") or "")[:10] != filtro_dia_ov_activo:
+                if not cumple_filtros_comunes(r):
                     continue
                 if filtro_corte_activo != "TODOS" and r.get("corte") != filtro_corte_activo:
                     continue
-                if filtro_canal_ov_activo == "NORMAL" and r.get("es_farmacia"):
+                if etapa_sel != "TODAS" and str(etapa_ov(r.get("estado"))) != etapa_sel:
                     continue
-                if filtro_canal_ov_activo == "FARMACIA" and not r.get("es_farmacia"):
+                if q_busq and not any(q_busq in str(r.get(k, "")).upper() for k in ("ov", "cliente", "comuna", "fecha_ov", "lpn")):
                     continue
-                if q_busq and not any(q_busq in str(r.get(c_k, "")).upper() for c_k in ("ov", "cliente", "comuna", "fecha_ov")):
-                    continue
-                ovs_filtradas_listado.append(r)
+                filtradas.append(r)
+            lbl_conteo_seguimiento.value = f"{len(filtradas)} orden(es)"
 
-            cortes_orden = ["09:00", "10:00", "12:00", "13:00", ">13:00"]
-            agrupado_cortes = {c: [] for c in cortes_orden}
-            for item in todas_ovs_unicas:
-                if filtro_dia_ov_activo != "TODOS" and str(item.get("fecha_ov") or "")[:10] != filtro_dia_ov_activo:
-                    continue
-                c_key = item.get("corte", "09:00")
-                if c_key not in agrupado_cortes:
-                    c_key = ">13:00"
-                agrupado_cortes[c_key].append(item)
+            filas = []
+            for r in filtradas:
+                ped = int(r.get("unidades") or 0)
+                pick = int(r.get("unidades_pickeadas") or 0)
+                et = etapa_ov(r.get("estado"))
+                bultos_txt = f"{r.get('bultos', 1)} {str(r.get('tipo_empaque') or 'BULTO').lower()}" if et >= 2 else "—"
+                filas.append(ft.DataRow(
+                    on_select_changed=lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it),
+                    cells=[
+                        ft.DataCell(ft.Text(r["ov"], size=13, weight=ft.FontWeight.W_700, color=UI["texto"])),
+                        ft.DataCell(chip_canal(r)),
+                        ft.DataCell(ft.Text(f"{r.get('fecha_ov', '-')}  ·  {r.get('corte', '-')}", size=12, color=UI["texto_2"])),
+                        ft.DataCell(ft.Text(str(r.get("cliente") or "-")[:44], size=12.5, color=UI["texto"], tooltip=str(r.get("cliente") or ""))),
+                        ft.DataCell(ft.Text(f"{pick} / {ped} UN", size=12.5, weight=ft.FontWeight.W_600,
+                                            color=UI["exito"] if ped and pick >= ped else (UI["alerta"] if pick else UI["texto_2"]))),
+                        ft.DataCell(pasos_avance(r)),
+                        ft.DataCell(ft.Text(bultos_txt, size=12, color=UI["texto_2"])),
+                        ft.DataCell(menu_fila([
+                            ("Ver detalle de SKU y lotes", ft.Icons.LIST_ALT_ROUNDED, lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it)),
+                            ("Imprimir etiquetas de bultos", ft.Icons.QR_CODE_2_ROUNDED, lambda e, it=r: imprimir_etiqueta_packing_bultos_ov(it)),
+                            ("Packing list (Excel)", ft.Icons.TABLE_VIEW_ROUNDED, lambda e, it=r: exportar_ov_farmacia_excel_pdf(it)),
+                        ])),
+                    ],
+                ))
+            tabla_listado_unico_ovs.rows = filas
+            txt_vacio_seguimiento.visible = not filas
+            cont_tabla_listado_unico.height = altura_tabla(250)
 
-            lbl_corte_09.value = f"{len(agrupado_cortes['09:00']):02d}"
-            lbl_corte_10.value = f"{len(agrupado_cortes['10:00']):02d}"
-            lbl_corte_12.value = f"{len(agrupado_cortes['12:00']):02d}"
-            lbl_corte_13.value = f"{len(agrupado_cortes['13:00']):02d}"
-
-            normales_cnt = sum(1 for r in ovs_filtradas_listado if not r.get("es_farmacia"))
-            farmacias_cnt = sum(1 for r in ovs_filtradas_listado if r.get("es_farmacia"))
-            enviadas_fact_cnt = sum(1 for r in ovs_filtradas_listado if r.get("estado") in ("PENDIENTE_FACTURACION", "FACTURADO"))
-
-            lbl_kpi_total_ovs.value = str(len(ovs_filtradas_listado))
-            lbl_kpi_ov_normal.value = str(normales_cnt)
-            lbl_kpi_ov_farma.value = str(farmacias_cnt)
-            lbl_kpi_pend_fact.value = str(enviadas_fact_cnt)
-
-            fila_barras_cortes.controls.clear()
-            col_detalle_ovs_por_corte.controls.clear()
-            max_corte_cnt = max([len(v) for v in agrupado_cortes.values()] + [1])
-
-            for c_label in cortes_orden:
-                lista_c = agrupado_cortes[c_label]
-                listas_c = sum(1 for x in lista_c if x.get("estado") in ("PENDIENTE_FACTURACION", "FACTURADO"))
-                fila_barras_cortes.controls.append(
-                    construir_barra_corte(
-                        c_label,
-                        len(lista_c),
-                        listas_c,
-                        max_corte_cnt,
-                        lambda e, c=c_label: (cambiar_filtro_estado_interno(c), renderizar_monitor_cortes_y_tablas()),
-                    )
-                )
-
-                if lista_c:
-                    chips_ov = []
-                    for x_ov in lista_c[:12]:
-                        es_env_f = x_ov.get("estado") in ("PENDIENTE_FACTURACION", "FACTURADO")
-                        es_fa = x_ov.get("es_farmacia")
-                        chips_ov.append(
-                            ft.Container(
-                                padding=ft.Padding.symmetric(horizontal=7, vertical=2),
-                                bgcolor="#065F46" if es_env_f else ("#78350F" if es_fa else "#1E3A8A"),
-                                border_radius=4,
-                                border=ft.Border.all(1, "#34D399" if es_env_f else ("#FBBF24" if es_fa else "#38BDF8")),
-                                on_click=lambda ev, ov_s=x_ov["ov"], inf=x_ov: mostrar_modal_detalle_ov(ov_s, inf),
-                                content=ft.Text(f"OV {x_ov['ov']}", size=10, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            )
-                        )
-                    if len(lista_c) > 12:
-                        chips_ov.append(ft.Text(f"+{len(lista_c) - 12} más", size=10, color=TEXT_MUTED))
-                else:
-                    chips_ov = [ft.Text("Sin OVs en este corte", size=10, color="#64748B")]
-
-                col_detalle_ovs_por_corte.controls.append(
-                    ft.Container(
-                        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-                        bgcolor="#141A1C",
-                        border_radius=6,
-                        border=ft.Border.all(1, ACCENT_CYAN if filtro_corte_activo == c_label else "#2B3537"),
-                        content=ft.Column(
-                            [
-                                ft.Row(
-                                    [
-                                        ft.Text(f"⏱️ CORTE {c_label} HRS", size=11, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
-                                        ft.Text(f"{len(lista_c)} OVs ({listas_c} Enviadas a Fact.)", size=10, color="#34D399" if listas_c > 0 else TEXT_MUTED),
-                                    ],
-                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                ),
-                                ft.Row(chips_ov, wrap=True, spacing=5, run_spacing=4),
-                            ],
-                            spacing=4,
-                        ),
-                    )
-                )
-
-            # 3. CONSTRUIR LISTADO UNIFICADO DE ÓRDENES DE VENTA
-            nuevas_filas_listado = []
-            for r_ov in ovs_filtradas_listado:
-                ov_cod = r_ov["ov"]
-                es_fa = bool(r_ov.get("es_farmacia"))
-                est_actual = str(r_ov.get("estado") or "PENDIENTE_PICKING").upper()
-                cant_b = max(1, int(r_ov.get("bultos") or 1))
-                tipo_b = str(r_ov.get("tipo_empaque") or "BULTO").upper()
-
-                color_ov_texto = "#FBBF24" if es_fa else ACCENT_CYAN
-                badge_tipo_canal = (
-                    crear_badge_estado("FARMACIA (-FA)", "#92400E", "#FEF3C7")
-                    if es_fa
-                    else crear_badge_estado("OV NORMAL", "#1E3A8A", "#DBEAFE")
-                )
-
-                if est_actual in ("PENDIENTE_PICKING", "EN_PICKING", "PREVISUALIZADA"):
-                    est_col_picking = ("EN_PROCESO", "En Picking")
-                    est_col_packing = ("ESPERA", "Espera")
-                    est_col_fact = ("ESPERA", "Espera")
-                elif est_actual == "PENDIENTE_PACKING":
-                    est_col_picking = ("COMPLETADO", "Picking Listo")
-                    est_col_packing = ("EN_PROCESO", "En Packing")
-                    est_col_fact = ("ESPERA", "Espera")
-                elif est_actual == "FACTURADO":
-                    est_col_picking = ("COMPLETADO", "Picking Listo")
-                    est_col_packing = ("COMPLETADO", "Packing Listo")
-                    est_col_fact = ("COMPLETADO", "Facturado ✓")
-                else:
-                    est_col_picking = ("COMPLETADO", "Picking Listo")
-                    est_col_packing = ("COMPLETADO", "Packing Listo")
-                    est_col_fact = ("COMPLETADO", "Enviado a Fact.")
-
-                nuevas_filas_listado.append(
-                    ft.DataRow(
-                        color="#2A2419" if es_fa else None,
-                        cells=[
-                            ft.DataCell(ft.Text(ov_cod, weight=ft.FontWeight.W_900, size=11.5, color=color_ov_texto)),
-                            ft.DataCell(badge_tipo_canal),
-                            ft.DataCell(ft.Text(f"{r_ov.get('fecha_ov', '-')} • {r_ov.get('corte', '09:00')}", size=11, weight=ft.FontWeight.BOLD, color="#34D399")),
-                            ft.DataCell(ft.Text(str(r_ov.get("cliente") or "-")[:32], size=11, color=TEXT_WHITE)),
-                            ft.DataCell(crear_indicador_circulo_etapa(est_col_picking[0], est_col_picking[1])),
-                            ft.DataCell(crear_indicador_circulo_etapa(est_col_packing[0], est_col_packing[1])),
-                            ft.DataCell(crear_indicador_circulo_etapa(est_col_fact[0], est_col_fact[1])),
-                            ft.DataCell(
-                                ft.Row(
-                                    [
-                                        boton_primario(
-                                            f"LPN ({cant_b} {tipo_b[:1]})",
-                                            ft.Icons.QR_CODE_2_ROUNDED,
-                                            lambda ev, it=r_ov: imprimir_etiqueta_packing_bultos_ov(it),
-                                            ACCENT_TEAL,
-                                            height_val=26,
-                                        ),
-                                        boton_primario(
-                                            "VER SKUs",
-                                            ft.Icons.VISIBILITY_OUTLINED,
-                                            lambda ev, it=r_ov: mostrar_modal_detalle_ov(it["ov"], it),
-                                            "#334155",
-                                            height_val=26,
-                                        ),
-                                    ],
-                                    spacing=5,
-                                    tight=True,
-                                )
-                            ),
-                        ],
-                    )
-                )
-
-            tabla_listado_unico_ovs.rows = nuevas_filas_listado
-
-            # 4. LLENAR TABLA MÓDULO 4: FACTURACIÓN
-            ovs_en_facturacion = [
-                r for r in registros_packing_db
-                if r.get("estado") == "PENDIENTE_FACTURACION"
-                or (sw_ver_ya_facturadas.value and r.get("estado") == "FACTURADO")
-            ]
+            # ---------- 3. Facturación ----------
             q_fact = (txt_buscar_facturacion.value or "").strip().upper()
             checks_facturacion.clear()
-
-            filtradas_fact, ovs_vistas_fact = [], set()
-            for r_fc in ovs_en_facturacion:
-                clave_unica_ov = str(r_fc.get("ov_base") or r_fc.get("ov") or "").strip().upper().removesuffix("-FA").strip()
-                if not clave_unica_ov or clave_unica_ov in ovs_vistas_fact:
+            filtradas_fact, vistas = [], set()
+            for r in registros_packing_db:
+                est = r.get("estado")
+                if not (est == "PENDIENTE_FACTURACION" or (sw_ver_ya_facturadas.value and est == "FACTURADO")):
                     continue
-                if q_fact and not any(q_fact in str(r_fc.get(k, "")).upper() for k in ("ov", "cliente", "comuna", "lpn", "tipo_empaque")):
+                clave = str(r.get("ov_base") or r.get("ov") or "").strip().upper().removesuffix("-FA").strip()
+                if not clave or clave in vistas:
                     continue
-                ovs_vistas_fact.add(clave_unica_ov)
-                filtradas_fact.append(r_fc)
+                if q_fact and not any(q_fact in str(r.get(k, "")).upper() for k in ("ov", "cliente", "comuna", "lpn", "tipo_empaque")):
+                    continue
+                vistas.add(clave)
+                filtradas_fact.append(r)
 
-            lbl_resumen_facturacion.value = f"{len(filtradas_fact)} OV(s) en bandeja de Facturación listas para descargar Excel y subir a NetSuite."
-
-            nuevas_filas_facturacion = []
-            for r_fc in filtradas_fact:
-                ov_c = r_fc["ov"]
-                es_fa = bool(r_fc.get("es_farmacia", False))
-                est_fc = r_fc.get("estado", "PENDIENTE_FACTURACION")
-                chk_f = ft.Checkbox(value=(est_fc == "PENDIENTE_FACTURACION"), active_color=ACCENT_CYAN)
-                checks_facturacion[ov_c] = (chk_f, r_fc)
-
-                badge_est_fc = (
-                    crear_badge_estado("FACTURADO", "#065F46", "#D1FAE5")
-                    if est_fc == "FACTURADO"
-                    else crear_badge_estado("ENVIADO A FACTURACIÓN", "#1E3A8A", "#DBEAFE")
-                )
-
-                unid_emp = int(r_fc.get("unidades_pickeadas") or r_fc.get("unidades") or 0)
-                bultos_txt = f"{r_fc.get('bultos', 1)} {r_fc.get('tipo_empaque', 'BULTO')}(S)"
-
-                nuevas_filas_facturacion.append(
-                    ft.DataRow(
-                        color="#2A2419" if es_fa else None,
-                        cells=[
-                            ft.DataCell(chk_f),
-                            ft.DataCell(ft.Text(ov_c, weight=ft.FontWeight.BOLD, size=11, color="#FBBF24" if es_fa else ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(str(r_fc.get("fecha_ov") or "-"), size=11, color="#34D399")),
-                            ft.DataCell(
-                                crear_badge_estado("FARMACIA (-FA)", "#92400E", "#FEF3C7")
-                                if es_fa
-                                else crear_badge_estado("OV NORMAL", "#1E3A8A", "#DBEAFE")
-                            ),
-                            ft.DataCell(ft.Text(str(r_fc.get("cliente") or "-")[:28], size=11, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(str(r_fc.get("comuna") or "SANTIAGO"), size=11, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(bultos_txt, size=11, weight=ft.FontWeight.BOLD, color="#A78BFA")),
-                            ft.DataCell(ft.Text(f"{unid_emp} UN", size=11, weight=ft.FontWeight.BOLD, color="#34D399")),
-                            ft.DataCell(badge_est_fc),
-                            ft.DataCell(
-                                ft.Row(
-                                    [
-                                        boton_primario("EXCEL NS", ft.Icons.TABLE_VIEW_ROUNDED, lambda ev, it=r_fc: exportar_excel_facturacion_netsuite(solo_ov=it), ACCENT_BLUE, height_val=26),
-                                        boton_primario("PDF PALLETS", ft.Icons.PICTURE_AS_PDF_ROUNDED, lambda ev, it=r_fc: descargar_pdf_contenido_pallets(it), "#B91C1C", height_val=26),
-                                        boton_primario("LPN BULTOS", ft.Icons.QR_CODE_2_ROUNDED, lambda ev, it=r_fc: imprimir_etiqueta_packing_bultos_ov(it), ACCENT_TEAL, height_val=26),
-                                        boton_primario("FACTURADA ✓", ft.Icons.CHECK_CIRCLE_OUTLINE, lambda ev, it=r_fc: marcar_ovs_como_facturadas(ov_unica=it), "#047857" if est_fc != "FACTURADO" else "#334155", height_val=26),
-                                    ],
-                                    spacing=4,
-                                    tight=True,
-                                )
-                            ),
-                        ],
-                    )
-                )
-
-            tabla_facturacion_ns.rows = nuevas_filas_facturacion
+            filas_f = []
+            for r in filtradas_fact:
+                est = r.get("estado", "PENDIENTE_FACTURACION")
+                chk = ft.Checkbox(value=(est == "PENDIENTE_FACTURACION"), active_color=UI["acento"],
+                                  on_change=lambda e: actualizar_resumen_facturacion())
+                checks_facturacion[r["ov"]] = (chk, r)
+                filas_f.append(ft.DataRow(cells=[
+                    ft.DataCell(chk),
+                    ft.DataCell(ft.Text(r["ov"], size=13, weight=ft.FontWeight.W_700, color=UI["texto"])),
+                    ft.DataCell(chip_canal(r)),
+                    ft.DataCell(ft.Text(str(r.get("fecha_ov") or "-"), size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Text(str(r.get("cliente") or "-")[:40], size=12.5, color=UI["texto"], tooltip=str(r.get("cliente") or ""))),
+                    ft.DataCell(ft.Text(str(r.get("comuna") or "SANTIAGO"), size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Text(f"{r.get('bultos', 1)} {str(r.get('tipo_empaque') or 'BULTO').lower()}", size=12.5, color=UI["texto"])),
+                    ft.DataCell(ft.Text(f"{int(r.get('unidades_pickeadas') or r.get('unidades') or 0)} UN", size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])),
+                    ft.DataCell(chip("Facturada", UI["exito"]) if est == "FACTURADO" else chip("Por facturar", "#818CF8")),
+                    ft.DataCell(menu_fila([
+                        ("Excel NetSuite de esta OV", ft.Icons.TABLE_VIEW_ROUNDED, lambda e, it=r: exportar_excel_facturacion_netsuite(solo_ov=it)),
+                        ("Etiquetas de bultos", ft.Icons.QR_CODE_2_ROUNDED, lambda e, it=r: imprimir_etiqueta_packing_bultos_ov(it)),
+                        ("PDF contenido de pallets", ft.Icons.PICTURE_AS_PDF_ROUNDED, lambda e, it=r: descargar_pdf_contenido_pallets(it)),
+                        ("Marcar como facturada", ft.Icons.DONE_ALL_ROUNDED, lambda e, it=r: marcar_ovs_como_facturadas(ov_unica=it)),
+                    ])),
+                ]))
+            tabla_facturacion_ns.rows = filas_f
+            txt_vacio_facturacion.visible = not filas_f
+            cont_tabla_facturacion.height = altura_tabla(250)
+            actualizar_resumen_facturacion(actualizar=False)
             page.update()
+
+        def actualizar_resumen_facturacion(actualizar: bool = True):
+            total = len(checks_facturacion)
+            sel = sum(1 for chk, _ in checks_facturacion.values() if chk.value)
+            lbl_resumen_facturacion.value = f"{total} orden(es) empacadas · {sel} seleccionada(s) para el Excel de NetSuite"
+            btn_marcar_facturadas.disabled = sel == 0
+            if actualizar:
+                page.update()
+
+        def ir_a_seguimiento_corte(corte_sel: str):
+            nonlocal filtro_corte_activo
+            filtro_corte_activo = corte_sel
+            dd_filtro_corte.value = corte_sel
+            self.sel_sub_olas(2)
 
         def aplicar_filtro_corte_rapido(corte_sel: str):
             cambiar_filtro_estado_interno(corte_sel)
@@ -1817,9 +1824,8 @@ class PickingModulo:
             renderizar_monitor_cortes_y_tablas()
 
         dd_filtro_corte.on_select = cambiar_filtro_corte_dropdown
-        dd_filtro_corte.on_change = cambiar_filtro_corte_dropdown
         dd_filtro_canal_ov.on_select = cambiar_filtro_canal_dropdown
-        dd_filtro_canal_ov.on_change = cambiar_filtro_canal_dropdown
+        dd_filtro_etapa.on_select = lambda e: renderizar_monitor_cortes_y_tablas()
         txt_buscar_ov_unificada.on_change = lambda e: renderizar_monitor_cortes_y_tablas()
         txt_buscar_facturacion.on_change = lambda e: renderizar_monitor_cortes_y_tablas()
         sw_ver_ya_facturadas.on_change = lambda e: renderizar_monitor_cortes_y_tablas()
@@ -1836,39 +1842,46 @@ class PickingModulo:
             item_ola["ov"] = f"{ov_base}-FA" if es_fa_nuevo else ov_base
             renderizar_tabla_previsualizacion()
 
+        def actualizar_resumen_prev():
+            total = len(olas_extraidas_ns)
+            sel = sum(1 for it in olas_extraidas_ns if it.get("seleccionada", True))
+            lbl_resumen_prev.value = f"{total} orden(es) · {sel} seleccionada(s)" if total else "Sin órdenes extraídas"
+
         def cambiar_check_individual(e, item_ola: dict):
             item_ola["seleccionada"] = bool(e.control.value)
+            actualizar_resumen_prev()
+            page.update()
 
         def renderizar_tabla_previsualizacion():
             checks_liberacion.clear()
-            nuevas_filas_prev = []
+            filas = []
             for item in olas_extraidas_ns:
                 ov_cod = item["ov"]
-                chk = ft.Checkbox(value=item.get("seleccionada", True), active_color=ACCENT_CYAN, on_change=lambda e, it=item: cambiar_check_individual(e, it))
+                chk = ft.Checkbox(value=item.get("seleccionada", True), active_color=UI["acento"],
+                                  on_change=lambda e, it=item: cambiar_check_individual(e, it))
                 checks_liberacion[ov_cod] = chk
                 es_fa = item.get("es_farmacia", False)
-                badge_canal = ft.Container(
-                    ink=True,
-                    on_click=lambda e, it=item: alternar_canal_farmacia_manual(it),
-                    content=crear_badge_estado("FARMACIA (-FA)", "#92400E", "#FEF3C7") if es_fa else crear_badge_estado("ESTÁNDAR", "#1E3A8A", "#DBEAFE"),
-                )
-                nuevas_filas_prev.append(
-                    ft.DataRow(
-                        color="#2A2419" if es_fa else None,
-                        cells=[
-                            ft.DataCell(chk),
-                            ft.DataCell(ft.Text(ov_cod, weight=ft.FontWeight.BOLD, size=11, color="#FBBF24" if es_fa else ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(str(item.get("fecha_ov") or "-"), weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
-                            ft.DataCell(ft.Text(f"⏱️ {item.get('corte', '09:00')} hrs", weight=ft.FontWeight.BOLD, size=11, color="#A78BFA")),
-                            ft.DataCell(badge_canal),
-                            ft.DataCell(ft.Text(str(item.get("cliente") or "-")[:32], size=11, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(str(item.get("lineas_cnt", 1)), size=11, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(f"{item.get('unidades', 0)} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
-                            ft.DataCell(boton_primario("VER SKUs", ft.Icons.VISIBILITY_OUTLINED, lambda ev, cod=ov_cod, inf=item: mostrar_modal_detalle_ov(cod, inf), ACCENT_TEAL, height_val=26)),
-                        ],
-                    )
-                )
-            tabla_previsualizacion_ns.rows = nuevas_filas_prev
+                filas.append(ft.DataRow(cells=[
+                    ft.DataCell(chk),
+                    ft.DataCell(ft.Text(ov_cod, size=13, weight=ft.FontWeight.W_700, color=UI["texto"])),
+                    ft.DataCell(ft.Text(str(item.get("fecha_ov") or "-"), size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Text(f"{item.get('corte', '09:00')} hrs", size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Container(
+                        content=chip("Farmacia (-FA)", "#FBBF24") if es_fa else chip("Normal", UI["texto_2"]),
+                        on_click=lambda e, it=item: alternar_canal_farmacia_manual(it),
+                        tooltip="Cambiar entre Normal y Farmacia", ink=True, border_radius=12,
+                    )),
+                    ft.DataCell(ft.Text(str(item.get("cliente") or "-")[:44], size=12.5, color=UI["texto"])),
+                    ft.DataCell(ft.Text(str(item.get("lineas_cnt", 1)), size=12.5, color=UI["texto"])),
+                    ft.DataCell(ft.Text(f"{item.get('unidades', 0)} UN", size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])),
+                    ft.DataCell(ft.IconButton(icon=ft.Icons.LIST_ALT_ROUNDED, icon_size=18, icon_color=UI["acento"], tooltip="Ver SKU",
+                                              on_click=lambda ev, cod=ov_cod, inf=item: mostrar_modal_detalle_ov(cod, inf))),
+                ]))
+            tabla_previsualizacion_ns.rows = filas
+            txt_vacio_prev.visible = not filas
+            cont_tabla_prev_ns.visible = bool(filas)
+            cont_tabla_prev_ns.height = altura_tabla(330)
+            actualizar_resumen_prev()
             renderizar_monitor_cortes_y_tablas()
 
         def marcar_todas_olas(e=None):
@@ -2171,423 +2184,148 @@ class PickingModulo:
             cargar_monitor_packing_dual()
 
         # =====================================================================
-        # VISTA 1: MONITOR DE OLAS Y PACKING
+        # PANTALLAS (una tarea por pantalla, una acción principal por pantalla)
         # =====================================================================
-        panel_relojes_izquierdo = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Text("OVs por Corte Horario (Clic para filtrar)", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Row(
-                        [
-                            crear_caja_digital(lbl_corte_09, "Corte 09:00", ACCENT_PURPLE, 82, lambda e: aplicar_filtro_corte_rapido("09:00")),
-                            crear_caja_digital(lbl_corte_10, "Corte 10:00", ACCENT_PURPLE, 82, lambda e: aplicar_filtro_corte_rapido("10:00")),
-                            crear_caja_digital(lbl_corte_12, "Corte 12:00", ACCENT_PURPLE, 82, lambda e: aplicar_filtro_corte_rapido("12:00")),
-                            crear_caja_digital(lbl_corte_13, "Corte 13:00", ACCENT_PURPLE, 82, lambda e: aplicar_filtro_corte_rapido("13:00")),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_AROUND,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=8),
-                    ft.Text("Resumen de Órdenes de Venta", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Row(
-                        [
-                            crear_caja_digital(lbl_kpi_total_ovs, "Total OVs", ACCENT_TEAL, 82, lambda e: aplicar_filtro_corte_rapido("TODOS")),
-                            crear_caja_digital(lbl_kpi_ov_normal, "OV Normal", ACCENT_BLUE, 82),
-                            crear_caja_digital(lbl_kpi_ov_farma, "OV Farmacia", "#D97706", 82),
-                            crear_caja_digital(lbl_kpi_pend_fact, "Enviadas Fact.", "#10B981", 82, lambda e: self.sel_sub_olas(3)),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_AROUND,
-                        wrap=True,
-                    ),
-                ],
-                spacing=6,
-            ),
-        )
-
-        panel_grafico_derecho = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Text("Distribución de OVs por Corte Horario (09, 10, 12 y 13 hrs)", size=12.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            ft.Row(
-                                [
-                                    ft.Container(width=10, height=10, bgcolor=ACCENT_BLUE, border_radius=2),
-                                    ft.Text("OV Normal", size=10, color=TEXT_MUTED),
-                                    ft.Container(width=10, height=10, bgcolor="#FBBF24", border_radius=2),
-                                    ft.Text("OV Farmacia (-FA)", size=10, color=TEXT_MUTED),
-                                    ft.Container(width=10, height=10, bgcolor="#10B981", border_radius=2),
-                                    ft.Text("Enviado a Facturación", size=10, color=TEXT_MUTED),
-                                ],
-                                spacing=6,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=6),
-                    ft.ResponsiveRow(
-                        [
-                            ft.Container(
-                                col={"xs": 12, "sm": 12, "md": 5, "lg": 5, "xl": 4},
-                                height=145,
-                                padding=ft.Padding.symmetric(horizontal=8, vertical=6),
-                                bgcolor="#181E20",
-                                border_radius=6,
-                                alignment=ft.Alignment.BOTTOM_CENTER,
-                                content=fila_barras_cortes,
-                            ),
-                            ft.Container(
-                                col={"xs": 12, "sm": 12, "md": 7, "lg": 7, "xl": 8},
-                                height=145,
-                                padding=8,
-                                bgcolor="#181E20",
-                                border_radius=6,
-                                content=col_detalle_ovs_por_corte,
-                            ),
-                        ],
-                        spacing=8,
-                        run_spacing=8,
-                    ),
-                ],
-                spacing=6,
-            ),
-        )
-
-        bloque_superior_kpi_cortes = ft.ResponsiveRow(
-            [
-                ft.Container(col={"xs": 12, "sm": 12, "md": 12, "lg": 5, "xl": 4}, content=panel_relojes_izquierdo),
-                ft.Container(col={"xs": 12, "sm": 12, "md": 12, "lg": 7, "xl": 8}, content=panel_grafico_derecho),
-            ],
-            spacing=10,
-            run_spacing=10,
-        )
-
-        ico_toggle_kpi = ft.Icon(ft.Icons.KEYBOARD_ARROW_UP_ROUNDED, color=ACCENT_CYAN, size=16)
-        txt_toggle_kpi = ft.Text("PLEGAR KPIs", size=10.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)
-
-        def toggle_kpis_superiores(e=None):
-            bloque_superior_kpi_cortes.visible = not bloque_superior_kpi_cortes.visible
-            ico_toggle_kpi.name = ft.Icons.KEYBOARD_ARROW_UP_ROUNDED if bloque_superior_kpi_cortes.visible else ft.Icons.KEYBOARD_ARROW_DOWN_ROUNDED
-            txt_toggle_kpi.value = "PLEGAR KPIs" if bloque_superior_kpi_cortes.visible else "DESPLEGAR KPIs"
-            page.update()
-
-        btn_plegar_kpis = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=10, vertical=0),
-            height=30,
-            bgcolor="#181E20",
-            border_radius=6,
-            border=ft.Border.all(1, BORDER_COLOR),
-            ink=True,
-            on_click=toggle_kpis_superiores,
-            content=ft.Row([ico_toggle_kpi, txt_toggle_kpi], spacing=4, tight=True),
-        )
-
-        def toggle_visibilidad_prev_ns(e=None):
-            cont_tabla_prev_ns.visible = not cont_tabla_prev_ns.visible
-            page.update()
-
-        tarjeta_extraccion_netsuite = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    ft.Text("PRE-VISUALIZACIÓN DE OLAS EXTRAÍDAS DESDE NETSUITE", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                                    txt_estado_erp,
-                                ],
-                                spacing=2,
-                            ),
-                            ft.Row(
-                                [
-                                    boton_primario("PLEGAR / DESPLEGAR", ft.Icons.UNFOLD_LESS_ROUNDED, toggle_visibilidad_prev_ns, "#1E3A8A", height_val=30),
-                                    boton_primario("MARCAR TODAS", ft.Icons.CHECK_BOX_OUTLINED, marcar_todas_olas, "#334155", height_val=30),
-                                    boton_primario("SOLO FARMACIA (-FA)", ft.Icons.MEDICAL_SERVICES_OUTLINED, marcar_solo_farmacia_olas, "#D97706", height_val=30),
-                                    boton_primario("DESMARCAR TODAS", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED, desmarcar_todas_olas, "#475569", height_val=30),
-                                    boton_primario("2. LIBERAR OLAS A PICKING RF", ft.Icons.SEND_ROUNDED, liberar_olas_a_terminal_rf, "#047857", height_val=30),
-                                ],
-                                spacing=6,
-                                wrap=True,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=1),
-                    cont_tabla_prev_ns,
-                ],
-                spacing=8,
-            )
-        )
-
-        tarjeta_listado_unico_ovs = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.FACT_CHECK_ROUNDED, color=ACCENT_CYAN, size=20),
-                                            ft.Text("LISTADO DE ÓRDENES DE VENTA: AVANCE PICKING • PACKING • ENVIADO A FACTURACIÓN", size=13.5, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                                        ],
-                                        spacing=8,
-                                    ),
-                                    ft.Row(
-                                        [
-                                            ft.Container(width=10, height=10, bgcolor=ACCENT_CYAN, border_radius=5),
-                                            ft.Text("OV Normal (Estándar)", size=10.5, color=ACCENT_CYAN, weight=ft.FontWeight.BOLD),
-                                            ft.Container(width=8),
-                                            ft.Container(width=10, height=10, bgcolor="#FBBF24", border_radius=5),
-                                            ft.Text("OV Farmacia (-FA / OT)", size=10.5, color="#FBBF24", weight=ft.FontWeight.BOLD),
-                                            ft.Container(width=8),
-                                            ft.Container(width=10, height=10, bgcolor="#10B981", border_radius=5),
-                                            ft.Text("Completado desde Terminal RF", size=10.5, color="#34D399", weight=ft.FontWeight.BOLD),
-                                        ],
-                                        spacing=5,
-                                    ),
-                                ],
-                                spacing=4,
-                            ),
-                            ft.Row(
-                                [
-                                    btn_abrir_calendario_ov,
-                                    boton_primario("VER TODAS", ft.Icons.EVENT_REPEAT_ROUNDED, limpiar_fecha_calendario_ov, "#334155", height_val=34),
-                                    dd_filtro_canal_ov,
-                                    txt_buscar_ov_unificada,
-                                    boton_primario("EXPORTAR PACKING (EXCEL)", ft.Icons.TABLE_VIEW_OUTLINED, lambda e: exportar_ov_farmacia_excel_pdf(None), "#B45309", height_val=34),
-                                ],
-                                spacing=8,
-                                wrap=True,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=2),
-                    cont_tabla_listado_unico,
-                ],
-                spacing=8,
-            )
-        )
-
-        tarjeta_modulo_facturacion = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, color="#34D399", size=22),
-                                            ft.Text("4. MÓDULO DE FACTURACIÓN: ÓRDENES EMPACADAS PENDIENTES DE FACTURAR EN NETSUITE", size=14, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                                        ],
-                                        spacing=8,
-                                    ),
-                                    lbl_resumen_facturacion,
-                                ],
-                                spacing=2,
-                            ),
-                            ft.Row(
-                                [
-                                    txt_buscar_facturacion,
-                                    sw_ver_ya_facturadas,
-                                    boton_primario("DESCARGAR EXCEL PARA SUBIR A NETSUITE (FACTURACIÓN)", ft.Icons.CLOUD_UPLOAD_ROUNDED, exportar_excel_facturacion_netsuite, "#047857", height_val=34),
-                                    boton_primario("MARCAR SELECCIONADAS COMO FACTURADAS", ft.Icons.DONE_ALL_ROUNDED, marcar_ovs_como_facturadas, ACCENT_BLUE, height_val=34),
-                                ],
-                                spacing=8,
-                                wrap=True,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=4),
-                    cont_tabla_facturacion,
-                ],
-                spacing=8,
-            )
-        )
-
-        # =====================================================================
-        # PAGINAS OPERATIVAS SEPARADAS: una tarea por pantalla
-        # =====================================================================
-        titulo_pagina = ft.Text(
-            "RESUMEN OPERATIVO DE OLAS Y PACKING",
-            size=14.5,
-            weight=ft.FontWeight.W_900,
-            color=TEXT_WHITE,
-        )
-        subtitulo_pagina = ft.Text(
-            "Indicadores generales. Seleccione un proceso en el menú lateral.",
-            size=10.5,
-            color=TEXT_MUTED,
-        )
-        acciones_pagina = ft.Row([], spacing=8, wrap=True)
-
-        def encabezado_proceso():
+        def vacio(texto: str):
             return ft.Container(
-                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
-                bgcolor="#222A2C",
-                border_radius=8,
-                border=ft.Border.all(1, BORDER_COLOR),
-                content=ft.Row(
-                    [
-                        ft.Row(
-                            [
-                                ft.Icon(ft.Icons.VIEW_IN_AR_OUTLINED, color=ACCENT_CYAN, size=22),
-                                ft.Column([titulo_pagina, subtitulo_pagina], spacing=1),
-                            ],
-                            spacing=10,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        ),
-                        acciones_pagina,
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    wrap=True,
-                ),
+                visible=False, padding=30, alignment=ft.Alignment.CENTER,
+                content=ft.Column([
+                    ft.Icon(ft.Icons.INBOX_OUTLINED, size=36, color=UI["texto_3"]),
+                    ft.Text(texto, size=13, color=UI["texto_2"], text_align=ft.TextAlign.CENTER),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6, tight=True),
             )
 
-        barra_proceso = encabezado_proceso()
+        txt_vacio_seguimiento = vacio("No hay órdenes con estos filtros.")
+        txt_vacio_facturacion = vacio("No hay órdenes empacadas pendientes de facturar.")
+        txt_vacio_prev = vacio("Extraiga órdenes desde NetSuite o suba el Excel de traslado para verlas aquí.")
+        txt_vacio_prev.visible = True
 
-        def tarjeta_acceso(titulo, descripcion, icono, color, indice):
-            return ft.Container(
-                col={"xs": 12, "sm": 12, "md": 4, "lg": 4, "xl": 4},
-                padding=14,
-                bgcolor="#202728",
-                border_radius=8,
-                border=ft.Border.all(1, color),
-                ink=True,
-                on_click=lambda e, i=indice: self.sel_sub_olas(i),
-                content=ft.Row(
-                    [
-                        ft.Container(
-                            width=42,
-                            height=42,
-                            border_radius=8,
-                            bgcolor=color,
-                            alignment=ft.Alignment.CENTER,
-                            content=ft.Icon(icono, color=TEXT_WHITE, size=22),
-                        ),
-                        ft.Column(
-                            [
-                                ft.Text(titulo, size=12.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                                ft.Text(descripcion, size=10.5, color=TEXT_MUTED),
-                            ],
-                            spacing=2,
-                            expand=True,
-                        ),
-                        ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=color, size=20),
-                    ],
-                    spacing=10,
-                ),
-            )
+        # ---------- 1. RESUMEN ----------
+        fila_kpis_resumen = ft.ResponsiveRow([
+            ui_kpi(lbl_kpi_total_ovs, "Órdenes del período", ft.Icons.RECEIPT_LONG_OUTLINED, UI["texto_2"], lbl_det_total),
+            ui_kpi(lbl_kpi_picking, "En picking", ft.Icons.SHOPPING_CART_OUTLINED, UI["alerta"],
+                   ft.Text("Liberadas a RF, sin cerrar", size=11, color=UI["texto_3"])),
+            ui_kpi(lbl_kpi_packing, "En packing", ft.Icons.INVENTORY_2_OUTLINED, UI["acento"],
+                   ft.Text("Pickeadas, por empacar", size=11, color=UI["texto_3"])),
+            ui_kpi(lbl_kpi_fact, "Enviadas a facturación", ft.Icons.TASK_ALT_ROUNDED, UI["exito"], lbl_det_fact),
+        ], spacing=12, run_spacing=12)
 
-        accesos_resumen = ft.ResponsiveRow(
-            [
-                tarjeta_acceso(
-                    "CREAR / LIBERAR OLAS",
-                    "NetSuite, Excel traslado y liberación RF",
-                    ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
-                    ACCENT_BLUE,
-                    1,
-                ),
-                tarjeta_acceso(
-                    "SEGUIMIENTO PICKING / PACKING",
-                    "Consultar OV/OT, estados, SKU y etiquetas",
-                    ft.Icons.FACT_CHECK_ROUNDED,
-                    ACCENT_CYAN,
-                    2,
-                ),
-                tarjeta_acceso(
-                    "FACTURACIÓN NETSUITE",
-                    "Exportar órdenes empacadas y confirmar facturación",
-                    ft.Icons.RECEIPT_LONG_ROUNDED,
-                    "#10B981",
-                    3,
-                ),
+        leyenda_etapas = ft.Row([
+            ft.Row([ft.Container(width=10, height=10, border_radius=2, bgcolor=COLORES_ETAPA[i]),
+                    ft.Text(t, size=11, color=UI["texto_2"])], spacing=5, tight=True)
+            for i, t in enumerate(["Picking", "Packing", "Facturación / tránsito", "Facturada"])
+        ], spacing=14, wrap=True)
+
+        tarjeta_cortes = ui_tarjeta(
+            col_cortes_resumen,
+            titulo="Avance por corte horario",
+            subtitulo="Toque una OV para ver su detalle, o la flecha para abrir el corte en Seguimiento.",
+            icono=ft.Icons.SCHEDULE_ROUNDED,
+            acciones=[leyenda_etapas],
+        )
+        subvista_resumen = ft.Column([fila_kpis_resumen, tarjeta_cortes], spacing=12)
+
+        # ---------- 2. CREAR / LIBERAR OLAS ----------
+        tarjeta_origen = ui_tarjeta(
+            ft.Column([
+                ft.Row([
+                    txt_fecha_desde, txt_fecha_hasta, dd_corte_asignar,
+                    ui_boton("Extraer de NetSuite", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, extraer_ordenes_netsuite),
+                    ui_boton("Subir Excel traslado SCL → CCP", ft.Icons.UPLOAD_FILE_ROUNDED, abrir_selector_traslado, "secundario"),
+                ], spacing=10, wrap=True, run_spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                txt_estado_erp,
+            ], spacing=8, tight=True),
+            titulo="1. Origen de las órdenes",
+            icono=ft.Icons.INPUT_ROUNDED,
+        )
+        tarjeta_extraccion_netsuite = ui_tarjeta(
+            ft.Column([cont_tabla_prev_ns, txt_vacio_prev], spacing=0, tight=True),
+            titulo="2. Revisar y liberar a picking RF",
+            subtitulo=None,
+            icono=ft.Icons.PLAYLIST_ADD_CHECK_ROUNDED,
+            acciones=[
+                lbl_resumen_prev,
+                ui_menu("Selección", ft.Icons.CHECKLIST_ROUNDED, [
+                    ("Marcar todas", ft.Icons.CHECK_BOX_OUTLINED, marcar_todas_olas),
+                    ("Solo farmacia (-FA)", ft.Icons.MEDICAL_SERVICES_OUTLINED, marcar_solo_farmacia_olas),
+                    ("Desmarcar todas", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED, desmarcar_todas_olas),
+                ]),
+                ui_boton("Liberar a picking RF", ft.Icons.SEND_ROUNDED, liberar_olas_a_terminal_rf),
             ],
-            spacing=10,
-            run_spacing=10,
         )
+        subvista_extraccion = ft.Column([tarjeta_origen, tarjeta_extraccion_netsuite], spacing=12)
 
-        # Página 1: resumen, sin tablas operativas apiladas.
-        subvista_resumen = ft.Column(
-            [bloque_superior_kpi_cortes, accesos_resumen],
-            spacing=10,
-            scroll=ft.ScrollMode.AUTO,
-            expand=True,
-        )
+        # ---------- 3. SEGUIMIENTO ----------
+        txt_buscar_ov_unificada.width = None
+        txt_buscar_ov_unificada.expand = True
+        txt_buscar_ov_unificada.prefix_icon = ft.Icons.SEARCH_ROUNDED
+        barra_filtros_seguimiento = ft.ResponsiveRow([
+            ft.Container(content=txt_buscar_ov_unificada, col={"xs": 12, "md": 12, "lg": 4}),
+            ft.Container(content=dd_filtro_corte, col={"xs": 6, "md": 3, "lg": 2}),
+            ft.Container(content=dd_filtro_canal_ov, col={"xs": 6, "md": 3, "lg": 2}),
+            ft.Container(content=dd_filtro_etapa, col={"xs": 6, "md": 3, "lg": 2}),
+            ft.Container(content=ft.Row([btn_abrir_calendario_ov, btn_limpiar_dia], spacing=4, tight=True), col={"xs": 6, "md": 3, "lg": 2}),
+        ], spacing=10, run_spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-        # Página 2: creación y liberación. Los filtros de extracción viven solo aquí.
-        barra_extraccion = ft.Container(
-            padding=12,
-            bgcolor="#202728",
-            border_radius=8,
-            border=ft.Border.all(1, BORDER_COLOR),
-            content=ft.Row(
-                [
-                    txt_fecha_desde,
-                    txt_fecha_hasta,
-                    dd_corte_asignar,
-                    btn_subir_traslado,
-                    boton_primario(
-                        "1. EXTRAER ÓRDENES NETSUITE",
-                        ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
-                        extraer_ordenes_netsuite,
-                        ACCENT_BLUE,
-                        height_val=34,
-                    ),
-                    ft.IconButton(
-                        icon=ft.Icons.SYNC_ROUNDED,
-                        icon_color=ACCENT_CYAN,
-                        tooltip="Actualizar previsualización",
-                        on_click=cargar_monitor_packing_dual,
-                    ),
-                ],
-                spacing=8,
-                wrap=True,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
+        tarjeta_listado_unico_ovs = ui_tarjeta(
+            ft.Column([barra_filtros_seguimiento, cont_tabla_listado_unico, txt_vacio_seguimiento], spacing=12, tight=True),
+            titulo="Órdenes de venta y traslados",
+            icono=ft.Icons.FACT_CHECK_OUTLINED,
+            acciones=[lbl_conteo_seguimiento],
         )
-        subvista_extraccion = ft.Column(
-            [barra_extraccion, tarjeta_extraccion_netsuite],
-            spacing=10,
-            scroll=ft.ScrollMode.AUTO,
-            expand=True,
-        )
+        subvista_seguimiento = ft.Column([tarjeta_listado_unico_ovs], spacing=12)
 
-        # Página 3: seguimiento. No contiene extracción ni KPI de cortes.
-        subvista_seguimiento = ft.Column(
-            [tarjeta_listado_unico_ovs],
-            spacing=10,
-            scroll=ft.ScrollMode.AUTO,
-            expand=True,
+        # ---------- 4. FACTURACIÓN ----------
+        txt_buscar_facturacion.prefix_icon = ft.Icons.SEARCH_ROUNDED
+        btn_marcar_facturadas = ui_boton("Marcar como facturadas", ft.Icons.DONE_ALL_ROUNDED, marcar_ovs_como_facturadas, "secundario")
+        tarjeta_modulo_facturacion = ui_tarjeta(
+            ft.Column([
+                ft.Row([txt_buscar_facturacion, sw_ver_ya_facturadas], spacing=14, wrap=True,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                cont_tabla_facturacion,
+                txt_vacio_facturacion,
+            ], spacing=12, tight=True),
+            titulo="Órdenes empacadas",
+            subtitulo=None,
+            icono=ft.Icons.RECEIPT_LONG_ROUNDED,
+            acciones=[
+                lbl_resumen_facturacion,
+                btn_marcar_facturadas,
+                ui_boton("Descargar Excel NetSuite", ft.Icons.CLOUD_UPLOAD_OUTLINED, exportar_excel_facturacion_netsuite),
+            ],
         )
+        subvista_facturacion = ft.Column([tarjeta_modulo_facturacion], spacing=12)
 
-        # Página 4: facturación independiente.
-        subvista_facturacion = ft.Column(
-            [tarjeta_modulo_facturacion],
-            spacing=10,
-            scroll=ft.ScrollMode.AUTO,
-            expand=True,
+        # ---------- Encabezado común ----------
+        titulo_pagina = ft.Text("Resumen operativo", size=18, weight=ft.FontWeight.W_700, color=UI["texto"])
+        subtitulo_pagina = ft.Text("", size=12, color=UI["texto_2"])
+        acciones_pagina = ft.Row([], spacing=8, wrap=True, run_spacing=8)
+        barra_proceso = ft.Row(
+            [
+                ft.Row([ft.Icon(ft.Icons.MOVE_TO_INBOX_OUTLINED, size=24, color=UI["acento"]),
+                        ft.Column([titulo_pagina, subtitulo_pagina], spacing=1, tight=True)],
+                       spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                acciones_pagina,
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            wrap=True, run_spacing=10,
         )
+        btn_actualizar = ui_boton("Actualizar", ft.Icons.SYNC_ROUNDED, cargar_monitor_packing_dual, "secundario")
+        menu_exportar_seguimiento = ui_menu("Exportar", ft.Icons.DOWNLOAD_ROUNDED, [
+            ("Packing list de las OV (Excel)", ft.Icons.TABLE_VIEW_ROUNDED, lambda e: exportar_ov_farmacia_excel_pdf(None)),
+        ])
 
-        contenedor_subvista_olas = ft.Container(content=subvista_resumen, expand=True)
+        contenedor_subvista_olas = ft.Container(content=subvista_resumen)
         col_principal_picking = ft.Column(
             [barra_proceso, contenedor_subvista_olas],
-            spacing=10,
+            spacing=16,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
         )
         self.vista = ft.Container(
-            padding=ft.Padding.only(left=12, top=10, right=16, bottom=12),
-            bgcolor=BG_MODULO,
+            padding=ft.Padding.only(left=16, top=14, right=16, bottom=16),
+            bgcolor=UI["bg"],
             content=col_principal_picking,
             expand=True,
         )
@@ -2599,6 +2337,13 @@ class PickingModulo:
         self.titulo_pagina = titulo_pagina
         self.subtitulo_pagina = subtitulo_pagina
         self.acciones_pagina = acciones_pagina
+        self._acciones_por_pagina = [
+            [btn_dia_resumen, btn_limpiar_dia_resumen, btn_actualizar],
+            [btn_actualizar],
+            [menu_exportar_seguimiento, btn_actualizar],
+            [btn_actualizar],
+        ]
+        acciones_pagina.controls = list(self._acciones_por_pagina[0])
         self._checks_liberacion = checks_liberacion
         self._checks_facturacion = checks_facturacion
         self._olas_extraidas_ns = olas_extraidas_ns
@@ -2611,25 +2356,19 @@ class PickingModulo:
         idx_ok = idx if 0 <= idx <= 3 else 0
         vistas = [self.sub_resumen, self.sub_extraccion, self.sub_seguimiento, self.sub_facturacion]
         titulos = [
-            ("RESUMEN OPERATIVO", "Indicadores generales y acceso a cada proceso."),
-            ("CREAR Y LIBERAR OLAS", "Extraiga desde NetSuite o Excel, revise y libere a RF."),
-            ("SEGUIMIENTO PICKING / PACKING", "Consulte cada OV/OT sin mezclar extracción ni facturación."),
-            ("FACTURACIÓN NETSUITE", "Trabaje únicamente con órdenes empacadas pendientes de facturar."),
+            ("Resumen operativo", "Estado de las órdenes por etapa y corte horario."),
+            ("Crear y liberar olas", "Traiga las órdenes de NetSuite o del Excel de traslado y libérelas a los terminales RF."),
+            ("Seguimiento picking / packing", "Busque una OV u OT y vea en qué etapa está."),
+            ("Facturación NetSuite", "Órdenes empacadas: descargue el Excel para NetSuite y confirme la facturación."),
         ]
-        # Limpia selección visual de la página anterior, no elimina datos persistidos.
         if idx_ok != 1:
             for chk in self._checks_liberacion.values():
                 try:
                     chk.value = False
                 except Exception:
                     pass
-        if idx_ok != 3:
-            for chk, _ in self._checks_facturacion.values():
-                try:
-                    chk.value = False
-                except Exception:
-                    pass
+        # Un mismo control no puede estar en dos pantallas: el encabezado los toma de la pantalla activa
+        self.acciones_pagina.controls = list(self._acciones_por_pagina[idx_ok])
         self.contenedor.content = vistas[idx_ok]
         self.titulo_pagina.value, self.subtitulo_pagina.value = titulos[idx_ok]
         self.cargar_monitor_packing_dual_func()
-        self.page.update()
