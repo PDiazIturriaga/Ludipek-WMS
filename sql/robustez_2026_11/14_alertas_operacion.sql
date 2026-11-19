@@ -88,13 +88,14 @@ begin
     return query
     with x as (
       select r.id::text ref, r.creado_en f,
-             format('%s · %s%s%s · %s', r.tipo, coalesce('LPN ' || r.lpn || ' ', ''), coalesce('en ' || r.ubicacion || ' ', ''),
+             format('[%s] %s · %s%s%s· %s · %s', r.modulo, r.tipo, coalesce('LPN ' || r.lpn || ' ', ''),
+                    coalesce('SKU ' || r.sku || ' ', ''), coalesce('en ' || r.ubicacion || ' ', ''),
                     coalesce(nullif(r.detalle, ''), 'sin detalle'), r.usuario) txt
       from wms_reportes_operacion r
       where r.bodega = v_bodega and r.estado = 'ABIERTO'
     )
     select 'REPORTE_OPERADOR', 'ALTA', 'Reportes de operadores',
-           'Problemas informados desde el celular (ubicación equivocada, cantidad, daño...). Revise y marque como resuelto.',
+           'Problemas informados desde el celular en recepción, almacenamiento y reabastecimiento. Vaya a revisar y marque como resuelto.',
            'ALMACENAMIENTO', true, count(*)::int,
            coalesce(jsonb_agg(jsonb_build_object('ref', ref, 'texto', txt, 'fecha', f) order by f desc), '[]')
     from x having count(*) > 0;

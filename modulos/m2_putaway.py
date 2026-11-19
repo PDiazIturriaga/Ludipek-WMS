@@ -320,10 +320,11 @@ class PutawayModulo:
             rows=[],
         )
 
-        cont_tabla_monitor = ui_tabla(tabla_monitor_zona, 460)
+        cont_tabla_monitor = ui_tabla(tabla_monitor_zona, 640)
         cont_tabla_consultador = ui_tabla(tabla_consultador_avanzado, 520)
         cont_tabla_reapro = ui_tabla(tabla_reabastecimiento, 520)
-        fila_racks = ft.ResponsiveRow(spacing=12, run_spacing=12)
+        fila_racks = ft.ResponsiveRow(spacing=8, run_spacing=8)
+        fila_zonas = ft.ResponsiveRow(spacing=8, run_spacing=8)
         col_ocupacion_gemelo = ft.Column(spacing=10, tight=True)
         txt_buscar_zona = ft.TextField(
             label="Filtrar esta zona (SKU, LPN, lote, ubicación)", prefix_icon=ft.Icons.SEARCH_ROUNDED, width=360, dense=True,
@@ -823,38 +824,42 @@ class PutawayModulo:
                     racks_base.append(rk)
             racks_base.sort()
 
-            def tarjeta_zona(clave, titulo, icono, color, items, ocupadas=None, total=None):
+            def tarjeta_zona(clave, titulo, icono, color, items, ocupadas=None, total=None, col=None):
+                """Tarjeta compacta: nombre, LPN, unidades y ocupación en poco alto."""
                 activo = zona_seleccionada == clave
                 pct = (ocupadas / total) if total else None
                 return ft.Container(
-                    col={"xs": 6, "md": 4, "lg": 2},
-                    padding=12, border_radius=10, ink=True,
+                    col=col or {"xs": 6, "md": 4, "lg": 6},
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=8), border_radius=8, ink=True,
                     on_click=lambda e, c=clave: sel_zona(c),
-                    bgcolor=ft.Colors.with_opacity(0.10, color) if activo else UI["card_alt"],
+                    bgcolor=ft.Colors.with_opacity(0.12, color) if activo else UI["card_alt"],
                     border=ft.Border.all(1.5 if activo else 1, color if activo else UI["borde"]),
+                    tooltip=f"{sum(x['unidades'] for x in items):,} UN · {len({x['sku'] for x in items})} SKU".replace(",", "."),
                     content=ft.Column([
-                        ft.Row([ft.Icon(icono, size=16, color=color),
-                                ft.Text(titulo, size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])], spacing=6),
                         ft.Row([
-                            ft.Text(str(len(items)), size=22, weight=ft.FontWeight.W_700, color=UI["texto"]),
-                            ft.Text("LPN", size=11, color=UI["texto_2"]),
-                        ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.END),
-                        ft.Text(f"{sum(x['unidades'] for x in items):,} UN · {len({x['sku'] for x in items})} SKU".replace(",", "."),
-                                size=11, color=UI["texto_2"]),
-                        *([ft.ProgressBar(value=min(1.0, pct), height=5, color=color, bgcolor="#2A3538", border_radius=3),
-                           ft.Text(f"{ocupadas}/{total} posiciones · {int(round(pct * 100))}%", size=10.5, color=UI["texto_3"])]
-                          if pct is not None else []),
-                    ], spacing=4, tight=True),
+                            ft.Icon(icono, size=14, color=color),
+                            ft.Text(titulo, size=12, weight=ft.FontWeight.W_600, color=UI["texto"], expand=True,
+                                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                            ft.Text(str(len(items)), size=15, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                            ft.Text("LPN", size=10, color=UI["texto_3"]),
+                        ], spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        *([ft.ProgressBar(value=min(1.0, pct), height=4, color=color, bgcolor="#2A3538", border_radius=2),
+                           ft.Text(f"{ocupadas}/{total} pos. · {int(round(pct * 100))}%", size=10, color=UI["texto_3"])]
+                          if pct is not None else
+                          [ft.Text(f"{sum(x['unidades'] for x in items):,} UN".replace(",", "."), size=10, color=UI["texto_3"])]),
+                    ], spacing=3, tight=True),
                 )
 
             total_pos = sum(len(v) for k, v in pos_por_rack.items() if k.startswith("RACK "))
             total_ocup = sum(len(ocup_por_rack.get(k, set()) & v) for k, v in pos_por_rack.items() if k.startswith("RACK "))
             stock_solo_racks = [x for x in stock_en_racks if x["rack"].startswith("RACK ")]
-            tarjetas = [
+            # Zonas (andén, todo, arena, merma) separadas de los racks
+            zonas = [
                 tarjeta_zona("RECEPCION", "Andén", ft.Icons.MOVE_TO_INBOX_ROUNDED, UI["alerta"], lpns_en_anden),
                 tarjeta_zona("TODOS_RACKS", "Todos los racks", ft.Icons.WAREHOUSE_OUTLINED, UI["acento"], stock_solo_racks,
                              total_ocup, total_pos),
             ]
+            tarjetas = []
             for nom_rk in racks_base:
                 items_r = [x for x in stock_en_racks if x["rack"] == nom_rk]
                 pos_r = pos_por_rack.get(nom_rk, set())
@@ -866,12 +871,13 @@ class PutawayModulo:
                 items_ar = [x for x in stock_en_racks if x["rack"] == nom_ar]
                 if not pos_ar and not items_ar:
                     continue
-                tarjetas.append(tarjeta_zona(
+                zonas.append(tarjeta_zona(
                     nom_ar, nom_ar.title(),
                     ft.Icons.GRASS_ROUNDED if nom_ar != "MERMA ARENA" else ft.Icons.DELETE_OUTLINE_ROUNDED,
                     COLOR_ARENA if nom_ar != "MERMA ARENA" else UI["peligro"], items_ar,
                     len(ocup_por_rack.get(nom_ar, set()) & pos_ar) if pos_ar else None, len(pos_ar) or None))
             fila_racks.controls = tarjetas
+            fila_zonas.controls = zonas
             lbl_dig_ocupacion.value = f"{int(round(total_ocup * 100 / total_pos))}%" if total_pos else "—"
             lbl_det_ocupacion.value = f"{total_ocup} de {total_pos} posiciones con stock" if total_pos else "Sin maestra de ubicaciones"
 
@@ -1042,9 +1048,15 @@ class PutawayModulo:
                 ui_kpi(lbl_dig_alertas_reapro, "Por reabastecer", ft.Icons.ARROW_DOWNWARD_ROUNDED, UI["peligro"],
                        ft.Text("SKU con poco stock en nivel 1", size=11, color=UI["texto_3"])),
             ], spacing=12, run_spacing=12),
-            ui_tarjeta(fila_racks, titulo="Zonas y racks", subtitulo="Toque una tarjeta para ver sus pallets.",
-                       icono=ft.Icons.VIEW_COLUMN_OUTLINED),
-            tarjeta_tabla_zona,
+            # Selector a la izquierda (zonas arriba, racks abajo) y la tabla a la derecha, a la vista sin bajar
+            ft.ResponsiveRow([
+                ft.Container(col={"xs": 12, "lg": 4, "xl": 3}, content=ft.Column([
+                    ui_tarjeta(fila_zonas, titulo="Zonas", subtitulo="Andén, arena y merma.", icono=ft.Icons.LAYERS_OUTLINED),
+                    ui_tarjeta(fila_racks, titulo="Racks", subtitulo="Toque un rack para ver sus pallets.",
+                               icono=ft.Icons.VIEW_COLUMN_OUTLINED),
+                ], spacing=12)),
+                ft.Container(tarjeta_tabla_zona, col={"xs": 12, "lg": 8, "xl": 9}),
+            ], spacing=12, run_spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
         ], spacing=12)
         lbl_titulo_tabla_monitor.size = 14
         lbl_titulo_tabla_monitor.weight = ft.FontWeight.W_600
