@@ -380,15 +380,18 @@ class MonitorUsuariosColaModulo:
         def tarjeta_usuario_equipo(u: dict, equipo_actual: str, ovs: list, actividad: dict):
             cod = str(u.get("usuario") or "").strip().upper()
             nom = str(u.get("nombre_completo") or cod).strip().title()
-            menu = ft.PopupMenuButton(
-                icon=ft.Icons.SWAP_HORIZ_ROUNDED, icon_color=TEXT_MUTED, tooltip="Mover a otro equipo",
-                items=[
-                    ft.PopupMenuItem(
-                        content=ft.Row([ft.Icon(_ico(ico, "CIRCLE"), size=16, color=col), ft.Text(f"Mover a {tit}", size=12)], spacing=10),
-                        on_click=lambda e, c=cod, k=k: mover_usuario_equipo(c, k),
-                    )
-                    for k, tit, _d, col, ico in EQUIPOS if k != equipo_actual
-                ],
+            # Desplegable de equipo (mismo control que usa la cola de picking)
+            menu = ft.Dropdown(
+                width=150,
+                dense=True,
+                value=equipo_actual,
+                bgcolor=BG_INPUT,
+                border_color=BORDER_COLOR,
+                text_style=ft.TextStyle(size=10.5, color=TEXT_WHITE),
+                content_padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                options=[ft.DropdownOption(key=k, text=tit) for k, tit, *_ in EQUIPOS],
+                on_select=lambda ev, c=cod, actual=equipo_actual: (
+                    mover_usuario_equipo(c, ev.control.value) if ev.control.value and ev.control.value != actual else None),
             )
             detalle = []
             if ovs:
@@ -403,10 +406,9 @@ class MonitorUsuariosColaModulo:
                                  content=ft.Text(nom[:1], size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)),
                     ft.Column([ft.Text(nom, size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE, max_lines=1,
                                        overflow=ft.TextOverflow.ELLIPSIS),
-                               ft.Text(cod, size=10, color=ACCENT_CYAN), *detalle],
-                              spacing=1, tight=True, expand=True),
-                    menu,
-                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                               ft.Text(cod, size=10, color=ACCENT_CYAN), *detalle, menu],
+                              spacing=3, tight=True, expand=True),
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
             )
 
         def pintar_equipos(usuarios_lista: list, ovs_por_operador: dict, mapa_actividad: dict, ov_sin_asignar: dict):
@@ -600,7 +602,12 @@ class MonitorUsuariosColaModulo:
 
                 tabla_usuarios_rf.rows = filas_u
                 tabla_cola_picking.rows = filas_cola
-                pintar_equipos(usuarios_lista, ovs_por_operador, mapa_actividad_usr, ov_sin_asignar)
+                try:
+                    pintar_equipos(usuarios_lista, ovs_por_operador, mapa_actividad_usr, ov_sin_asignar)
+                except Exception as ex_eq:
+                    # Un error en el tablero de equipos no debe dejar en blanco el resto del monitor
+                    print(f"[WARN] Equipos de trabajo: {ex_eq}")
+                    fila_equipos.controls = [ft.Text(f"No se pudo dibujar los equipos: {ex_eq}", size=11, color="#F87171")]
                 lbl_kpi_usr_activos.value = str(len(usuarios_lista))
                 lbl_kpi_cola_pend.value = str(cnt_pend_pick)
                 lbl_kpi_en_pack.value = str(cnt_pend_pack)
@@ -608,6 +615,7 @@ class MonitorUsuariosColaModulo:
                 self.page.update()
             except Exception as ex:
                 print(f"[WARN] Error refrescando Monitor Usuarios y Cola: {ex}")
+                notificar_global(self.page, f"Monitor de usuarios: {ex}", "#B91C1C")
 
         txt_buscar_cola.on_change = refrescar_monitor_usuarios_y_cola
 
@@ -721,11 +729,10 @@ class MonitorUsuariosColaModulo:
                         [
                             ft.Icon(_ico("GROUPS_ROUNDED", "PEOPLE_OUTLINE"), color=ACCENT_CYAN, size=18),
                             ft.Text("EQUIPOS DE TRABAJO", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            ft.Text("Mueva a cada usuario a su equipo con ⇄ y luego presione CARGAR OV A LOS EQUIPOS. "
+                            ft.Text("Elija el equipo de cada usuario en su tarjeta y luego presione CARGAR OV A LOS EQUIPOS. "
                                     "Generar olas ya no asigna operador.", size=11, color=TEXT_MUTED, expand=True),
                         ],
                         spacing=8,
-                        wrap=True,
                     ),
                     fila_equipos,
                 ],

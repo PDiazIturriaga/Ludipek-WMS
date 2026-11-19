@@ -161,7 +161,7 @@ class RecepcionTrasladosCcpModulo:
                         ui_boton("Exportar", ft.Icons.DOWNLOAD_ROUNDED, lambda e: self._exportar_detalle(), "secundario"),
                         ui_boton("Actualizar", ft.Icons.REFRESH_ROUNDED, lambda e: self._recargar_detalle(), "secundario"),
                     ], spacing=8, wrap=True),
-                ], vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True),
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ),
             self.aviso_packing,
             ui_tarjeta(self.fila_pallets, titulo="Pallets", icono=ft.Icons.INVENTORY_2_OUTLINED,

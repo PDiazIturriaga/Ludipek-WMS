@@ -59,6 +59,7 @@ drop function if exists public.wms_version_minima();
 drop function if exists public.wms_despacho_de_orden(bigint);
 drop function if exists public.wms_crear_tarea_conteo(text, text, text, text, text, text);
 drop function if exists public.wms_tareas_conteo(text, text, boolean);
+drop function if exists public.wms_ts_app(timestamptz);
 drop function if exists public.wms_actualizar_tarea_conteo(bigint, text, text);
 drop trigger if exists tg_estado_unico_ov on public.netsuite_ordenes_venta;
 drop function if exists public.wms_tg_estado_unico_ov();

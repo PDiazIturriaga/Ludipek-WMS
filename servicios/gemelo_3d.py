@@ -166,7 +166,10 @@ const arenas = new Map();   // "MK-03-05" -> {cod, arena, fila, posn, items, x, 
 function posArena(cod) {
   const m = /^(MK|ME|BE)-(\d{2})-(\d{2})$/.exec(cod);
   if (!m) return null;
-  if (!arenas.has(cod)) arenas.set(cod, { cod, arena: m[1], fila: +m[2], posn: +m[3], items: [], esArena: true });
+  // MK = columnas de piso (MK-01-01..05 sector 1, MK-02-06..11 sector 2): 8 pallets de fondo x 2 de alto
+  const esCol = m[1] === 'MK';
+  if (!arenas.has(cod)) arenas.set(cod, { cod, arena: m[1], fila: +m[2], posn: +m[3], items: [], esArena: true,
+                                          esCol, cap: esCol ? 16 : 2, fondo: esCol ? 8 : 1 });
   return arenas.get(cod);
 }
 D.ubicaciones.forEach(u => { if (!posArena(u)) pos(u); });
@@ -191,16 +194,20 @@ const anchoTotal = Math.max(1, letras.length) * PASO_Z;
 const idxE = infoRack['E'] ? infoRack['E'].idx : Math.max(0, letras.length - 4);
 const BLOQUES = {
   MK: { nom: 'Arena Marketing', x0: largoMax + 6, z0: idxE * PASO_Z },
-  ME: { nom: 'Mermas arena', x0: largoMax + 6, z0: idxE * PASO_Z + 11 * CEL + 3 },
+  ME: { nom: 'Mermas arena', x0: largoMax + 6, z0: idxE * PASO_Z + 8 * CEL + 4 },
   BE: { nom: 'Arena Bodega E', x0: 0, z0: anchoTotal + 9 },
 };
 Object.values(BLOQUES).forEach(b => { b.pos = 0; b.ocup = 0; b.pallets = 0; b.x1 = b.x0; b.z1 = b.z0; });
 arenas.forEach(a => {
   const b = BLOQUES[a.arena];
-  a.x = b.x0 + (a.posn - 1) * CEL; a.z = b.z0 + (a.fila - 1) * CEL;
+  if (a.esCol) {   // columna: una calle de 8 pallets de fondo; 1,5 m de pasillo entre el sector 1 y el 2
+    a.x = b.x0 + (a.posn - 1) * CEL + (a.posn >= 6 ? 1.5 : 0); a.z = b.z0;
+  } else {
+    a.x = b.x0 + (a.posn - 1) * CEL; a.z = b.z0 + (a.fila - 1) * CEL;
+  }
   b.pos++; if (a.items.length) b.ocup++;
-  b.pallets += Math.min(2, new Set(a.items.map(i => i.lpn || i.sku)).size);
-  b.x1 = Math.max(b.x1, a.x + CEL); b.z1 = Math.max(b.z1, a.z + CEL);
+  b.pallets += Math.min(a.cap, new Set(a.items.map(i => i.lpn || i.sku)).size);
+  b.x1 = Math.max(b.x1, a.x + CEL); b.z1 = Math.max(b.z1, a.z + a.fondo * CEL);
 });
 const hayArena = arenas.size > 0;
 const MUNDO = { x0: -15, x1: largoMax + 4, z0: -4, z1: anchoTotal + 2 };
@@ -237,12 +244,13 @@ function construir() {
   if (!filtroRack) {
     arenas.forEach(a => {
       const x = a.x, z = a.z;
-      cajas.push({ x0: x + .05, x1: x + CEL - .05, y0: 0, y1: .03, z0: z + .05, z1: z + CEL - .05,
+      cajas.push({ x0: x + .05, x1: x + CEL - .05, y0: 0, y1: .03, z0: z + .05, z1: z + a.fondo * CEL - .05,
                    color: a.arena === 'ME' ? '#4a2a2a' : '#3b3428', tipo: 'f' });
-      [...new Set(a.items.map(i => i.lpn || i.sku))].slice(0, 2).forEach((l, k) => {
-        const y0 = k * 1.16;
-        cajas.push({ x0: x + .1, x1: x + CEL - .1, y0, y1: y0 + .12, z0: z + .1, z1: z + CEL - .1, color: MADERA, tipo: 'b', pos: a });
-        cajas.push({ x0: x + .14, x1: x + CEL - .14, y0: y0 + .12, y1: y0 + 1.12, z0: z + .14, z1: z + CEL - .14,
+      // Se llena de adelante hacia atrás: piso y encima, luego la siguiente posición de fondo
+      [...new Set(a.items.map(i => i.lpn || i.sku))].slice(0, a.cap).forEach((l, k) => {
+        const y0 = (k % 2) * 1.16, zz = z + Math.floor(k / 2) * CEL;
+        cajas.push({ x0: x + .1, x1: x + CEL - .1, y0, y1: y0 + .12, z0: zz + .1, z1: zz + CEL - .1, color: MADERA, tipo: 'b', pos: a });
+        cajas.push({ x0: x + .14, x1: x + CEL - .14, y0: y0 + .12, y1: y0 + 1.12, z0: zz + .14, z1: zz + CEL - .14,
                      color: colorPos(a), tipo: 'p', pos: a });
       });
     });
@@ -487,7 +495,8 @@ function mostrarDetalle(p) {
   const el = $('#detalle');
   el.innerHTML = `<span class="x" onclick="cerrarDetalle()">✕</span><h3>${p.cod}</h3>
     <div style="color:#94a3b8;margin-bottom:8px">${p.esArena
-      ? `${BLOQUES[p.arena].nom} · fila ${p.fila} · posición ${p.posn} · ${new Set(p.items.map(i => i.lpn || i.sku)).size} de 2 pallets`
+      ? (p.esCol ? `${BLOQUES[p.arena].nom} · sector ${p.fila} · columna ${p.posn}` : `${BLOQUES[p.arena].nom} · fila ${p.fila} · posición ${p.posn}`)
+        + ` · ${new Set(p.items.map(i => i.lpn || i.sku)).size} de ${p.cap} pallets`
       : `Rack ${p.rack} · columna ${p.col} · nivel ${p.niv} (${p.niv <= 1 ? 'picking' : 'reserva'})`}</div>` +
     p.items.map(i => {
       const d = diasVence(i.v);
@@ -535,7 +544,7 @@ $('#buscar').oninput = e => {
 function irA(p) {
   if (p.esArena) {
     if (filtroRack) { filtroRack = null; pintarRacks(); construir(); }
-    cam.cx = p.x + CEL / 2; cam.cy = 0.8; cam.cz = p.z + CEL / 2;
+    cam.cx = p.x + CEL / 2; cam.cy = 0.8; cam.cz = p.z + p.fondo * CEL / 2;
     cam.px = 120; cam.py = 0; cam.zoom = Math.max(cam.zoom, 42);
     return mostrarDetalle(p);
   }

@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import threading
@@ -1454,10 +1455,29 @@ class InventarioModulo:
             except Exception as ex:
                 print(f"[WARN] Comprometido SKU: {ex}")
 
+            def zona_de(ubic: str) -> str:
+                # Picking = nivel 01 de los racks (H-02-01) o la antigua ZONA-PICKING; ME = mermas de arena
+                u = str(ubic or "").upper()
+                if u.startswith("ZONA-PICKING") or re.match(r"^[A-Z]-\d{2}-01$", u):
+                    return "Picking"
+                if u.startswith("ZONA-MERMA") or re.match(r"^ME-\d{2}-\d{2}$", u):
+                    return "Merma"
+                if re.match(r"^(MK|BE)-\d{2}-\d{2}$", u):
+                    return "Arena"
+                return "Rack"
+
             total = sum(int(f.get("cantidad_unidades") or 0) for f in en_bodega)
-            en_picking = sum(int(f.get("cantidad_unidades") or 0) for f in en_bodega if str(f.get("codigo_ubicacion") or "").upper().startswith("ZONA-PICKING"))
-            en_merma = sum(int(f.get("cantidad_unidades") or 0) for f in en_bodega if str(f.get("codigo_ubicacion") or "").upper().startswith("ZONA-MERMA"))
+            en_picking = sum(int(f.get("cantidad_unidades") or 0) for f in en_bodega if zona_de(f.get("codigo_ubicacion")) == "Picking")
+            en_merma = sum(int(f.get("cantidad_unidades") or 0) for f in en_bodega if zona_de(f.get("codigo_ubicacion")) == "Merma")
             en_rack = total - en_picking - en_merma
+
+            picking_fijo = ""
+            try:
+                pf = (supabase.table("wms_ubicacion_picking_sku").select("ubicacion").eq("bodega", bodega_act)
+                      .in_("sku", variantes).limit(1).execute().data or [])
+                picking_fijo = str(pf[0].get("ubicacion") or "").upper() if pf else ""
+            except Exception:
+                picking_fijo = ""   # sin el script 19 no hay ubicación fija
             disponible = max(0, total - en_merma - comprometido)
 
             def fmt(n):
@@ -1470,6 +1490,7 @@ class InventarioModulo:
                 f"Marca {info_m.get('marca')}" if info_m.get("marca") else "",
                 f"EAN {info_m.get('ean')}" if info_m.get("ean") else "",
                 f"Caja x{info_m.get('multiplo')}" if info_m.get("multiplo") else "",
+                f"Picking fijo {picking_fijo}" if picking_fijo else "Sin ubicación de picking fija",
                 bodega_act,
             ] if x)
             lbl_cons_total.value = fmt(total)
@@ -1490,7 +1511,9 @@ class InventarioModulo:
             por_lote = {}
             for f in orden:
                 ubic = str(f.get("codigo_ubicacion") or "-").upper()
-                zona = "Picking" if ubic.startswith("ZONA-PICKING") else ("Merma" if ubic.startswith("ZONA-MERMA") else "Rack")
+                zona = zona_de(ubic)
+                if zona == "Picking" and picking_fijo and ubic == picking_fijo:
+                    zona = "Picking fijo"
                 dias = dias_para_vencer(f.get("fecha_vencimiento_cl"))
                 if dias is None:
                     txt_dias, col_dias = "—", UI["texto_3"]
@@ -1505,7 +1528,8 @@ class InventarioModulo:
                 por_lote[lote] = por_lote.get(lote, 0) + un
                 filas_t.append(ft.DataRow(cells=[
                     ft.DataCell(ft.Text(ubic, size=12.5, weight=ft.FontWeight.W_700, color=UI["texto"])),
-                    ft.DataCell(ft.Text(zona, size=12, color=UI["alerta"] if zona == "Merma" else UI["texto_2"])),
+                    ft.DataCell(ft.Text(zona, size=12, weight=ft.FontWeight.W_600 if zona.startswith("Picking") else None,
+                                        color=UI["alerta"] if zona == "Merma" else (UI["exito"] if zona.startswith("Picking") else UI["texto_2"]))),
                     ft.DataCell(ft.Text(str(f.get("lpn") or f.get("lpn_origen") or "—"), size=12, color=UI["texto_2"])),
                     ft.DataCell(ft.Text(lote, size=12, color=UI["texto"])),
                     ft.DataCell(ft.Text(fecha_a_visual(f.get("fecha_vencimiento_cl")) if f.get("fecha_vencimiento_cl") else "S/F", size=12, color=UI["texto"])),
@@ -1593,12 +1617,12 @@ class InventarioModulo:
                                  lambda e: ir_a_tarea_sku(consulta_actual["sku"]) if consulta_actual["sku"] else None, "secundario"),
                         ui_boton("Exportar", ft.Icons.DOWNLOAD_ROUNDED, exportar_consulta_sku, "secundario"),
                     ], spacing=8, wrap=True),
-                ], vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True),
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ),
             ft.ResponsiveRow([
                 ui_kpi(lbl_cons_total, "Stock en bodega", ft.Icons.INVENTORY_2_OUTLINED, UI["acento"], lbl_cons_det_total, col={"xs": 12, "sm": 6, "md": 4, "lg": 3}),
-                ui_kpi(lbl_cons_rack, "En racks", ft.Icons.VIEW_COLUMN_OUTLINED, UI["texto_2"], col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                ui_kpi(lbl_cons_picking, "En zona picking", ft.Icons.SHOPPING_CART_OUTLINED, UI["texto_2"], col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                ui_kpi(lbl_cons_rack, "En reserva y arena", ft.Icons.VIEW_COLUMN_OUTLINED, UI["texto_2"], col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                ui_kpi(lbl_cons_picking, "En picking (nivel 01)", ft.Icons.SHOPPING_CART_OUTLINED, UI["texto_2"], col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
                 ui_kpi(lbl_cons_comprometido, "Comprometido en OV", ft.Icons.RECEIPT_LONG_OUTLINED, UI["alerta"], lbl_cons_det_comp, col={"xs": 12, "sm": 6, "md": 6, "lg": 3}),
                 ui_kpi(lbl_cons_disponible, "Disponible", ft.Icons.TASK_ALT_ROUNDED, UI["exito"], lbl_cons_det_disp, col={"xs": 12, "sm": 12, "md": 6, "lg": 2}),
             ], spacing=12, run_spacing=12),

@@ -599,14 +599,15 @@ class ImpresionModulo:
     def _cargar_ubicaciones_stgo(self):
         try:
             filas = leer_tabla_paginada(lambda: supabase.table("bodega_ubicaciones")
-                                        .select("codigo_ubicacion, bodega").eq("bodega", "Bodega Santiago"))
+                                        .select("*").eq("bodega", "Bodega Santiago"))
         except Exception as ex:
             self.lbl_sel_stgo.value = f"No se pudieron leer las ubicaciones: {ex}"
             self.lbl_sel_stgo.color = self.RED
             self.page.update()
             return
         codigos = sorted({str(f.get("codigo_ubicacion") or "").strip().upper() for f in filas
-                          if f.get("codigo_ubicacion") and not str(f.get("codigo_ubicacion")).upper().startswith("ZONA")})
+                          if f.get("codigo_ubicacion") and not str(f.get("codigo_ubicacion")).upper().startswith("ZONA")
+                          and not str(f.get("estado") or "").lower().startswith("deshabilit")})
         self.ubic_stgo = [describir_ubicacion_stgo(c) for c in codigos]
         zonas = []
         for d in self.ubic_stgo:
@@ -628,7 +629,7 @@ class ImpresionModulo:
         es_arena = zona.startswith("ARENA_")
         self.dd_nivel_stgo.visible = es_rack
         self.dd_desde_stgo.visible = self.dd_hasta_stgo.visible = zona.startswith("RACK_") or es_arena
-        etiqueta = "fila" if es_arena else "columna"
+        etiqueta = "sector" if zona == "ARENA_MK" else ("fila" if es_arena else "columna")
         self.dd_desde_stgo.label = f"Desde {etiqueta}"
         self.dd_hasta_stgo.label = f"Hasta {etiqueta}"
         if self.dd_desde_stgo.visible:
