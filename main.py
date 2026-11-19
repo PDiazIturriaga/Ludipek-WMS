@@ -1657,6 +1657,7 @@ def main(page: ft.Page):
                 lbl_portal_recep.value = str(sum(1 for a in asn if not a.get("bodega") or str(a.get("bodega")) == bodega_act))
             except Exception as ex:
                 print(f"[WARN] Indicadores del portal: {ex}")
+            cargar_alertas_portal()
 
         fila_indicadores_portal = ft.ResponsiveRow([
             tarjeta_indicador_portal(lbl_portal_recep, "Recepciones abiertas", "#38BDF8", (1, 0)),
@@ -1664,6 +1665,167 @@ def main(page: ft.Page):
             tarjeta_indicador_portal(lbl_portal_packing, "OV por empacar", "#818CF8", (3, 2)),
             tarjeta_indicador_portal(lbl_portal_fact, "OV por facturar", "#10B981", (3, 3)),
         ], spacing=12, run_spacing=12)
+
+        # ------------------------------------------------------------------
+        # REQUIERE ATENCIÓN: alertas de la operación (función wms_alertas_operacion)
+        # ------------------------------------------------------------------
+        COLOR_SEVERIDAD = {"ALTA": "#EF4444", "MEDIA": "#F59E0B", "BAJA": "#38BDF8"}
+        DESTINO_ALERTA = {
+            "OLAS": (3, 2), "INVENTARIO": (5, 0), "INVENTARIO_TAREAS": (5, 1), "ALMACENAMIENTO": (2, 0),
+            "RUTEO": (7, 0), "MAESTRA": (6, 1), "TRASLADOS": (9, 0), "REABASTECIMIENTO": (2, 1),
+        }
+        col_alertas_portal = ft.Column(spacing=8, tight=True)
+        lbl_resumen_alertas = ft.Text("", size=12, color="#94A3B8")
+
+        def destino_de_alerta(modulo: str):
+            dest = DESTINO_ALERTA.get(str(modulo or ""))
+            if not dest or dest[0] >= len(vistas_mapa) or not modulo_permitido(dest[0]):
+                return None
+            return dest
+
+        def abrir_detalle_alerta(alerta: dict):
+            items = list(alerta.get("items") or [])
+            revisable = bool(alerta.get("revisable"))
+            dest = destino_de_alerta(alerta.get("modulo"))
+            color = COLOR_SEVERIDAD.get(alerta.get("severidad"), "#94A3B8")
+            checks = []
+            filas = []
+            for it in items[:200]:
+                chk = ft.Checkbox(value=False, active_color=color, data=str(it.get("ref") or "")) if revisable else None
+                if chk is not None:
+                    checks.append(chk)
+                filas.append(ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+                    border=ft.Border(bottom=ft.BorderSide(0.5, "#334044")),
+                    content=ft.Row([
+                        *([chk] if chk is not None else []),
+                        ft.Text(str(it.get("texto") or it.get("ref") or ""), size=12.5, color="#E2E8F0", expand=True),
+                    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ))
+            if len(items) > 200:
+                filas.append(ft.Text(f"… y {len(items) - 200} más", size=12, color="#94A3B8"))
+            txt_nota = ft.TextField(label="Nota de revisión (qué se hizo)", dense=True, multiline=True,
+                                    bgcolor="#1D2426", border_color="#334044", color="#F1F5F9",
+                                    text_style=ft.TextStyle(size=12), visible=revisable)
+
+            def cerrar(ev=None):
+                try:
+                    page.pop_dialog()
+                except Exception:
+                    dlg.open = False
+                page.update()
+
+            def ir_modulo(ev=None):
+                cerrar()
+                activar_modulo_principal(*dest)
+
+            def marcar_todos(ev=None):
+                nuevo = not all(c.value for c in checks)
+                for c in checks:
+                    c.value = nuevo
+                page.update()
+
+            def marcar_revisadas(ev=None):
+                refs = [c.data for c in checks if c.value]
+                if not refs:
+                    notificar_global(page, "Marque los registros que revisó.", "#D97706")
+                    return
+                if not (txt_nota.value or "").strip():
+                    notificar_global(page, "Escriba qué se hizo (nota de revisión).", "#D97706")
+                    return
+                try:
+                    supabase.rpc("wms_marcar_alerta_revisada", {
+                        "p_codigo": alerta.get("codigo"), "p_referencias": refs,
+                        "p_usuario": str(getattr(page, "usuario_actual", None) or "PC"),
+                        "p_nota": txt_nota.value.strip(),
+                        "p_bodega": str(getattr(page, "bodega_actual", "") or ""),
+                    }).execute()
+                except Exception as ex:
+                    notificar_global(page, f"No se pudo marcar: {getattr(ex, 'message', None) or ex}", "#B91C1C")
+                    return
+                cerrar()
+                notificar_global(page, f"{len(refs)} registro(s) marcados como revisados.", "#047857")
+                cargar_alertas_portal()
+                page.update()
+
+            acciones = [ft.TextButton("Cerrar", on_click=cerrar)]
+            if revisable:
+                acciones.insert(0, ft.OutlinedButton("Marcar / desmarcar todos", on_click=marcar_todos))
+                acciones.append(ft.Button(content=ft.Text("Marcar revisadas"), bgcolor="#047857", color=ft.Colors.WHITE,
+                                          on_click=marcar_revisadas))
+            if dest:
+                acciones.append(ft.Button(content=ft.Text("Ir al módulo"), bgcolor="#0284C7", color=ft.Colors.WHITE,
+                                          icon=ft.Icons.ARROW_FORWARD_ROUNDED, on_click=ir_modulo))
+            dlg = ft.AlertDialog(
+                bgcolor="#232B2D",
+                title=ft.Column([
+                    ft.Row([ft.Container(width=10, height=10, border_radius=5, bgcolor=color),
+                            ft.Text(str(alerta.get("titulo") or ""), size=18, weight=ft.FontWeight.W_700, color="#F1F5F9")],
+                           spacing=10),
+                    ft.Text(f"{alerta.get('cantidad')} registro(s) · {alerta.get('descripcion') or ''}", size=12, color="#94A3B8"),
+                ], spacing=4, tight=True),
+                content=ft.Container(width=760, height=460, content=ft.Column([
+                    ft.Column(filas, spacing=0, scroll=ft.ScrollMode.AUTO, expand=True),
+                    txt_nota,
+                ], spacing=10, expand=True)),
+                actions=acciones,
+            )
+            page.show_dialog(dlg)
+
+        def fila_alerta(alerta: dict):
+            color = COLOR_SEVERIDAD.get(alerta.get("severidad"), "#94A3B8")
+            return ft.Container(
+                padding=ft.Padding.symmetric(horizontal=14, vertical=10), border_radius=10, bgcolor="#232B2D",
+                border=ft.Border(left=ft.BorderSide(3, color), top=ft.BorderSide(1, "#334044"),
+                                 right=ft.BorderSide(1, "#334044"), bottom=ft.BorderSide(1, "#334044")),
+                ink=True, on_click=lambda e, a=alerta: abrir_detalle_alerta(a),
+                content=ft.Row([
+                    ft.Container(
+                        width=46, height=32, border_radius=8, alignment=ft.Alignment.CENTER,
+                        bgcolor=ft.Colors.with_opacity(0.16, color),
+                        content=ft.Text(str(alerta.get("cantidad") or 0), size=14, weight=ft.FontWeight.W_700, color=color),
+                    ),
+                    ft.Column([
+                        ft.Text(str(alerta.get("titulo") or ""), size=13.5, weight=ft.FontWeight.W_600, color="#F1F5F9"),
+                        ft.Text(str(alerta.get("descripcion") or ""), size=11.5, color="#94A3B8", max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS),
+                    ], spacing=1, tight=True, expand=True),
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color="#64748B"),
+                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            )
+
+        def cargar_alertas_portal():
+            bodega_act = str(getattr(page, "bodega_actual", "Bodega Santiago") or "Bodega Santiago")
+            try:
+                alertas = supabase.rpc("wms_alertas_operacion", {"p_bodega": bodega_act}).execute().data or []
+            except Exception as ex:
+                print(f"[WARN] Alertas del portal: {ex}")
+                col_alertas_portal.controls = [ft.Text("No se pudieron leer las alertas (¿falta ejecutar 14_alertas_operacion.sql?).",
+                                                       size=12, color="#94A3B8")]
+                lbl_resumen_alertas.value = ""
+                return
+            orden = {"ALTA": 0, "MEDIA": 1, "BAJA": 2}
+            alertas.sort(key=lambda a: (orden.get(a.get("severidad"), 3), -int(a.get("cantidad") or 0)))
+            if not alertas:
+                col_alertas_portal.controls = [ft.Container(
+                    padding=14, border_radius=10, bgcolor="#1E2B26", border=ft.Border.all(1, "#14532D"),
+                    content=ft.Row([ft.Icon(ft.Icons.VERIFIED_ROUNDED, color="#10B981"),
+                                    ft.Text("Todo en orden: no hay alertas en esta bodega.", size=13, color="#D1FAE5")], spacing=10),
+                )]
+                lbl_resumen_alertas.value = ""
+                return
+            altas = sum(1 for a in alertas if a.get("severidad") == "ALTA")
+            lbl_resumen_alertas.value = f"{len(alertas)} tema(s)" + (f" · {altas} prioritario(s)" if altas else "")
+            col_alertas_portal.controls = [
+                ft.ResponsiveRow([ft.Container(col={"xs": 12, "lg": 6}, content=fila_alerta(a)) for a in alertas],
+                                 spacing=10, run_spacing=10)
+            ]
+
+        bloque_alertas_portal = ft.Column([
+            ft.Row([ft.Text("Requiere atención", size=15, weight=ft.FontWeight.W_600, color="#CBD5E1"), lbl_resumen_alertas],
+                   spacing=12, vertical_alignment=ft.CrossAxisAlignment.END),
+            col_alertas_portal,
+        ], spacing=10, tight=True)
 
         vista_portal_home = ft.Row(
             [
@@ -1679,6 +1841,7 @@ def main(page: ft.Page):
                                 ft.Text(f"{fecha_larga}  ·  {getattr(page, 'bodega_actual', 'Bodega Santiago')}", size=13, color="#94A3B8"),
                             ], spacing=2),
                             fila_indicadores_portal,
+                            bloque_alertas_portal,
                             ft.Text("Módulos", size=15, weight=ft.FontWeight.W_600, color="#CBD5E1"),
                             ft.Row(botones_grid, wrap=True, spacing=14, run_spacing=14, alignment=ft.MainAxisAlignment.START),
                         ],

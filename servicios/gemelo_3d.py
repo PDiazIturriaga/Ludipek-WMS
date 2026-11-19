@@ -125,7 +125,7 @@ PLANTILLA = r"""<!doctype html>
   <h2>Buscar</h2>
   <input id="buscar" placeholder="SKU, LPN, lote o ubicación">
   <div id="resultados"></div>
-  <h2>Racks</h2>
+  <h2>Racks y zonas</h2>
   <div id="racks"></div>
 </div>
 <div id="leyenda" class="panel"></div>
@@ -141,6 +141,7 @@ document.getElementById('bod').textContent = D.bodega;
 document.getElementById('gen').textContent = 'Actualizado ' + D.generado + ' · datos del WMS';
 
 function parsear(cod) {
+  if (/^(MK|ME|BE)-/.test(cod)) return null;   // arena: se dibuja como piso, no como rack
   const m = /^([A-Z]+)-?(\d{1,3})-(\d{1,2})/.exec(cod);
   if (!m) return null;
   return { rack: m[1], col: parseInt(m[2], 10), niv: parseInt(m[3], 10) };
@@ -159,10 +160,20 @@ function pos(cod) {
   if (!posiciones.has(cod)) { const p = parsear(cod); if (!p) return null; posiciones.set(cod, { cod, ...p, items: [] }); }
   return posiciones.get(cod);
 }
-D.ubicaciones.forEach(u => pos(u));
+// Zonas de arena: posiciones de piso con hasta 2 pallets apilados (MK/BE arena, ME mermas)
+const CEL = 1.3;
+const arenas = new Map();   // "MK-03-05" -> {cod, arena, fila, posn, items, x, z}
+function posArena(cod) {
+  const m = /^(MK|ME|BE)-(\d{2})-(\d{2})$/.exec(cod);
+  if (!m) return null;
+  if (!arenas.has(cod)) arenas.set(cod, { cod, arena: m[1], fila: +m[2], posn: +m[3], items: [], esArena: true });
+  return arenas.get(cod);
+}
+D.ubicaciones.forEach(u => { if (!posArena(u)) pos(u); });
 D.stock.forEach(it => {
   if (it.u.startsWith('ZONA-PICKING')) return zonas['ZONA-PICKING'].push(it);
   if (it.u.startsWith('ZONA-MERMA')) return zonas['ZONA-MERMA'].push(it);
+  const a = posArena(it.u); if (a) return a.items.push(it);
   const p = pos(it.u); if (p) p.items.push(it);
 });
 const letras = [...new Set([...posiciones.values()].map(p => p.rack))].sort();
@@ -174,6 +185,26 @@ letras.forEach((l, i) => {
 });
 const largoMax = Math.max(8, ...letras.map(l => infoRack[l].cols)) * W;
 const anchoTotal = Math.max(1, letras.length) * PASO_Z;
+
+// Ubicación de los bloques de arena en el site: Marketing detrás de los pasillos H a E
+// (al fondo de los racks), sus mermas al lado, y Bodega E en otra sección.
+const idxE = infoRack['E'] ? infoRack['E'].idx : Math.max(0, letras.length - 4);
+const BLOQUES = {
+  MK: { nom: 'Arena Marketing', x0: largoMax + 6, z0: idxE * PASO_Z },
+  ME: { nom: 'Mermas arena', x0: largoMax + 6, z0: idxE * PASO_Z + 11 * CEL + 3 },
+  BE: { nom: 'Arena Bodega E', x0: 0, z0: anchoTotal + 9 },
+};
+Object.values(BLOQUES).forEach(b => { b.pos = 0; b.ocup = 0; b.pallets = 0; b.x1 = b.x0; b.z1 = b.z0; });
+arenas.forEach(a => {
+  const b = BLOQUES[a.arena];
+  a.x = b.x0 + (a.posn - 1) * CEL; a.z = b.z0 + (a.fila - 1) * CEL;
+  b.pos++; if (a.items.length) b.ocup++;
+  b.pallets += Math.min(2, new Set(a.items.map(i => i.lpn || i.sku)).size);
+  b.x1 = Math.max(b.x1, a.x + CEL); b.z1 = Math.max(b.z1, a.z + CEL);
+});
+const hayArena = arenas.size > 0;
+const MUNDO = { x0: -15, x1: largoMax + 4, z0: -4, z1: anchoTotal + 2 };
+Object.values(BLOQUES).forEach(b => { if (b.pos) { MUNDO.x1 = Math.max(MUNDO.x1, b.x1 + 3); MUNDO.z1 = Math.max(MUNDO.z1, b.z1 + 3); } });
 
 // ---------------------------------------------------------------- escena (cajas)
 // caja: {x0,y0,z0,x1,y1,z1,color,tipo,rack,pos}
@@ -202,6 +233,24 @@ function construir() {
     cajas.push({ x0: x0 + .12, x1: x0 + W - .12, y0: y0, y1: y0 + .14, z0: z0 + .08, z1: z0 + PROF - .08, color: MADERA, tipo: 'b', pos: p });
     cajas.push({ x0: x0 + .16, x1: x0 + W - .16, y0: y0 + .14, y1: y0 + 1.25, z0: z0 + .1, z1: z0 + PROF - .1, color: colorPos(p), tipo: 'p', pos: p });
   });
+  // Arena: baldosa de piso por posición y hasta 2 pallets apilados
+  if (!filtroRack) {
+    arenas.forEach(a => {
+      const x = a.x, z = a.z;
+      cajas.push({ x0: x + .05, x1: x + CEL - .05, y0: 0, y1: .03, z0: z + .05, z1: z + CEL - .05,
+                   color: a.arena === 'ME' ? '#4a2a2a' : '#3b3428', tipo: 'f' });
+      [...new Set(a.items.map(i => i.lpn || i.sku))].slice(0, 2).forEach((l, k) => {
+        const y0 = k * 1.16;
+        cajas.push({ x0: x + .1, x1: x + CEL - .1, y0, y1: y0 + .12, z0: z + .1, z1: z + CEL - .1, color: MADERA, tipo: 'b', pos: a });
+        cajas.push({ x0: x + .14, x1: x + CEL - .14, y0: y0 + .12, y1: y0 + 1.12, z0: z + .14, z1: z + CEL - .14,
+                     color: colorPos(a), tipo: 'p', pos: a });
+      });
+    });
+    Object.values(BLOQUES).forEach(b => {
+      if (b.pos) etiquetasZona.push({ txt: `${b.nom} · ${b.pallets} pallets · ${b.ocup}/${b.pos} posiciones`,
+                                      x: (b.x0 + b.x1) / 2, y: 3.2, z: b.z0 - 0.8 });
+    });
+  }
   // Andén y zonas de piso (frente a los racks)
   const zonasPiso = [['ANDÉN', D.anden, '#f59e0b'], ['ZONA PICKING', zonas['ZONA-PICKING'], '#10b981'], ['ZONA MERMA', zonas['ZONA-MERMA'], '#ef4444']];
   let zOff = 0;
@@ -229,7 +278,7 @@ function colorPos(p) {
   if (busqueda && !p.items.some(coincide) && !p.cod.includes(busqueda)) return '#2b3437';
   if (busqueda) return '#38bdf8';
   const it = p.items[0];
-  if (modo === 'zona') return p.niv <= 1 ? '#10b981' : '#3b82f6';
+  if (modo === 'zona') return p.esArena ? (p.arena === 'ME' ? '#ef4444' : '#d4a373') : (p.niv <= 1 ? '#10b981' : '#3b82f6');
   if (modo === 'qa') {
     const q = p.items.map(i => i.qa);
     return q.includes('RECHAZADO') ? '#ef4444' : q.includes('CUARENTENA') ? '#f59e0b' : '#22c55e';
@@ -240,7 +289,7 @@ function colorPos(p) {
   return d < 0 ? '#ef4444' : d <= 90 ? '#f59e0b' : d <= 180 ? '#facc15' : '#22c55e';
 }
 const LEYENDAS = {
-  zona: [['#10b981', 'Picking (nivel 1)'], ['#3b82f6', 'Reserva (nivel 2+)'], ['#f59e0b', 'Andén'], ['#a16207', 'Pallet']],
+  zona: [['#10b981', 'Picking (nivel 1)'], ['#3b82f6', 'Reserva (nivel 2+)'], ['#d4a373', 'Arena (piso)'], ['#ef4444', 'Mermas'], ['#f59e0b', 'Andén']],
   venc: [['#ef4444', 'Vencido'], ['#f59e0b', '≤ 90 días'], ['#facc15', '≤ 180 días'], ['#22c55e', '> 180 días'], ['#94a3b8', 'Sin fecha']],
   qa: [['#22c55e', 'Aprobado'], ['#f59e0b', 'Cuarentena'], ['#ef4444', 'Rechazado']],
 };
@@ -281,7 +330,7 @@ function centrar() {
   }
   const hayZonas = !!(D.anden.length || zonas['ZONA-PICKING'].length || zonas['ZONA-MERMA'].length);
   const nivMax = Math.max(1, ...letras.map(l => infoRack[l].nivs));
-  encuadrar(hayZonas ? -15 : -1.5, largoMax + 0.5, 0, nivMax * H + 1, -0.5, anchoTotal);
+  encuadrar(hayZonas ? -15 : -1.5, MUNDO.x1 - 3.5, 0, nivMax * H + 1, -0.5, MUNDO.z1 - 2);
 }
 function redimensionar() {
   dpr = window.devicePixelRatio || 1; ancho = innerWidth; alto = innerHeight;
@@ -307,11 +356,12 @@ let dibujados = []; // [{poligonos, caja}] en orden de dibujo (para el puntero)
 let pendiente = false;
 function pedirDibujo() { if (!pendiente) { pendiente = true; requestAnimationFrame(dibujar); } }
 function piso() {
-  const ext = [[-15, 0, -4], [largoMax + 4, 0, -4], [largoMax + 4, 0, anchoTotal + 2], [-15, 0, anchoTotal + 2]].map(p => proyectar(...p));
+  const M = MUNDO;
+  const ext = [[M.x0, 0, M.z0], [M.x1, 0, M.z0], [M.x1, 0, M.z1], [M.x0, 0, M.z1]].map(p => proyectar(...p));
   ctx.fillStyle = '#1a2124'; ctx.beginPath(); ext.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath(); ctx.fill();
   ctx.strokeStyle = 'rgba(148,163,184,.07)'; ctx.lineWidth = 1;
-  for (let x = -15; x <= largoMax + 4; x += 2.6) { const a = proyectar(x, 0, -4), b = proyectar(x, 0, anchoTotal + 2); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
-  for (let z = -4; z <= anchoTotal + 2; z += 2.2) { const a = proyectar(-15, 0, z), b = proyectar(largoMax + 4, 0, z); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+  for (let x = M.x0; x <= M.x1; x += 2.6) { const a = proyectar(x, 0, M.z0), b = proyectar(x, 0, M.z1); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+  for (let z = M.z0; z <= M.z1; z += 2.2) { const a = proyectar(M.x0, 0, z), b = proyectar(M.x1, 0, z); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
   // líneas amarillas de pasillo
   ctx.strokeStyle = 'rgba(250,204,21,.35)'; ctx.lineWidth = 2;
   letras.forEach(l => {
@@ -429,14 +479,16 @@ cv.addEventListener('wheel', e => {
 function resumenCaja(c) {
   if (c.zona) return `<b>${c.zona.nom}</b><br>${c.zona.lista.length} LPN`;
   const p = c.pos, un = p.items.reduce((a, i) => a + i.un, 0);
-  return `<b>${p.cod}</b> · nivel ${p.niv}<br>${p.items.length > 1 ? p.items.length + ' LPN · ' : ''}${p.items[0].sku} · ${un.toLocaleString('es-CL')} UN<br><span style="color:#94a3b8">${p.items[0].d}</span>`;
+  return `<b>${p.cod}</b> · ${p.esArena ? BLOQUES[p.arena].nom.toLowerCase() : 'nivel ' + p.niv}<br>${p.items.length > 1 ? p.items.length + ' LPN · ' : ''}${p.items[0].sku} · ${un.toLocaleString('es-CL')} UN<br><span style="color:#94a3b8">${p.items[0].d}</span>`;
 }
 function fila(a, b) { return `<div class="fila"><span>${a}</span><span>${b}</span></div>`; }
 function mostrarDetalle(p) {
   seleccion = p; construir(); pedirDibujo();
   const el = $('#detalle');
   el.innerHTML = `<span class="x" onclick="cerrarDetalle()">✕</span><h3>${p.cod}</h3>
-    <div style="color:#94a3b8;margin-bottom:8px">Rack ${p.rack} · columna ${p.col} · nivel ${p.niv} (${p.niv <= 1 ? 'picking' : 'reserva'})</div>` +
+    <div style="color:#94a3b8;margin-bottom:8px">${p.esArena
+      ? `${BLOQUES[p.arena].nom} · fila ${p.fila} · posición ${p.posn} · ${new Set(p.items.map(i => i.lpn || i.sku)).size} de 2 pallets`
+      : `Rack ${p.rack} · columna ${p.col} · nivel ${p.niv} (${p.niv <= 1 ? 'picking' : 'reserva'})`}</div>` +
     p.items.map(i => {
       const d = diasVence(i.v);
       return `<div class="item"><b>${i.sku}</b><div style="color:#94a3b8;font-size:12px;margin-bottom:4px">${i.d}</div>` +
@@ -473,14 +525,20 @@ $('#buscar').oninput = e => {
   busqueda = e.target.value.trim().toUpperCase();
   const res = $('#resultados');
   if (!busqueda) { res.innerHTML = ''; } else {
-    const hits = [...posiciones.values()].filter(p => p.items.some(coincide) || p.cod.includes(busqueda));
+    const hits = [...posiciones.values(), ...arenas.values()].filter(p => p.items.some(coincide) || p.cod.includes(busqueda));
     res.innerHTML = `${hits.length} posición(es)` + hits.slice(0, 12).map(p =>
       `<div data-cod="${p.cod}">${p.cod} · ${p.items[0] ? p.items[0].sku + ' · ' + p.items.reduce((a, i) => a + i.un, 0) + ' UN' : 'vacía'}</div>`).join('');
-    res.querySelectorAll('[data-cod]').forEach(d => d.onclick = () => irA(posiciones.get(d.dataset.cod)));
+    res.querySelectorAll('[data-cod]').forEach(d => d.onclick = () => irA(posiciones.get(d.dataset.cod) || arenas.get(d.dataset.cod)));
   }
   construir(); pintarLeyenda(); pedirDibujo();
 };
 function irA(p) {
+  if (p.esArena) {
+    if (filtroRack) { filtroRack = null; pintarRacks(); construir(); }
+    cam.cx = p.x + CEL / 2; cam.cy = 0.8; cam.cz = p.z + CEL / 2;
+    cam.px = 120; cam.py = 0; cam.zoom = Math.max(cam.zoom, 42);
+    return mostrarDetalle(p);
+  }
   const r = infoRack[p.rack];
   if (filtroRack && filtroRack !== p.rack) { filtroRack = null; pintarRacks(); }
   cam.cx = (p.col - 0.5) * W; cam.cy = (p.niv - 0.5) * H; cam.cz = r.idx * PASO_Z + PROF / 2;
@@ -493,6 +551,10 @@ function pintarRacks() {
     letras.map(l => {
       const r = infoRack[l], pc = r.total ? Math.round(r.ocup * 100 / r.total) : 0;
       return `<div class="rack ${filtroRack === l ? 'on' : ''}" data-r="${l}"><span class="l">${l}</span><span class="barra"><i style="width:${pc}%"></i></span><span class="p">${r.ocup}/${r.total} · ${pc}%</span></div>`;
+    }).join('') +
+    Object.entries(BLOQUES).filter(([k, b]) => b.pos).map(([k, b]) => {
+      const pc = Math.round(b.ocup * 100 / b.pos);
+      return `<div class="rack" title="${b.nom}"><span class="l" style="color:${k === 'ME' ? '#ef4444' : '#d4a373'}">${k}</span><span class="barra"><i style="width:${pc}%;background:${k === 'ME' ? '#ef4444' : '#d4a373'}"></i></span><span class="p">${b.ocup}/${b.pos} · ${pc}%</span></div>`;
     }).join('');
   el.querySelectorAll('[data-r]').forEach(d => d.onclick = () => {
     filtroRack = d.dataset.r || null; pintarRacks(); construir(); centrar();

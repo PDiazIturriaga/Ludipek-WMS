@@ -33,6 +33,13 @@ drop function if exists public.wms_cerrar_recepcion_traslado(bigint, text, text)
 drop function if exists public.wms_traslado_ccp_detalle(bigint);
 drop function if exists public.wms_traslados_ccp(boolean);
 drop function if exists public.wms_traslado_lineas_despachadas(bigint);
+drop function if exists public.wms_alertas_operacion(text);
+drop function if exists public.wms_marcar_alerta_revisada(text, text[], text, text, text);
+drop function if exists public.wms_mover_lpn_a_picking(bigint, text, text);
+drop function if exists public.wms_es_ubicacion_picking(text);
+drop function if exists public.wms_es_ubicacion_arena(text);
+drop function if exists public.wms_es_ubicacion_merma(text);
+-- Las ubicaciones de arena (MK/ME/BE) se conservan: pueden tener stock.
 drop function if exists public.wms_version_minima();
 drop function if exists public.wms_despacho_de_orden(bigint);
 drop function if exists public.wms_crear_tarea_conteo(text, text, text, text, text, text);

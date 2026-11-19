@@ -1,6 +1,7 @@
 import os
 import time
 import inspect
+import re
 from datetime import datetime
 import pandas as pd
 import flet as ft
@@ -154,10 +155,17 @@ class PutawayModulo:
                     break
             return acumulado
 
+        ZONAS_ARENA = {"MK": "ARENA MARKETING", "BE": "ARENA BODEGA E", "ME": "MERMA ARENA"}
+        COLOR_ARENA = "#D4A373"
+
         def clasificar_rack_y_nivel(codigo_ubicacion: str) -> tuple:
             ubi = str(codigo_ubicacion or "").strip().upper()
             if not ubi or ubi in ("ANDEN", "RECEPCION", "PENDIENTE", "SIN UBICACION", "NONE", "NULL"):
                 return ("RECEPCION", "ANDÉN RECEPCIÓN", 0)
+            # Zonas de arena (posiciones de piso, 2 pallets apilados): MK/BE = arena, ME = mermas de arena
+            m_arena = re.match(r"^(MK|ME|BE)-\d{2}-\d{2}$", ubi)
+            if m_arena:
+                return (ZONAS_ARENA[m_arena.group(1)], "ARENA (PISO)", 0)
             partes = ubi.replace("_", "-").split("-")
             prefijo = partes[0].strip() if partes else "A"
             letra = prefijo[0] if prefijo else "A"
@@ -257,6 +265,7 @@ class PutawayModulo:
                 opt_w("TODOS", "TODOS LOS NIVELES"),
                 opt_w("PICKING NIVEL 1", "NIVEL 1 (PICKING)"),
                 opt_w("RESERVA ALTURA", "NIVEL 2+ (RESERVA)"),
+                opt_w("ARENA (PISO)", "ARENA (PISO)"),
                 opt_w("ANDÉN RECEPCIÓN", "ANDÉN RECEPCIÓN"),
             ],
         )
@@ -518,7 +527,16 @@ class PutawayModulo:
         def crear_fila_tabla_stock(it: dict) -> ft.DataRow:
             es_anden = it["rack"] == "RECEPCION"
             zona_txt = "Andén" if es_anden else it["rack"].replace("RACK ", "Rack ")
-            nivel = chip("Andén", UI["alerta"]) if es_anden else (chip("Picking N1", UI["exito"]) if it["nivel_num"] <= 1 else chip(f"Reserva N{it['nivel_num']}", UI["acento"]))
+            if es_anden:
+                nivel = chip("Andén", UI["alerta"])
+            elif it["rack"] == "MERMA ARENA":
+                nivel = chip("Merma arena", UI["peligro"])
+            elif it["nivel_num"] == 0:
+                nivel = chip("Arena piso", COLOR_ARENA)
+            elif it["nivel_num"] == 1:
+                nivel = chip("Picking N1", UI["exito"])
+            else:
+                nivel = chip(f"Reserva N{it['nivel_num']}", UI["acento"])
             qa_val = it["qa"]
             qa = chip("Aprobado", UI["exito"]) if qa_val == "APROBADO" else (chip("Cuarentena", UI["alerta"]) if qa_val == "CUARENTENA" else chip("Rechazado", UI["peligro"]))
             lpn_c = it["lpn"]
@@ -693,7 +711,7 @@ class PutawayModulo:
                 opt_w("TODOS", "TODO EL CD (RACKS + ANDÉN)"),
                 opt_w("SOLO_RACKS", "SOLO EN RACKS"),
                 opt_w("RECEPCION", "SOLO EN RECEPCIÓN"),
-            ] + [opt_w(rk, rk) for rk in racks_base]
+            ] + [opt_w(rk, rk) for rk in racks_base] + [opt_w(z, z) for z in ZONAS_ARENA.values()]
 
             def sel_zona(nueva_z: str):
                 nonlocal zona_seleccionada
@@ -737,10 +755,11 @@ class PutawayModulo:
                 )
 
             total_pos = sum(len(v) for k, v in pos_por_rack.items() if k.startswith("RACK "))
-            total_ocup = sum(len(ocup_por_rack.get(k, set()) & v) for k, v in pos_por_rack.items())
+            total_ocup = sum(len(ocup_por_rack.get(k, set()) & v) for k, v in pos_por_rack.items() if k.startswith("RACK "))
+            stock_solo_racks = [x for x in stock_en_racks if x["rack"].startswith("RACK ")]
             tarjetas = [
                 tarjeta_zona("RECEPCION", "Andén", ft.Icons.MOVE_TO_INBOX_ROUNDED, UI["alerta"], lpns_en_anden),
-                tarjeta_zona("TODOS_RACKS", "Todos los racks", ft.Icons.WAREHOUSE_OUTLINED, UI["acento"], stock_en_racks,
+                tarjeta_zona("TODOS_RACKS", "Todos los racks", ft.Icons.WAREHOUSE_OUTLINED, UI["acento"], stock_solo_racks,
                              total_ocup, total_pos),
             ]
             for nom_rk in racks_base:
@@ -748,6 +767,17 @@ class PutawayModulo:
                 pos_r = pos_por_rack.get(nom_rk, set())
                 tarjetas.append(tarjeta_zona(nom_rk, nom_rk.replace("RACK ", "Rack "), ft.Icons.VIEW_COLUMN_OUTLINED, "#818CF8",
                                              items_r, len(ocup_por_rack.get(nom_rk, set()) & pos_r) if pos_r else None, len(pos_r) or None))
+            # Zonas de arena: ocupación = posiciones con al menos un pallet
+            for nom_ar in ZONAS_ARENA.values():
+                pos_ar = pos_por_rack.get(nom_ar, set())
+                items_ar = [x for x in stock_en_racks if x["rack"] == nom_ar]
+                if not pos_ar and not items_ar:
+                    continue
+                tarjetas.append(tarjeta_zona(
+                    nom_ar, nom_ar.title(),
+                    ft.Icons.GRASS_ROUNDED if nom_ar != "MERMA ARENA" else ft.Icons.DELETE_OUTLINE_ROUNDED,
+                    COLOR_ARENA if nom_ar != "MERMA ARENA" else UI["peligro"], items_ar,
+                    len(ocup_por_rack.get(nom_ar, set()) & pos_ar) if pos_ar else None, len(pos_ar) or None))
             fila_racks.controls = tarjetas
             lbl_dig_ocupacion.value = f"{int(round(total_ocup * 100 / total_pos))}%" if total_pos else "—"
             lbl_det_ocupacion.value = f"{total_ocup} de {total_pos} posiciones con stock" if total_pos else "Sin maestra de ubicaciones"
@@ -768,7 +798,7 @@ class PutawayModulo:
                 items_vista = lpns_en_anden
                 lbl_titulo_tabla_monitor.value = f"Andén · {len(items_vista)} LPN pendientes de ubicar"
             elif zona_seleccionada == "TODOS_RACKS":
-                items_vista = stock_en_racks
+                items_vista = stock_solo_racks
                 lbl_titulo_tabla_monitor.value = f"Todos los racks · {len(items_vista)} LPN"
             else:
                 items_vista = [x for x in stock_en_racks if x["rack"] == zona_seleccionada]
@@ -776,8 +806,8 @@ class PutawayModulo:
 
             lbl_dig_anden.value = str(len(lpns_en_anden))
             lbl_dig_racks.value = str(len(stock_en_racks))
-            lbl_dig_picking_n1.value = str(sum(1 for x in stock_en_racks if x["nivel_num"] <= 1))
-            lbl_dig_reserva_alt.value = str(sum(1 for x in stock_en_racks if x["nivel_num"] > 1))
+            lbl_dig_picking_n1.value = str(sum(1 for x in stock_en_racks if x["nivel_num"] == 1))
+            lbl_dig_reserva_alt.value = str(sum(1 for x in stock_en_racks if x["nivel_num"] >= 2))
 
             lbl_dig_unid_zona.value = str(sum(x["unidades"] for x in items_vista))
             lbl_dig_skus_zona.value = str(len({x["sku"] for x in items_vista}))
@@ -796,7 +826,9 @@ class PutawayModulo:
                 sk = x["sku"]
                 if sk not in por_sku:
                     por_sku[sk] = {"n1": 0, "cajas_n1": 0, "res": 0, "cands": []}
-                if x["nivel_num"] <= 1:
+                if x["nivel_num"] == 0:
+                    continue  # arena: se despacha directo desde el piso, no se reabastece
+                if x["nivel_num"] == 1:
                     por_sku[sk]["n1"] += x["unidades"]
                     por_sku[sk]["cajas_n1"] += int(x.get("cajas") or 1)
                 else:
@@ -850,8 +882,10 @@ class PutawayModulo:
         lbl_det_racks = ft.Text("", size=11, color=UI["texto_3"])
 
         def actualizar_detalle_kpis():
-            n1 = sum(1 for x in stock_en_racks if x["nivel_num"] <= 1)
-            lbl_det_racks.value = f"{n1} en picking N1 · {len(stock_en_racks) - n1} en reserva"
+            n1 = sum(1 for x in stock_en_racks if x["nivel_num"] == 1)
+            res = sum(1 for x in stock_en_racks if x["nivel_num"] >= 2)
+            ar = sum(1 for x in stock_en_racks if x["nivel_num"] == 0)
+            lbl_det_racks.value = f"{n1} en picking N1 · {res} en reserva" + (f" · {ar} en arena" if ar else "")
 
         txt_buscar_zona.on_change = lambda e: renderizar_todo_el_modulo()
 

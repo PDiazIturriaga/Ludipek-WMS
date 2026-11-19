@@ -95,6 +95,7 @@ declare
   v_pl_id bigint;
   v_estado jsonb;
   v_canal text;
+  v_tok text;
   v_total int;
   v_faltante int := 0;
   v_detalle_falt text := '';
@@ -183,15 +184,24 @@ begin
   select string_agg(p, '|') into v_canal
   from (select btrim(p) p from unnest(string_to_array(coalesce(o.canal_venta, ''), '|')) p
         where btrim(p) <> '' and upper(btrim(p)) !~ '^(LPN|BULTOS|TIPO|COMUNA|PESO_KG|FALTANTE|MOTIVO_FALTANTE):') z;
-  v_canal := concat_ws('|', nullif(v_canal, ''),
-                       case when v_lpn is not null then 'LPN:' || v_lpn end,
-                       'BULTOS:' || p_bultos,
-                       case when nullif(btrim(p_tipo_empaque), '') is not null then 'TIPO:' || upper(btrim(p_tipo_empaque)) end,
-                       case when nullif(btrim(p_comuna), '') is not null then 'COMUNA:' || upper(btrim(p_comuna)) end,
-                       case when p_peso_real_kg is not null then 'PESO_KG:' || round(p_peso_real_kg, 2)
-                            when p_peso_esperado_kg is not null then 'PESO_KG:' || round(p_peso_esperado_kg, 2) end,
-                       case when v_faltante > 0 then 'FALTANTE:' || v_faltante end,
-                       case when v_faltante > 0 then 'MOTIVO_FALTANTE:' || replace(upper(v_motivo), '|', '/') end);
+  -- canal_venta es varchar(100) en producción: el detalle completo vive en wms_despacho_ov y aquí
+  -- solo van las marcas que caben, por prioridad (canal original, faltante, bultos, LPN, ...).
+  v_canal := left(coalesce(nullif(v_canal, ''), ''), 60);
+  foreach v_tok in array array[
+      case when v_faltante > 0 then 'FALTANTE:' || v_faltante end,
+      'BULTOS:' || p_bultos,
+      case when v_lpn is not null then 'LPN:' || v_lpn end,
+      case when p_peso_real_kg is not null then 'PESO_KG:' || round(p_peso_real_kg, 2)
+           when p_peso_esperado_kg is not null then 'PESO_KG:' || round(p_peso_esperado_kg, 2) end,
+      case when nullif(btrim(p_tipo_empaque), '') is not null then 'TIPO:' || upper(btrim(p_tipo_empaque)) end,
+      case when nullif(btrim(p_comuna), '') is not null then 'COMUNA:' || upper(btrim(p_comuna)) end,
+      case when v_faltante > 0 then 'MOTIVO_FALTANTE:' || replace(upper(v_motivo), '|', '/') end]
+  loop
+    continue when v_tok is null;
+    if length(concat_ws('|', nullif(v_canal, ''), v_tok)) <= 100 then
+      v_canal := concat_ws('|', nullif(v_canal, ''), v_tok);
+    end if;
+  end loop;
   update netsuite_ordenes_venta set canal_venta = v_canal where id = p_orden_id;
 
   -- 5) Datos de despacho en su propia tabla (una fila por orden) y entrada directa a ruteo
