@@ -18,6 +18,8 @@ Cada script es una transacción (si falla, no cambia nada) y se puede volver a e
 | 4d | `04b_recepciones_sin_ubicar.sql` | Planilla de LPN recibidos que nunca se almacenaron, bloqueo de recepciones cerradas y cierre controlado por fecha de corte (paso 3 comentado). |
 | 4c | `01c_resolver_lpn_repartidos.sql` | Plantilla para resolver LPN en dos ubicaciones **después del chequeo físico**. |
 | 7 | `07_estados_picking_packing.sql` | **Obligatorio para el celular nuevo.** Cierre de picking (`wms_cerrar_picking`) y de packing (`wms_cerrar_packing`) en una sola transacción, con historial de estados y errores visibles. Agrega al catálogo PENDIENTE_FACTURACION, FACTURADO, DESPACHADO, ANULADO, CERRADO. Corrige bodegas mal escritas que bloqueaban el cambio de estado. |
+| 8 | `08_estado_unico_ov.sql` | Las columnas `estado` y `estado_ns` de las órdenes quedan siempre iguales, y cualquier cambio de estado (también "Marcar facturada" del PC) queda en `wms_historial_estados`. |
+| 9 | `09_tareas_conteo.sql` | Tareas de conteo (pasillo, vacías de un pasillo o SKU) asignadas desde el PC → el operador las ve en su celular con su avance. Convierte las asignaciones antiguas "RACK A" al formato nuevo. |
 | — | `07b_diagnostico_ov.sql` | Solo lectura: radiografía de una orden (cabecera, líneas, kardex, packing, historial). Cambiar el número en la primera línea. |
 
 Después de la Fase A: ejecutar de nuevo `00_diagnostico.sql`. Lo que quede son casos para conteo cíclico (filas duplicadas, LPN en dos ubicaciones).

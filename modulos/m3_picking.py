@@ -1729,7 +1729,7 @@ class PickingModulo:
                 et = etapa_ov(r.get("estado"))
                 bultos_txt = f"{r.get('bultos', 1)} {str(r.get('tipo_empaque') or 'BULTO').lower()}" if et >= 2 else "—"
                 filas.append(ft.DataRow(
-                    on_select_changed=lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it),
+                    on_select_change=lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it),
                     cells=[
                         ft.DataCell(ft.Text(r["ov"], size=13, weight=ft.FontWeight.W_700, color=UI["texto"])),
                         ft.DataCell(chip_canal(r)),

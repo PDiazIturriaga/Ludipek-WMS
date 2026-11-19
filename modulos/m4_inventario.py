@@ -37,6 +37,7 @@ class InventarioModulo:
         mapa_stock_por_sku = {}
         mapa_ubicaciones_por_sku = {}
         mapa_sku_maestra = {}
+        mapa_info_maestra = {}
         lista_usuarios_wms = []
         mapa_usuarios_wms = {}
         asignaciones_pasillo_db = []
@@ -141,35 +142,21 @@ class InventarioModulo:
         )
 
         tabla_asignacion_pasillos = ft.DataTable(
-            heading_row_color="#181E20", heading_row_height=34, data_row_min_height=32, data_row_max_height=38,
-            column_spacing=15, data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("PASILLO", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("USUARIO ASIGNADO (WMS_USUARIOS)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("FECHA ASIGNACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("ESTADO CONTEO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=38, data_row_max_height=48,
+            column_spacing=22, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['Tipo', 'Objetivo', 'Operador', 'Asignada', 'Avance', 'Estado', '']],
             rows=[],
         )
 
         tabla_cruce_erp_wms = ft.DataTable(
-            heading_row_color="#181E20", heading_row_height=34, data_row_min_height=32, data_row_max_height=38,
-            column_spacing=14, data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("SKU", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("DESCRIPCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("STOCK ERP (NETSUITE)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("STOCK FÍSICO (WMS)", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("DESVIACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ESTADO CONCILIACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIÓN / AJUSTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=38, data_row_max_height=48,
+            column_spacing=22, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['SKU', 'Descripción', 'NetSuite', 'WMS', 'Diferencia', 'Estado', '']],
             rows=[],
         )
 
-        cont_asignacion = envolver_tabla_scroll(tabla_asignacion_pasillos, 185)
-        cont_cruce = envolver_tabla_scroll(tabla_cruce_erp_wms, 310)
+        cont_asignacion = ui_tabla(tabla_asignacion_pasillos, 360)
+        cont_cruce = ui_tabla(tabla_cruce_erp_wms, 480)
 
         # --- 5. CONTROLES ZONA 2: CONTEOS CÍCLICOS (SKU DIRIGIDO & UBICACIONES VACÍAS) ---
         txt_sku_dirigido = texto_dark("SKU a Dirigir (Ej: ALUC15)...", width=180, icon=ft.Icons.INVENTORY_2_OUTLINED)
@@ -188,40 +175,21 @@ class InventarioModulo:
         lbl_kpi_vac_hallazgo = ft.Text("0", size=22, weight=ft.FontWeight.W_900, color=ACCENT_AMBER, font_family="Consolas")
 
         tabla_ciclico_sku = ft.DataTable(
-            heading_row_color="#181E20", heading_row_height=34, data_row_min_height=32, data_row_max_height=38,
-            column_spacing=26, data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("FECHA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("SKU DIRIGIDO", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("DESCRIPCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("UBICACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("TEÓRICO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("CONTEO RF", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("DIF.", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("USUARIO (WMS_USUARIOS)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ESTADO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=38, data_row_max_height=48,
+            column_spacing=22, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['Fecha', 'SKU', 'Descripción', 'Ubicación', 'Sistema', 'Contado', 'Dif.', 'Operador', 'Estado', '']],
             rows=[],
         )
 
         tabla_ubicaciones_vacias = ft.DataTable(
-            heading_row_color="#181E20", heading_row_height=34, data_row_min_height=32, data_row_max_height=38,
-            column_spacing=36, data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("FECHA / HORA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("UBICACIÓN AUDITADA", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("RESULTADO FÍSICO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("LPN / SKU DETECTADO", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_AMBER)),
-                ft.DataColumn(ft.Text("USUARIO (WMS_USUARIOS)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ESTADO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=38, data_row_max_height=48,
+            column_spacing=22, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['Fecha', 'Ubicación', 'Resultado', 'LPN / SKU encontrado', 'Operador', 'Estado', '']],
             rows=[],
         )
 
-        cont_tabla_ciclico = envolver_tabla_scroll(tabla_ciclico_sku, 250)
-        cont_tabla_vacias = envolver_tabla_scroll(tabla_ubicaciones_vacias, 250)
+        cont_tabla_ciclico = ui_tabla(tabla_ciclico_sku, 460)
+        cont_tabla_vacias = ui_tabla(tabla_ubicaciones_vacias, 460)
 
         # --- 6. CONTROLES ZONA 3: TRAZABILIDAD (LPN HISTORY Y LOGS DE UBICACIÓN) ---
         txt_traz_buscar_lpn = texto_dark("Ingresar o Escanear Código LPN (Ej: LPN-100456)...", width=350, icon=ft.Icons.QR_CODE_2_ROUNDED)
@@ -232,34 +200,21 @@ class InventarioModulo:
         lbl_traz_ubic_actual = ft.Text("UBICACIÓN NO SELECCIONADA", size=15, weight=ft.FontWeight.W_900, color=TEXT_MUTED)
 
         tabla_trazabilidad_lpn = ft.DataTable(
-            heading_row_color="#181E20", heading_row_height=34, data_row_min_height=32, data_row_max_height=38,
-            column_spacing=28, data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("FECHA / HORA", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("EVENTO (LPN)", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ZONA ORIGEN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("ZONA DESTINO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("USUARIO RF", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("VALIDACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=38, data_row_max_height=48,
+            column_spacing=22, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['Fecha', 'Evento', 'Desde', 'Hacia', 'Usuario', 'Resultado']],
             rows=[],
         )
 
         tabla_trazabilidad_ubic = ft.DataTable(
-            heading_row_color="#181E20", heading_row_height=34, data_row_min_height=32, data_row_max_height=38,
-            column_spacing=28, data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("FECHA / HORA", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("LPN ASOCIADO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("SKU / LOTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("USUARIO RF", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=38, data_row_max_height=48,
+            column_spacing=22, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['Fecha', 'LPN', 'SKU / lote', 'Acción', 'Usuario']],
             rows=[],
         )
 
-        cont_traz_lpn = envolver_tabla_scroll(tabla_trazabilidad_lpn, 200)
-        cont_traz_ubic = envolver_tabla_scroll(tabla_trazabilidad_ubic, 200)
+        cont_traz_lpn = ui_tabla(tabla_trazabilidad_lpn, 420)
+        cont_traz_ubic = ui_tabla(tabla_trazabilidad_ubic, 420)
 
         # --- 7. CONTROLES ZONA 4: AUDITORÍA EN PISO (DESVÍOS DE GRÚA) ---
         txt_buscar_desvios = texto_dark("Buscar LPN o SKU con desvío...", expand=True, icon=ft.Icons.SEARCH_ROUNDED)
@@ -268,20 +223,12 @@ class InventarioModulo:
         lbl_dig_desv_resueltos = ft.Text("0", size=22, weight=ft.FontWeight.W_900, color="#34D399", font_family="Consolas")
 
         tabla_desvios_grua = ft.DataTable(
-            heading_row_color="#181E20", heading_row_height=34, data_row_min_height=32, data_row_max_height=38,
-            column_spacing=28, data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("FECHA REPORTE", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("LPN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("UBIC. TEÓRICA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("INCIDENCIA (APP RF)", weight=ft.FontWeight.BOLD, size=10, color="#F87171")),
-                ft.DataColumn(ft.Text("REPORTADO POR", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("ESTADO RESOLUCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=38, data_row_max_height=48,
+            column_spacing=22, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['Fecha', 'LPN / SKU', 'Ubicación', 'Incidencia', 'Reportado por', 'Estado', '']],
             rows=[],
         )
-        cont_desvios = envolver_tabla_scroll(tabla_desvios_grua, 320)
+        cont_desvios = ui_tabla(tabla_desvios_grua, 460)
 
         # --- 8. LÓGICA CORE Y SUPABASE (FILTRADO ESTRICTO MULTI-BODEGA) ---
         def cargar_usuarios_wms():
@@ -341,7 +288,7 @@ class InventarioModulo:
                     dd_operador_sku_dirigido.value = llaves_validas[0]
 
         def sync_stock_inventario():
-            nonlocal datos_stock_wms, mapa_sku_maestra, mapa_stock_por_sku, mapa_ubicaciones_por_sku
+            nonlocal datos_stock_wms, mapa_sku_maestra, mapa_stock_por_sku, mapa_ubicaciones_por_sku, mapa_info_maestra
             bodega_act = obtener_bodega_actual()
             nuevo_stock_sku = {}
             nuevas_ubic_sku = {}
@@ -366,10 +313,20 @@ class InventarioModulo:
 
             try:
                 # 1. Cargar Maestra de SKUs (Global para ambas bodegas)
+                nueva_info = {}
+                mapa_ean_a_sku.clear()
                 for m in leer_paginado("maestra_sku", 4000, filtrar_bodega=False):
                     s_k = str(m.get("sku") or "").strip().upper()
                     if s_k:
                         nueva_maestra[s_k] = str(m.get("descripcion") or "")
+                        ean = str(m.get("codigo_barras") or "").strip().upper()
+                        info = nueva_info.setdefault(s_k, {"marca": m.get("marca"), "ean": ean, "multiplo": None})
+                        mult = int(m.get("multiplo") or 1)
+                        if mult > 1 and (info["multiplo"] is None or mult > info["multiplo"]):
+                            info["multiplo"] = mult
+                        if ean:
+                            mapa_ean_a_sku[ean] = s_k
+                mapa_info_maestra = nueva_info
 
                 # 2. Cargar registro_recepcion filtrado por la bodega activa
                 filas_rec = leer_paginado("registro_recepcion", 4000, filtrar_bodega=True)
@@ -489,158 +446,134 @@ class InventarioModulo:
 
         txt_sku_dirigido.on_change = actualizar_preview_sku_dirigido
 
-        # --- ASIGNACIONES DE PASILLO VINCULADAS A WMS_USUARIOS Y BODEGA ---
+        # --- TAREAS DE CONTEO (pasillo completo, vacías de un pasillo o SKU dirigido) ---
+        # Se guardan con la función wms_crear_tarea_conteo (script 09) y el celular las ve en "Mis tareas".
+        tareas_conteo_db = []
+        pasillos_bodega = {}
+
+        TIPOS_TAREA = {
+            "PASILLO": ("Contar pasillo", ft.Icons.VIEW_COLUMN_OUTLINED),
+            "VACIAS": ("Auditar vacías", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED),
+            "SKU": ("Cíclico por SKU", ft.Icons.TRACK_CHANGES_ROUNDED),
+        }
+
+        def cargar_pasillos_bodega():
+            nonlocal pasillos_bodega
+            conteo = {}
+            try:
+                filas = leer_tabla_paginada(lambda: supabase.table("bodega_ubicaciones").select("codigo_ubicacion").eq("bodega", obtener_bodega_actual()))
+                for f in filas:
+                    cod = str(f.get("codigo_ubicacion") or "").strip().upper()
+                    if "-" in cod and not cod.startswith("ZONA"):
+                        p = cod.split("-")[0]
+                        conteo[p] = conteo.get(p, 0) + 1
+            except Exception as ex:
+                print(f"[WARN] Pasillos: {ex}")
+            pasillos_bodega = conteo
+            dd_racks_asignacion.options = [opt_w(p, f"Pasillo {p}  ({n} ubic.)") for p, n in sorted(conteo.items())]
+            if dd_racks_asignacion.value not in conteo:
+                dd_racks_asignacion.value = next(iter(sorted(conteo)), None)
+
+        def cambiar_tipo_tarea(e=None):
+            tipo = dd_tipo_tarea.value or "PASILLO"
+            dd_racks_asignacion.visible = tipo in ("PASILLO", "VACIAS")
+            txt_sku_dirigido.visible = tipo == "SKU"
+            txt_Info_sku_dirigido.visible = tipo == "SKU"
+            page.update()
+
         def renderizar_asignaciones():
-            nuevas_filas_asig = []
-            completadas_cnt = 0
-            for reg in list(asignaciones_pasillo_db):
-                est = str(reg.get("estado") or "EN PROCESO").upper()
-                if est in ("COMPLETADA", "COMPLETADO", "CERRADO", "AUDITADO"):
-                    completadas_cnt += 1
-                bg_est = "#1E3A8A" if est == "EN PROCESO" else "#065F46"
-                txt_est = "#DBEAFE" if est == "EN PROCESO" else "#D1FAE5"
-
-                u_raw = (
-                    reg.get("usuario")
-                    or reg.get("operador")
-                    or reg.get("usuario_asignado")
-                    or reg.get("nombre_usuario")
-                    or "SIN ASIGNAR"
-                )
-                u_mostrar = resolver_nombre_usuario(u_raw)
-                f_str = formatear_fecha_hora(reg.get("fecha") or reg.get("fecha_asignacion") or reg.get("created_at"))
-                pasillo_str = str(reg.get("pasillo") or reg.get("rack") or reg.get("zona") or "RACK A").upper()
-
-                def cerrar_pasillo(ev, item_r=reg):
-                    item_r["estado"] = "COMPLETADA"
-                    id_r = item_r.get("id")
-                    if id_r:
-                        for t_nom in ("wms_asignaciones_pasillo", "asignaciones_pasillo", "auditoria_pasillos"):
-                            try:
-                                supabase.table(t_nom).update({"estado": "COMPLETADA"}).eq("id", id_r).execute()
-                                break
-                            except Exception:
-                                continue
-                    renderizar_asignaciones()
-                    page.update()
-
-                nuevas_filas_asig.append(
-                    ft.DataRow(
-                        cells=[
-                            ft.DataCell(ft.Text(pasillo_str, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                            ft.DataCell(
-                                ft.Row(
-                                    [
-                                        ft.Icon(ft.Icons.PERSON_PIN_ROUNDED, color=ACCENT_CYAN, size=15),
-                                        ft.Text(u_mostrar, size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                                    ],
-                                    spacing=5,
-                                )
-                            ),
-                            ft.DataCell(ft.Text(f_str, size=11, color=TEXT_MUTED)),
-                            ft.DataCell(crear_badge_estado(est, bg_est, txt_est)),
-                            ft.DataCell(
-                                boton_primario(
-                                    "CERRAR CONTEO",
-                                    ft.Icons.CHECK_CIRCLE_OUTLINE,
-                                    cerrar_pasillo,
-                                    "#047857" if est == "EN PROCESO" else "#334155",
-                                    height_val=26,
-                                )
-                            ),
-                        ]
-                    )
-                )
-
-            tabla_asignacion_pasillos.rows = nuevas_filas_asig
-
-            if asignaciones_pasillo_db:
-                pct = int(round((completadas_cnt / len(asignaciones_pasillo_db)) * 100))
-                lbl_kpi_avance_audi.value = f"{pct}%"
-            else:
-                lbl_kpi_avance_audi.value = "0%"
+            filas = []
+            abiertas = 0
+            for t in tareas_conteo_db:
+                est = str(t.get("estado") or "PENDIENTE").upper()
+                tipo = str(t.get("tipo") or "PASILLO").upper()
+                total = int(t.get("total") or 0)
+                avance = int(t.get("avance") or 0)
+                if est in ("PENDIENTE", "EN_PROCESO"):
+                    abiertas += 1
+                pct = min(1.0, avance / total) if total else (1.0 if est == "COMPLETADA" else 0.0)
+                objetivo = f"Pasillo {t.get('pasillo')}" if tipo != "SKU" else f"{t.get('sku')} · {str(t.get('descripcion') or '')[:30]}"
+                color_est = {"PENDIENTE": UI["texto_2"], "EN_PROCESO": UI["alerta"], "COMPLETADA": UI["exito"], "ANULADA": UI["peligro"]}.get(est, UI["texto_2"])
+                acciones = []
+                if est in ("PENDIENTE", "EN_PROCESO"):
+                    acciones = [
+                        ft.IconButton(icon=ft.Icons.TASK_ALT_ROUNDED, icon_color=UI["exito"], icon_size=20, tooltip="Marcar como completada",
+                                      on_click=lambda e, i=t.get("id"): cerrar_tarea(i, "COMPLETADA")),
+                        ft.IconButton(icon=ft.Icons.CLOSE_ROUNDED, icon_color=UI["texto_2"], icon_size=20, tooltip="Anular tarea",
+                                      on_click=lambda e, i=t.get("id"): cerrar_tarea(i, "ANULADA")),
+                    ]
+                filas.append(ft.DataRow(cells=[
+                    ft.DataCell(ft.Row([ft.Icon(TIPOS_TAREA.get(tipo, TIPOS_TAREA["PASILLO"])[1], size=16, color=UI["acento"]),
+                                        ft.Text(TIPOS_TAREA.get(tipo, TIPOS_TAREA["PASILLO"])[0], size=12, color=UI["texto"])], spacing=6, tight=True)),
+                    ft.DataCell(ft.Text(objetivo, size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])),
+                    ft.DataCell(ft.Text(resolver_nombre_usuario(t.get("usuario")), size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(formatear_fecha_hora(t.get("creada_en")), size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Row([
+                        ft.ProgressBar(value=pct, width=110, height=6, color=UI["exito"] if pct >= 1 else UI["acento"], bgcolor="#334044", border_radius=3),
+                        ft.Text(f"{avance}/{total}", size=12, color=UI["texto_2"]),
+                    ], spacing=8, tight=True)),
+                    ft.DataCell(ft.Text(est.replace("_", " ").capitalize(), size=12, weight=ft.FontWeight.W_600, color=color_est)),
+                    ft.DataCell(ft.Row(acciones, spacing=0, tight=True)),
+                ]))
+            tabla_asignacion_pasillos.rows = filas
+            lbl_kpi_avance_audi.value = str(abiertas)
 
         def cargar_asignaciones_piso():
-            nonlocal asignaciones_pasillo_db
-            bodega_act = obtener_bodega_actual()
-            cargadas = []
-            for nom_t in ("wms_asignaciones_pasillo", "asignaciones_pasillo", "auditoria_pasillos"):
-                try:
-                    res = supabase.table(nom_t).select("*").eq("bodega", bodega_act).order("id", desc=True).limit(100).execute()
-                    if res.data is not None:
-                        cargadas = res.data
-                        break
-                except Exception:
-                    try:
-                        res = supabase.table(nom_t).select("*").order("id", desc=True).limit(100).execute()
-                        if res.data is not None:
-                            cargadas = [
-                                r for r in res.data
-                                if not r.get("bodega") or str(r.get("bodega")).strip().upper() == bodega_act.upper()
-                            ]
-                            break
-                    except Exception:
-                        continue
-
-            if not cargadas and lista_usuarios_wms:
-                for u_row in lista_usuarios_wms:
-                    pas_u = u_row.get("pasillo_asignado") or u_row.get("pasillo") or u_row.get("rack_asignado")
-                    if pas_u and str(pas_u).strip().upper() not in ("NONE", "NULL", ""):
-                        cargadas.append({
-                            "id": u_row.get("id"),
-                            "bodega": bodega_act,
-                            "pasillo": str(pas_u).upper(),
-                            "usuario": u_row.get("usuario"),
-                            "fecha": u_row.get("updated_at") or u_row.get("created_at"),
-                            "estado": u_row.get("estado_auditoria") or "EN PROCESO",
-                        })
-
-            asignaciones_pasillo_db = cargadas
+            nonlocal tareas_conteo_db
+            try:
+                res = supabase.rpc("wms_tareas_conteo", {"p_bodega": obtener_bodega_actual(), "p_usuario": None, "p_solo_abiertas": True}).execute()
+                tareas_conteo_db = res.data or []
+                lbl_aviso_tareas.visible = False
+            except Exception as ex:
+                tareas_conteo_db = []
+                lbl_aviso_tareas.value = f"No se pudieron leer las tareas. ¿Se ejecutó el script 09_tareas_conteo.sql? ({ex})"
+                lbl_aviso_tareas.visible = True
             renderizar_asignaciones()
 
         def asignar_operador_pasillo(e=None):
-            bodega_act = obtener_bodega_actual()
-            p_sel = dd_racks_asignacion.value or "RACK A"
-            o_sel = dd_operador_asignar.value
-            if not o_sel:
-                notificar("Seleccione un usuario válido de wms_usuarios.", "#D97706")
+            tipo = dd_tipo_tarea.value or "PASILLO"
+            usuario = dd_operador_asignar.value
+            pasillo = dd_racks_asignacion.value if tipo != "SKU" else None
+            sku = (txt_sku_dirigido.value or "").strip().upper() if tipo == "SKU" else None
+            if not usuario:
+                notificar("Seleccione el operador que hará el conteo.", "#D97706")
                 return
-
-            ahora_iso = datetime.now().strftime("%Y-%m-%d %H:%M")
-            guardado_db = False
-
-            for nom_t in ("wms_asignaciones_pasillo", "asignaciones_pasillo", "auditoria_pasillos"):
-                if guardado_db:
-                    break
-                for payload in (
-                    {"bodega": bodega_act, "pasillo": p_sel, "operador": o_sel, "usuario": o_sel, "estado": "EN PROCESO"},
-                    {"pasillo": p_sel, "operador": o_sel, "usuario": o_sel, "estado": "EN PROCESO"},
-                    {"pasillo": p_sel, "usuario": o_sel, "estado": "EN PROCESO"},
-                ):
-                    try:
-                        supabase.table(nom_t).insert(payload).execute()
-                        guardado_db = True
-                        break
-                    except Exception:
-                        continue
-
+            if tipo != "SKU" and not pasillo:
+                notificar("Seleccione un pasillo.", "#D97706")
+                return
+            if tipo == "SKU" and not sku:
+                notificar("Escriba el SKU a contar.", "#D97706")
+                return
             try:
-                supabase.table("wms_usuarios").update({"pasillo_asignado": p_sel}).eq("usuario", o_sel).execute()
-            except Exception:
-                pass
-
-            asignaciones_pasillo_db.insert(0, {
-                "id": len(asignaciones_pasillo_db) + 1,
-                "bodega": bodega_act,
-                "pasillo": p_sel,
-                "usuario": o_sel,
-                "operador": o_sel,
-                "fecha": ahora_iso,
-                "estado": "EN PROCESO",
-            })
-            notificar(f"{p_sel} ({bodega_act}) asignado a {resolver_nombre_usuario(o_sel)}.", "#047857")
-            renderizar_asignaciones()
+                supabase.rpc("wms_crear_tarea_conteo", {
+                    "p_bodega": obtener_bodega_actual(), "p_tipo": tipo, "p_pasillo": pasillo, "p_sku": sku,
+                    "p_usuario": usuario, "p_creado_por": str(getattr(self.page, "usuario_actual", None) or "PC"),
+                }).execute()
+            except Exception as ex:
+                notificar(mensaje_error_wms(ex), "#B91C1C")
+                return
+            objetivo = f"pasillo {pasillo}" if tipo != "SKU" else f"SKU {sku}"
+            notificar(f"Tarea asignada a {resolver_nombre_usuario(usuario)}: {TIPOS_TAREA[tipo][0].lower()} ({objetivo}). La verá en su celular.", "#047857")
+            txt_sku_dirigido.value = ""
+            cargar_asignaciones_piso()
             page.update()
+
+        def cerrar_tarea(id_tarea, estado: str):
+            try:
+                supabase.rpc("wms_actualizar_tarea_conteo", {
+                    "p_id": id_tarea, "p_estado": estado, "p_usuario": str(getattr(self.page, "usuario_actual", None) or "PC"),
+                }).execute()
+            except Exception as ex:
+                notificar(mensaje_error_wms(ex), "#B91C1C")
+                return
+            cargar_asignaciones_piso()
+            page.update()
+
+        def mensaje_error_wms(ex) -> str:
+            txt = str(getattr(ex, "message", None) or ex)
+            if "WMS:" in txt:
+                txt = txt.split("WMS:", 1)[1].split("'", 1)[0].split('"', 1)[0]
+            return txt.strip()
 
         # --- 9. LÓGICA ZONA 2: AUDITORÍA CÍCLICA SKU DIRIGIDO & UBICACIONES VACÍAS ---
         def renderizar_tablas_auditorias_conteos(e=None):
@@ -759,24 +692,19 @@ class InventarioModulo:
                 nuevas_filas_cic.append(
                     ft.DataRow(
                         cells=[
-                            ft.DataCell(ft.Text(fecha_c, size=10, color=TEXT_MUTED)),
-                            ft.DataCell(ft.Text(sku_c, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(desc_c[:48], size=11, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(ubi_c, weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(f"{teo_int} UN", size=11, color=TEXT_MUTED)),
-                            ft.DataCell(ft.Text(txt_conteo_rf, weight=ft.FontWeight.BOLD, size=11, color="#F87171" if est_raw == "INCIDENCIA" else ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(txt_dif_str, weight=ft.FontWeight.BOLD, size=11, color=col_dif)),
-                            ft.DataCell(ft.Text(usr_str[:32], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(fecha_c, size=11, color=UI["texto_2"])),
+                            ft.DataCell(ft.Text(sku_c, weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Text(desc_c[:48], size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Text(ubi_c, weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Text(f"{teo_int} UN", size=12, color=UI["texto_2"])),
+                            ft.DataCell(ft.Text(txt_conteo_rf, weight=ft.FontWeight.BOLD, size=12, color="#F87171" if est_raw == "INCIDENCIA" else ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(txt_dif_str, weight=ft.FontWeight.BOLD, size=12, color=col_dif)),
+                            ft.DataCell(ft.Text(usr_str[:32], size=12, color=UI["texto"])),
                             ft.DataCell(badge_est),
-                            ft.DataCell(
-                                boton_primario(
-                                    "VALIDAR",
-                                    ft.Icons.CHECK_CIRCLE_OUTLINE,
-                                    validar_ciclico,
-                                    "#047857" if est_raw != "CONCILIADO" else "#334155",
-                                    height_val=26,
-                                )
-                            ),
+                            ft.DataCell(ft.IconButton(icon=ft.Icons.TASK_ALT_ROUNDED, icon_size=20,
+                                                      icon_color=UI["exito"] if est_raw != "CONCILIADO" else UI["texto_3"],
+                                                      tooltip="Validar conteo", on_click=validar_ciclico,
+                                                      disabled=est_raw == "CONCILIADO")),
                         ]
                     )
                 )
@@ -882,21 +810,16 @@ class InventarioModulo:
                 nuevas_filas_vac.append(
                     ft.DataRow(
                         cells=[
-                            ft.DataCell(ft.Text(fecha_v, size=10, color=TEXT_MUTED)),
-                            ft.DataCell(ft.Text(ubi_v, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(fecha_v, size=11, color=UI["texto_2"])),
+                            ft.DataCell(ft.Text(ubi_v, weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
                             ft.DataCell(badge_res),
-                            ft.DataCell(ft.Text(lpn_hallado[:28], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_AMBER if es_hallazgo else TEXT_MUTED)),
-                            ft.DataCell(ft.Text(usr_str_v[:24], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(lpn_hallado[:28], weight=ft.FontWeight.BOLD, size=12, color=ACCENT_AMBER if es_hallazgo else TEXT_MUTED)),
+                            ft.DataCell(ft.Text(usr_str_v[:24], size=12, color=UI["texto"])),
                             ft.DataCell(badge_est_v),
-                            ft.DataCell(
-                                boton_primario(
-                                    "CONFIRMAR",
-                                    ft.Icons.DONE_ALL_ROUNDED,
-                                    aprobar_vacia,
-                                    "#047857" if est_v != "VERIFICADA OK" else "#334155",
-                                    height_val=26,
-                                )
-                            ),
+                            ft.DataCell(ft.IconButton(icon=ft.Icons.DONE_ALL_ROUNDED, icon_size=20,
+                                                      icon_color=UI["exito"] if est_v != "VERIFICADA OK" else UI["texto_3"],
+                                                      tooltip="Confirmar revisión", on_click=aprobar_vacia,
+                                                      disabled=est_v == "VERIFICADA OK")),
                         ]
                     )
                 )
@@ -955,85 +878,9 @@ class InventarioModulo:
             renderizar_tablas_auditorias_conteos()
 
         def dirigir_sku_a_operador(e=None):
-            bodega_act = obtener_bodega_actual()
-            sku_obj = (txt_sku_dirigido.value or "").strip().upper()
-            ubic_obj = (txt_ubic_sku_dirigido.value or "").strip().upper()
-            usr_obj = dd_operador_sku_dirigido.value
-            if not sku_obj:
-                notificar("Ingrese un SKU válido para dirigir el conteo cíclico.", "#D97706")
-                return
-            if not usr_obj:
-                notificar("Seleccione un usuario de wms_usuarios para asignarle el SKU dirigido.", "#D97706")
-                return
-
-            st_teo = mapa_stock_por_sku.get(sku_obj, 0)
-            desc_s = mapa_sku_maestra.get(sku_obj, "SKU Dirigido")
-            if not ubic_obj:
-                ubics_s = sorted(mapa_ubicaciones_por_sku.get(sku_obj, set()))
-                ubic_obj = ubics_s[0] if ubics_s else "GENERAL"
-
-            lote_dir = f"DIR-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            ahora_iso = datetime.now().isoformat()
-
-            esquemas_candidatos = [
-                {
-                    "bodega": bodega_act,
-                    "lote_auditoria": lote_dir,
-                    "sku": sku_obj,
-                    "codigo_ubicacion": ubic_obj,
-                    "cajas_sistema": 0,
-                    "unidades_sistema": st_teo,
-                    "estado_auditoria": "PENDIENTE",
-                    "auditor": usr_obj,
-                    "fecha": ahora_iso,
-                },
-                {
-                    "lote_auditoria": lote_dir,
-                    "sku": sku_obj,
-                    "codigo_ubicacion": ubic_obj,
-                    "cajas_sistema": 0,
-                    "unidades_sistema": st_teo,
-                    "estado_auditoria": "PENDIENTE",
-                    "auditor": usr_obj,
-                    "fecha": ahora_iso,
-                },
-                {
-                    "sku": sku_obj,
-                    "descripcion": desc_s,
-                    "ubicacion": ubic_obj,
-                    "cantidad_esperada": st_teo,
-                    "usuario": usr_obj,
-                    "estado": "PENDIENTE",
-                },
-            ]
-            insertado_db = False
-            for payload in esquemas_candidatos:
-                try:
-                    supabase.table("auditoria_ciclico_sku").insert(payload).execute()
-                    insertado_db = True
-                    break
-                except Exception:
-                    continue
-
-            if not insertado_db:
-                conteos_ciclico_sku_db.insert(0, {
-                    "id": len(conteos_ciclico_sku_db) + 1,
-                    "bodega": bodega_act,
-                    "sku": sku_obj,
-                    "descripcion": desc_s,
-                    "codigo_ubicacion": ubic_obj,
-                    "unidades_sistema": st_teo,
-                    "auditor": usr_obj,
-                    "estado_auditoria": "SKU DIRIGIDO (PEND.)",
-                    "fecha": ahora_iso,
-                })
-            else:
-                cargar_auditorias_ciclico_y_vacias()
-
-            txt_sku_dirigido.value = ""
-            txt_ubic_sku_dirigido.value = ""
-            notificar(f"SKU Dirigido [{sku_obj}] ({bodega_act}) asignado a {resolver_nombre_usuario(usr_obj)}.", "#047857")
-            renderizar_tablas_auditorias_conteos()
+            # El SKU dirigido ahora es una tarea de conteo que el operador ve en su celular
+            dd_tipo_tarea.value = "SKU"
+            asignar_operador_pasillo()
 
         # --- 10. DESVÍOS, CRUCE ERP Y TRAZABILIDAD (CON FILTRO MULTI-BODEGA) ---
         def renderizar_desvios():
@@ -1053,19 +900,35 @@ class InventarioModulo:
 
                 nuevas_filas_desv.append(
                     ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(formatear_fecha_hora(d.get("fecha") or d.get("created_at")), weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                        ft.DataCell(ft.Text(d.get("lpn", "-"), weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                        ft.DataCell(ft.Text(d.get("ubicacion_teorica", "-"), weight=ft.FontWeight.BOLD, size=11, color=TEXT_MUTED)),
-                        ft.DataCell(ft.Text(d.get("incidencia", "-"), weight=ft.FontWeight.BOLD, size=11, color="#F87171")),
-                        ft.DataCell(ft.Text(u_nom, size=11, color=TEXT_MUTED)),
+                        ft.DataCell(ft.Text(formatear_fecha_hora(d.get("fecha") or d.get("created_at")), weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                        ft.DataCell(ft.Text(d.get("lpn", "-"), weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                        ft.DataCell(ft.Text(d.get("ubicacion_teorica", "-"), weight=ft.FontWeight.BOLD, size=12, color=UI["texto_2"])),
+                        ft.DataCell(ft.Text(d.get("incidencia", "-"), weight=ft.FontWeight.BOLD, size=12, color="#F87171")),
+                        ft.DataCell(ft.Text(u_nom, size=12, color=UI["texto_2"])),
                         ft.DataCell(crear_badge_estado(est, bg_st, tx_st)),
-                        ft.DataCell(boton_primario("MARCAR RESUELTO", ft.Icons.DONE_ALL_ROUNDED, lambda e, d_r=d: (d_r.update({"estado": "RESUELTO"}), renderizar_desvios(), page.update()), "#047857" if est != "RESUELTO" else "#334155", height_val=26)),
+                        ft.DataCell(ft.IconButton(icon=ft.Icons.TASK_ALT_ROUNDED, icon_size=20, tooltip="Marcar como resuelto",
+                                                  icon_color=UI["exito"] if est != "RESUELTO" else UI["texto_3"], disabled=est == "RESUELTO",
+                                                  on_click=lambda e, d_r=d: resolver_desvio(d_r))),
                     ])
                 )
 
             tabla_desvios_grua.rows = nuevas_filas_desv
             lbl_dig_desv_pendientes.value = str(pend)
             lbl_dig_desv_resueltos.value = str(res)
+
+        def resolver_desvio(d_r: dict):
+            origen, _, id_txt = str(d_r.get("id") or "").partition("-")
+            try:
+                if origen == "VAC":
+                    supabase.table("auditoria_ubicaciones_vacias").update({"estado": "RESUELTO"}).eq("id", int(id_txt)).execute()
+                elif origen == "CIC":
+                    supabase.table("auditoria_ciclico_sku").update({"estado_auditoria": "CONCILIADO"}).eq("id", int(id_txt)).execute()
+            except Exception as ex:
+                notificar(f"No se pudo guardar: {ex}", "#B91C1C")
+                return
+            d_r["estado"] = "RESUELTO"
+            renderizar_desvios()
+            page.update()
 
         def cargar_desvios_grua():
             nonlocal desvios_db
@@ -1226,25 +1089,19 @@ class InventarioModulo:
                     filas_cruce.append(
                         ft.DataRow(
                             cells=[
-                                ft.DataCell(ft.Text(sku, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                                ft.DataCell(ft.Text(desc_s[:35], size=11, color=TEXT_WHITE)),
-                                ft.DataCell(ft.Text(f"{st_erp} UN", weight=ft.FontWeight.BOLD, size=11, color=TEXT_MUTED)),
-                                ft.DataCell(ft.Text(f"{st_wms} UN", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                                ft.DataCell(ft.Text(f"{desvio:+d} UN", weight=ft.FontWeight.BOLD, size=11, color=col_desv)),
+                                ft.DataCell(ft.Text(sku, weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                                ft.DataCell(ft.Text(desc_s[:35], size=12, color=UI["texto"])),
+                                ft.DataCell(ft.Text(f"{st_erp} UN", weight=ft.FontWeight.BOLD, size=12, color=UI["texto_2"])),
+                                ft.DataCell(ft.Text(f"{st_wms} UN", weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                                ft.DataCell(ft.Text(f"{desvio:+d} UN", weight=ft.FontWeight.BOLD, size=12, color=col_desv)),
                                 ft.DataCell(crear_badge_estado(st_txt, bg_st, tx_st)),
-                                ft.DataCell(
-                                    boton_primario(
-                                        "DIRIGIR CONTEO",
-                                        ft.Icons.TRACK_CHANGES_ROUNDED,
-                                        lambda ev, s_cod=sku: (
-                                            setattr(txt_sku_dirigido, "value", s_cod),
-                                            actualizar_preview_sku_dirigido(),
-                                            cambiar_subvista_inv(1),
-                                        ),
-                                        ACCENT_AMBER if desvio != 0 else "#334155",
-                                        height_val=26,
-                                    )
-                                ),
+                                ft.DataCell(ft.Row([
+                                    ft.IconButton(icon=ft.Icons.SEARCH_ROUNDED, icon_size=18, icon_color=UI["acento"], tooltip="Ver dónde está",
+                                                  on_click=lambda ev, s_cod=sku: (self.sel_sub_inventario(0), consultar_stock_sku(s_cod))),
+                                    ft.IconButton(icon=ft.Icons.TRACK_CHANGES_ROUNDED, icon_size=18,
+                                                  icon_color=UI["alerta"] if desvio != 0 else UI["texto_3"], tooltip="Crear tarea de conteo",
+                                                  on_click=lambda ev, s_cod=sku: ir_a_tarea_sku(s_cod)),
+                                ], spacing=0, tight=True)),
                             ]
                         )
                     )
@@ -1336,12 +1193,12 @@ class InventarioModulo:
 
             tabla_trazabilidad_lpn.rows = [
                 ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(l["fecha"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                    ft.DataCell(ft.Text(l["evento"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                    ft.DataCell(ft.Text(l["origen"], size=11, color=TEXT_MUTED)),
-                    ft.DataCell(ft.Text(l["destino"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                    ft.DataCell(ft.Text(l["usuario"], size=11, color=TEXT_WHITE)),
-                    ft.DataCell(ft.Text(l["validacion"], weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
+                    ft.DataCell(ft.Text(l["fecha"], weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(l["evento"], weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(l["origen"], size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Text(l["destino"], weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(l["usuario"], size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(l["validacion"], weight=ft.FontWeight.BOLD, size=12, color="#34D399")),
                 ])
                 for l in logs
             ]
@@ -1462,11 +1319,11 @@ class InventarioModulo:
 
             tabla_trazabilidad_ubic.rows = [
                 ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(l["fecha"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                    ft.DataCell(ft.Text(l["lpn"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                    ft.DataCell(ft.Text(l["sku_lote"], size=11, color=TEXT_MUTED)),
-                    ft.DataCell(ft.Text(l["accion"], weight=ft.FontWeight.BOLD, size=11, color="#34D399" if ("INGRESO" in l["accion"] or "ACTUAL" in l["accion"] or "ALMACENAMIENTO" in l["accion"]) else ACCENT_AMBER)),
-                    ft.DataCell(ft.Text(l["usuario"], size=11, color=TEXT_WHITE)),
+                    ft.DataCell(ft.Text(l["fecha"], weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(l["lpn"], weight=ft.FontWeight.BOLD, size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(l["sku_lote"], size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Text(l["accion"], weight=ft.FontWeight.BOLD, size=12, color="#34D399" if ("INGRESO" in l["accion"] or "ACTUAL" in l["accion"] or "ALMACENAMIENTO" in l["accion"]) else ACCENT_AMBER)),
+                    ft.DataCell(ft.Text(l["usuario"], size=12, color=UI["texto"])),
                 ])
                 for l in logs
             ]
@@ -1475,234 +1332,445 @@ class InventarioModulo:
         txt_traz_buscar_lpn.on_submit = buscar_trazabilidad_lpn
         txt_traz_buscar_ubic.on_submit = buscar_trazabilidad_ubic
 
+        # =====================================================================
+        # CONSULTA DE STOCK POR SKU
+        # =====================================================================
+        mapa_ean_a_sku = {}
+        consulta_actual = {"sku": None, "detalle": []}
+
+        txt_consulta_sku = ft.TextField(
+            label="SKU, código de barras o descripción",
+            prefix_icon=ft.Icons.SEARCH_ROUNDED,
+            dense=True, text_size=14, autofocus=True,
+            color=UI["texto"], bgcolor=UI["input"], border_color=UI["borde"], focused_border_color=UI["acento"],
+            label_style=ft.TextStyle(size=12, color=UI["texto_2"]), border_radius=8,
+            content_padding=ft.Padding.symmetric(horizontal=12, vertical=12),
+        )
+        fila_sugerencias = ft.Row(spacing=6, wrap=True, run_spacing=6)
+        lbl_cons_sku = ft.Text("", size=20, weight=ft.FontWeight.W_700, color=UI["texto"])
+        lbl_cons_desc = ft.Text("Busque un producto para ver dónde está y cuánto hay.", size=13, color=UI["texto_2"])
+        lbl_cons_meta = ft.Text("", size=12, color=UI["texto_3"])
+        lbl_cons_total = ft.Text("—")
+        lbl_cons_rack = ft.Text("—")
+        lbl_cons_picking = ft.Text("—")
+        lbl_cons_comprometido = ft.Text("—")
+        lbl_cons_disponible = ft.Text("—")
+        lbl_cons_det_total = ft.Text("", size=11, color=UI["texto_3"])
+        lbl_cons_det_comp = ft.Text("", size=11, color=UI["texto_3"])
+        lbl_cons_det_disp = ft.Text("", size=11, color=UI["texto_3"])
+        fila_lotes_consulta = ft.Row(spacing=6, wrap=True, run_spacing=6)
+
+        def tabla_ui(columnas: list):
+            return ft.DataTable(
+                heading_row_color=UI["card_alt"], heading_row_height=38,
+                data_row_min_height=38, data_row_max_height=46,
+                column_spacing=22, horizontal_margin=14, divider_thickness=0.5,
+                columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in columnas],
+                rows=[],
+            )
+
+        tabla_consulta_ubic = tabla_ui(["Ubicación", "Zona", "LPN", "Lote", "Vencimiento", "Vence en", "Cajas", "Unidades"])
+        tabla_consulta_mov = tabla_ui(["Fecha", "Movimiento", "Desde → hacia", "Unidades", "Usuario"])
+        cont_consulta_ubic = ui_tabla(tabla_consulta_ubic, 380)
+        cont_consulta_mov = ui_tabla(tabla_consulta_mov, 300)
+
+        def dias_para_vencer(venc: str):
+            iso = fecha_a_iso(venc)
+            if not iso:
+                return None
+            try:
+                return (datetime.strptime(str(iso)[:10], "%Y-%m-%d").date() - datetime.now().date()).days
+            except Exception:
+                return None
+
+        def resolver_sku_consulta(texto: str) -> str:
+            t = (texto or "").strip().upper()
+            if not t:
+                return ""
+            if t in mapa_sku_maestra:
+                return t
+            if t in mapa_ean_a_sku:
+                return mapa_ean_a_sku[t]
+            if t.endswith("-FA") and t[:-3] in mapa_sku_maestra:
+                return t[:-3]
+            return t
+
+        def sugerir_skus(e=None):
+            q = (txt_consulta_sku.value or "").strip().upper()
+            fila_sugerencias.controls.clear()
+            if len(q) >= 2:
+                encontrados = []
+                for s, d in mapa_sku_maestra.items():
+                    if q in s or q in str(d).upper():
+                        encontrados.append(s)
+                    if len(encontrados) >= 8:
+                        break
+                for s in encontrados:
+                    fila_sugerencias.controls.append(ft.Container(
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=5), border_radius=14,
+                        border=ft.Border.all(1, UI["borde"]), ink=True,
+                        on_click=lambda ev, sk=s: consultar_stock_sku(sk),
+                        content=ft.Text(f"{s} · {str(mapa_sku_maestra.get(s, ''))[:34]}", size=12, color=UI["texto"]),
+                    ))
+            page.update()
+
+        def consultar_stock_sku(sku_forzado=None):
+            if not mapa_sku_maestra:
+                sync_stock_inventario()
+            sku = resolver_sku_consulta(sku_forzado if isinstance(sku_forzado, str) else txt_consulta_sku.value)
+            if not sku:
+                return
+            txt_consulta_sku.value = sku
+            fila_sugerencias.controls.clear()
+            bodega_act = obtener_bodega_actual()
+            variantes = [sku, f"{sku}-FA"]
+
+            try:
+                filas = leer_tabla_paginada(lambda: supabase.table("bodega_inventario_ubicacion").select("*").in_("sku", variantes))
+            except Exception as ex:
+                notificar(f"No se pudo leer el inventario: {ex}", "#B91C1C")
+                return
+            filas = [f for f in filas if int(f.get("cantidad_unidades") or 0) > 0]
+            en_bodega = [f for f in filas if str(f.get("bodega") or "Bodega Santiago") == bodega_act]
+            otra_bodega = sum(int(f.get("cantidad_unidades") or 0) for f in filas if f not in en_bodega)
+
+            comprometido = 0
+            ovs_comp = set()
+            try:
+                det = supabase.table("netsuite_detalle_ov").select("orden_id, cantidad_pedida, cantidad_pickeada").in_("sku", variantes).execute().data or []
+                ids = list({d.get("orden_id") for d in det if d.get("orden_id") is not None})
+                abiertas = {}
+                if ids:
+                    for o in leer_por_lista("netsuite_ordenes_venta", "id", ids):
+                        est = str(o.get("estado_ns") or o.get("estado") or "").upper()
+                        if est in ("", "PENDIENTE", "PENDIENTE_PICKING", "PICKING_EN_PROCESO") and str(o.get("bodega") or "Bodega Santiago") == bodega_act:
+                            abiertas[o.get("id")] = o.get("numero_ov")
+                for d in det:
+                    if d.get("orden_id") in abiertas:
+                        pend = max(0, int(d.get("cantidad_pedida") or 0) - int(d.get("cantidad_pickeada") or 0))
+                        if pend:
+                            comprometido += pend
+                            ovs_comp.add(abiertas[d.get("orden_id")])
+            except Exception as ex:
+                print(f"[WARN] Comprometido SKU: {ex}")
+
+            total = sum(int(f.get("cantidad_unidades") or 0) for f in en_bodega)
+            en_picking = sum(int(f.get("cantidad_unidades") or 0) for f in en_bodega if str(f.get("codigo_ubicacion") or "").upper().startswith("ZONA-PICKING"))
+            en_merma = sum(int(f.get("cantidad_unidades") or 0) for f in en_bodega if str(f.get("codigo_ubicacion") or "").upper().startswith("ZONA-MERMA"))
+            en_rack = total - en_picking - en_merma
+            disponible = max(0, total - en_merma - comprometido)
+
+            def fmt(n):
+                return f"{n:,}".replace(",", ".")
+
+            lbl_cons_sku.value = sku
+            lbl_cons_desc.value = str(mapa_sku_maestra.get(sku) or "SKU no registrado en la maestra")
+            info_m = mapa_info_maestra.get(sku, {})
+            lbl_cons_meta.value = "  ·  ".join(x for x in [
+                f"Marca {info_m.get('marca')}" if info_m.get("marca") else "",
+                f"EAN {info_m.get('ean')}" if info_m.get("ean") else "",
+                f"Caja x{info_m.get('multiplo')}" if info_m.get("multiplo") else "",
+                bodega_act,
+            ] if x)
+            lbl_cons_total.value = fmt(total)
+            lbl_cons_det_total.value = f"{len({f.get('codigo_ubicacion') for f in en_bodega})} ubicaciones" + (f" · {fmt(otra_bodega)} UN en la otra bodega" if otra_bodega else "")
+            lbl_cons_rack.value = fmt(en_rack)
+            lbl_cons_picking.value = fmt(en_picking)
+            lbl_cons_comprometido.value = fmt(comprometido)
+            lbl_cons_det_comp.value = (", ".join(sorted(ovs_comp)[:4]) + (" …" if len(ovs_comp) > 4 else "")) if ovs_comp else "Sin OV abiertas"
+            lbl_cons_disponible.value = fmt(disponible)
+            lbl_cons_det_disp.value = f"Excluye {fmt(en_merma)} UN en merma" if en_merma else "Stock menos lo comprometido"
+
+            orden = sorted(en_bodega, key=lambda f: (dias_para_vencer(f.get("fecha_vencimiento_cl")) is None,
+                                                      dias_para_vencer(f.get("fecha_vencimiento_cl")) or 0,
+                                                      str(f.get("codigo_ubicacion") or "")))
+            consulta_actual["sku"] = sku
+            consulta_actual["detalle"] = orden
+            filas_t = []
+            por_lote = {}
+            for f in orden:
+                ubic = str(f.get("codigo_ubicacion") or "-").upper()
+                zona = "Picking" if ubic.startswith("ZONA-PICKING") else ("Merma" if ubic.startswith("ZONA-MERMA") else "Rack")
+                dias = dias_para_vencer(f.get("fecha_vencimiento_cl"))
+                if dias is None:
+                    txt_dias, col_dias = "—", UI["texto_3"]
+                elif dias < 0:
+                    txt_dias, col_dias = "Vencido", UI["peligro"]
+                elif dias <= 90:
+                    txt_dias, col_dias = f"{dias} días", UI["alerta"]
+                else:
+                    txt_dias, col_dias = f"{dias // 30} meses", UI["texto_2"]
+                lote = str(f.get("lote") or "S/L").upper()
+                un = int(f.get("cantidad_unidades") or 0)
+                por_lote[lote] = por_lote.get(lote, 0) + un
+                filas_t.append(ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(ubic, size=12.5, weight=ft.FontWeight.W_700, color=UI["texto"])),
+                    ft.DataCell(ft.Text(zona, size=12, color=UI["alerta"] if zona == "Merma" else UI["texto_2"])),
+                    ft.DataCell(ft.Text(str(f.get("lpn") or f.get("lpn_origen") or "—"), size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Text(lote, size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(fecha_a_visual(f.get("fecha_vencimiento_cl")) if f.get("fecha_vencimiento_cl") else "S/F", size=12, color=UI["texto"])),
+                    ft.DataCell(ft.Text(txt_dias, size=12, weight=ft.FontWeight.W_600, color=col_dias)),
+                    ft.DataCell(ft.Text(str(int(f.get("cajas") or 0)), size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Text(fmt(un), size=12.5, weight=ft.FontWeight.W_700, color=UI["texto"])),
+                ]))
+            tabla_consulta_ubic.rows = filas_t
+            fila_lotes_consulta.controls = [
+                ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=4), border_radius=12,
+                    bgcolor=ft.Colors.with_opacity(0.12, UI["acento"]),
+                    content=ft.Text(f"Lote {l}: {fmt(u)} UN", size=12, color=UI["texto"]),
+                ) for l, u in sorted(por_lote.items(), key=lambda x: -x[1])
+            ]
+
+            try:
+                movs = (supabase.table("historial_movimientos").select("*").in_("sku", variantes)
+                        .eq("bodega", bodega_act).order("id", desc=True).limit(25).execute().data or [])
+            except Exception:
+                movs = []
+            tabla_consulta_mov.rows = [ft.DataRow(cells=[
+                ft.DataCell(ft.Text(formatear_fecha_hora(m.get("fecha")), size=12, color=UI["texto_2"])),
+                ft.DataCell(ft.Text(str(m.get("tipo_movimiento") or "-").replace("_", " ").capitalize()[:46], size=12, color=UI["texto"])),
+                ft.DataCell(ft.Text(f"{m.get('ubicacion_origen') or '—'} → {m.get('ubicacion_destino') or '—'}", size=12, color=UI["texto_2"])),
+                ft.DataCell(ft.Text(f"{int(m.get('unidades_afectadas') or 0):+d}", size=12.5, weight=ft.FontWeight.W_600,
+                                    color=UI["exito"] if int(m.get("unidades_afectadas") or 0) >= 0 else UI["peligro"])),
+                ft.DataCell(ft.Text(resolver_nombre_usuario(m.get("usuario")), size=12, color=UI["texto_2"])),
+            ]) for m in movs]
+            bloque_resultado_consulta.visible = True
+            txt_vacio_consulta.visible = False
+            page.update()
+
+        def exportar_consulta_sku(e=None):
+            if not consulta_actual["detalle"]:
+                notificar("Primero consulte un SKU.", "#D97706")
+                return
+            os.makedirs("reportes_inventario", exist_ok=True)
+            ruta = os.path.join("reportes_inventario", f"Stock_{consulta_actual['sku']}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+            pd.DataFrame([{
+                "SKU": f.get("sku"), "Bodega": f.get("bodega"), "Ubicación": f.get("codigo_ubicacion"), "LPN": f.get("lpn"),
+                "Lote": f.get("lote"), "Vencimiento": f.get("fecha_vencimiento_cl"), "Cajas": f.get("cajas"),
+                "Unidades": f.get("cantidad_unidades"),
+            } for f in consulta_actual["detalle"]]).to_excel(ruta, index=False)
+            descargar_o_abrir_archivo(self.page, ruta)
+
+        txt_consulta_sku.on_change = sugerir_skus
+        txt_consulta_sku.on_submit = lambda e: consultar_stock_sku()
+
+        # =====================================================================
+        # PANTALLAS (una tarea por pantalla)
+        # =====================================================================
         def actualizar_todos_los_datos(e=None):
             cargar_usuarios_wms()
             sync_stock_inventario()
+            cargar_pasillos_bodega()
             cargar_asignaciones_piso()
             cargar_auditorias_ciclico_y_vacias()
             cargar_desvios_grua()
+            if consulta_actual["sku"]:
+                consultar_stock_sku(consulta_actual["sku"])
             page.update()
 
-        # --- 11. COMPOSICIÓN DE VISTAS FINALES ---
+        def ir_a_tarea_sku(sku: str):
+            dd_tipo_tarea.value = "SKU"
+            txt_sku_dirigido.value = sku
+            cambiar_tipo_tarea()
+            actualizar_preview_sku_dirigido()
+            self.sel_sub_inventario(1)
 
-        # ZONA 1: CONTROL Y CONCILIACIÓN (PASILLOS + CRUCE ERP)
-        vista_1_control = ft.Column([
-            ft.Row([
-                tarjeta_dark(ft.Column([
-                    ft.Text("ASIGNACIÓN DE PASILLOS Y CONTEO POR USUARIO (WMS_USUARIOS)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Text("Seleccione un pasillo y asígnelo a un usuario activo de la bodega actual para su conteo en RF.", size=11, color=TEXT_MUTED),
-                    ft.Divider(color=BORDER_COLOR, height=4),
-                    ft.Row([dd_racks_asignacion, dd_operador_asignar, boton_primario("ASIGNAR PASILLO", ft.Icons.ASSIGNMENT_IND_ROUNDED, asignar_operador_pasillo, ACCENT_BLUE, height_val=34)], spacing=10, wrap=True),
-                    cont_asignacion,
-                ], spacing=6), expand_val=True),
-
-                tarjeta_dark(ft.Column([
-                    ft.Text("KPI GLOBALES INVENTARIO (WMS vs ERP)", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+        txt_vacio_consulta = ft.Container(
+            padding=40, alignment=ft.Alignment.CENTER,
+            content=ft.Column([
+                ft.Icon(ft.Icons.INVENTORY_2_OUTLINED, size=44, color=UI["texto_3"]),
+                ft.Text("Escriba un SKU, escanee un código de barras o busque por descripción.", size=13, color=UI["texto_2"]),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8, tight=True),
+        )
+        bloque_resultado_consulta = ft.Column([
+            ft.Container(
+                padding=16, border_radius=10, bgcolor=UI["card"], border=ft.Border.all(1, UI["borde"]),
+                content=ft.Row([
+                    ft.Column([lbl_cons_sku, lbl_cons_desc, lbl_cons_meta], spacing=2, tight=True, expand=True),
                     ft.Row([
-                        crear_caja_digital(lbl_kpi_total_wms, "Total WMS (Piso)", ACCENT_CYAN, 90, "Suma total de unidades físicas en la Bodega Activa"),
-                        crear_caja_digital(lbl_kpi_total_erp, "Total NetSuite", "#10B981", 90, "Suma total de unidades a nivel sistema ERP"),
-                        crear_caja_digital(lbl_kpi_dif_global, "Desviación Global", ACCENT_AMBER, 90, "Diferencia absoluta total detectada"),
-                        crear_caja_digital(lbl_kpi_avance_audi, "Avance Pasillos", ACCENT_PURPLE, 90, "Porcentaje de pasillos completados"),
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ], spacing=8), width_val=420),
-            ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.START),
+                        ui_boton("Crear tarea de conteo", ft.Icons.TRACK_CHANGES_ROUNDED,
+                                 lambda e: ir_a_tarea_sku(consulta_actual["sku"]) if consulta_actual["sku"] else None, "secundario"),
+                        ui_boton("Exportar", ft.Icons.DOWNLOAD_ROUNDED, exportar_consulta_sku, "secundario"),
+                    ], spacing=8, wrap=True),
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True),
+            ),
+            ft.ResponsiveRow([
+                ui_kpi(lbl_cons_total, "Stock en bodega", ft.Icons.INVENTORY_2_OUTLINED, UI["acento"], lbl_cons_det_total, col={"xs": 12, "sm": 6, "md": 4, "lg": 3}),
+                ui_kpi(lbl_cons_rack, "En racks", ft.Icons.VIEW_COLUMN_OUTLINED, UI["texto_2"], col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                ui_kpi(lbl_cons_picking, "En zona picking", ft.Icons.SHOPPING_CART_OUTLINED, UI["texto_2"], col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                ui_kpi(lbl_cons_comprometido, "Comprometido en OV", ft.Icons.RECEIPT_LONG_OUTLINED, UI["alerta"], lbl_cons_det_comp, col={"xs": 12, "sm": 6, "md": 6, "lg": 3}),
+                ui_kpi(lbl_cons_disponible, "Disponible", ft.Icons.TASK_ALT_ROUNDED, UI["exito"], lbl_cons_det_disp, col={"xs": 12, "sm": 12, "md": 6, "lg": 2}),
+            ], spacing=12, run_spacing=12),
+            ui_tarjeta(ft.Column([fila_lotes_consulta, cont_consulta_ubic], spacing=10, tight=True),
+                       titulo="Dónde está", subtitulo="Ordenado por vencimiento (primero lo que vence antes).", icono=ft.Icons.PLACE_OUTLINED),
+            ui_tarjeta(cont_consulta_mov, titulo="Últimos movimientos", icono=ft.Icons.HISTORY_ROUNDED),
+        ], spacing=12, visible=False)
 
-            tarjeta_dark(ft.Column([
-                ft.Row([
-                    ft.Column([
-                        ft.Text("CONCILIACIÓN 3-WAY MATCH (SKU A SKU) Y GENERACIÓN DE AJUSTES", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                        lbl_estado_erp_cruce,
-                    ], spacing=2),
-                    ft.Row([
-                        txt_buscar_inv,
-                        boton_primario("EJECUTAR CRUCE EN VIVO", ft.Icons.COMPARE_ARROWS_ROUNDED, ejecutar_cruce_erp_wms, ACCENT_TEAL, height_val=30),
-                        boton_primario(
-                            "EXPORTAR EXCEL",
-                            ft.Icons.TABLE_VIEW_ROUNDED,
-                            lambda e: (
-                                os.makedirs("reportes_inventario", exist_ok=True),
-                                pd.DataFrame(datos_stock_wms).to_excel(os.path.join("reportes_inventario", "Stock_WMS.xlsx"), index=False),
-                                descargar_o_abrir_archivo(self.page, os.path.join("reportes_inventario", "Stock_WMS.xlsx")),
-                                notificar("Excel descargado en tu navegador.", "#047857"),
-                            ),
-                            ACCENT_BLUE,
-                            height_val=30,
-                        ),
-                    ], spacing=8, expand=True, alignment=ft.MainAxisAlignment.END),
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(color=BORDER_COLOR, height=1),
-                cont_cruce,
-            ], spacing=8)),
-        ], spacing=10)
+        vista_0_consulta = ft.Column([
+            ui_tarjeta(ft.Column([txt_consulta_sku, fila_sugerencias], spacing=8, tight=True)),
+            txt_vacio_consulta,
+            bloque_resultado_consulta,
+        ], spacing=12)
 
-        # ZONA 2: CONTEOS CÍCLICOS (AUDITORIA_CICLICO_SKU DIRIGIDO & AUDITORIA_UBICACIONES_VACIAS)
-        vista_2_conteos_ciclicos = ft.Column([
-            ft.Row([
-                tarjeta_dark(ft.Column([
-                    ft.Row([
-                        ft.Icon(ft.Icons.TRACK_CHANGES_ROUNDED, color=ACCENT_CYAN, size=18),
-                        ft.Text("PROGRAMAR CONTEO CÍCLICO POR SKU DIRIGIDO (TABLA: auditoria_ciclico_sku)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ], spacing=6),
+        # ---------- Tareas de conteo ----------
+        dd_tipo_tarea = dropdown_dark(label="Tipo de tarea", width=200, value="PASILLO",
+                                      options=[opt_w(k, v[0]) for k, v in TIPOS_TAREA.items()])
+        dd_tipo_tarea.on_select = cambiar_tipo_tarea
+        dd_racks_asignacion.label = "Pasillo"
+        dd_racks_asignacion.width = 200
+        dd_operador_asignar.label = "Operador"
+        dd_operador_asignar.width = 260
+        txt_sku_dirigido.label = "SKU a contar"
+        txt_sku_dirigido.width = 200
+        txt_sku_dirigido.visible = False
+        txt_Info_sku_dirigido.visible = False
+        lbl_aviso_tareas = ft.Text("", size=12, color=UI["alerta"], visible=False)
+
+        vista_1_tareas = ft.Column([
+            ui_tarjeta(
+                ft.Column([
+                    ft.Row([dd_tipo_tarea, dd_racks_asignacion, txt_sku_dirigido, dd_operador_asignar,
+                            ui_boton("Asignar tarea", ft.Icons.ASSIGNMENT_IND_ROUNDED, asignar_operador_pasillo)],
+                           spacing=10, wrap=True, run_spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     txt_Info_sku_dirigido,
-                    ft.Divider(color=BORDER_COLOR, height=4),
-                    ft.Row([
-                        txt_sku_dirigido,
-                        txt_ubic_sku_dirigido,
-                        dd_operador_sku_dirigido,
-                        boton_primario("ENVIAR SKU DIRIGIDO A RF", ft.Icons.SEND_ROUNDED, dirigir_sku_a_operador, ACCENT_BLUE, height_val=34),
-                        boton_primario("REFRESCAR CONTEOS", ft.Icons.REFRESH_ROUNDED, lambda e: cargar_auditorias_ciclico_y_vacias(), ACCENT_TEAL, height_val=34),
-                    ], spacing=10, wrap=True),
-                ], spacing=6), expand_val=True),
+                    ft.Text("Contar pasillo: el operador cuenta cada ubicación con stock del pasillo.  "
+                            "Auditar vacías: confirma que las ubicaciones vacías lo estén.  "
+                            "Cíclico por SKU: revisa todas las ubicaciones de un producto.",
+                            size=11.5, color=UI["texto_3"]),
+                ], spacing=10, tight=True),
+                titulo="Nueva tarea", icono=ft.Icons.ADD_TASK_ROUNDED,
+            ),
+            ui_tarjeta(
+                ft.Column([lbl_aviso_tareas, cont_asignacion], spacing=8, tight=True),
+                titulo="Tareas abiertas y cerradas hoy",
+                subtitulo="El avance se calcula solo con lo que el operador registra en el celular.",
+                icono=ft.Icons.CHECKLIST_ROUNDED,
+            ),
+        ], spacing=12)
 
-                tarjeta_dark(ft.Column([
-                    ft.Text("INDICADORES DE AUDITORÍA CÍCLICA Y VACÍAS", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Row([
-                        crear_caja_digital(lbl_kpi_cic_total, "SKUs Dirigidos", ACCENT_CYAN, 90, "Total de conteos en auditoria_ciclico_sku"),
-                        crear_caja_digital(lbl_kpi_cic_ok, "SKUs Conciliados", ACCENT_GREEN, 90, "Conteos cíclicos cuadrados / validados"),
-                        crear_caja_digital(lbl_kpi_vac_total, "Ubic. Vacías Aud.", ACCENT_PURPLE, 90, "Total registros en auditoria_ubicaciones_vacias"),
-                        crear_caja_digital(lbl_kpi_vac_hallazgo, "Con Hallazgo", ACCENT_AMBER, 90, "Ubicaciones teóricamente vacías donde se detectó stock"),
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ], spacing=8), width_val=420),
-            ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.START),
+        # ---------- Resultados de conteo ----------
+        txt_buscar_ciclico.expand = None
+        txt_buscar_vacias.expand = None
+        txt_buscar_ciclico.width = 340
+        txt_buscar_vacias.width = 340
+        panel_resultado_ciclico = ft.Column([txt_buscar_ciclico, cont_tabla_ciclico], spacing=10)
+        panel_resultado_vacias = ft.Column([txt_buscar_vacias, cont_tabla_vacias], spacing=10, visible=False)
 
-            tarjeta_dark(ft.Column([
-                ft.Row([
-                    ft.Row([
-                        ft.Icon(ft.Icons.FACT_CHECK_OUTLINED if hasattr(ft.Icons, "FACT_CHECK_OUTLINED") else ft.Icons.FACT_CHECK, color=ACCENT_CYAN, size=18),
-                        ft.Text("1. RECEPCIÓN DE CONTEOS: SKU DIRIGIDO (auditoria_ciclico_sku)", size=12, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
-                    ], spacing=6),
-                    txt_buscar_ciclico,
-                ], spacing=14, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(color=BORDER_COLOR, height=1),
-                cont_tabla_ciclico,
-            ], spacing=8)),
+        def cambiar_pestana_resultados(i: int):
+            panel_resultado_ciclico.visible = i == 0
+            panel_resultado_vacias.visible = i == 1
+            page.update()
 
-            tarjeta_dark(ft.Column([
-                ft.Row([
-                    ft.Row([
-                        ft.Icon(ft.Icons.GRID_OFF_ROUNDED, color=ACCENT_PURPLE, size=18),
-                        ft.Text("2. RECEPCIÓN DE CONTEOS: UBICACIONES VACÍAS (auditoria_ubicaciones_vacias)", size=12, weight=ft.FontWeight.BOLD, color=ACCENT_PURPLE),
-                    ], spacing=6),
-                    txt_buscar_vacias,
-                ], spacing=14, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(color=BORDER_COLOR, height=1),
-                cont_tabla_vacias,
-            ], spacing=8)),
+        vista_2_resultados = ft.Column([
+            ft.ResponsiveRow([
+                ui_kpi(lbl_kpi_cic_total, "Conteos por SKU", ft.Icons.TRACK_CHANGES_ROUNDED, UI["acento"]),
+                ui_kpi(lbl_kpi_cic_ok, "Conciliados", ft.Icons.TASK_ALT_ROUNDED, UI["exito"]),
+                ui_kpi(lbl_kpi_vac_total, "Vacías auditadas", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED, UI["texto_2"]),
+                ui_kpi(lbl_kpi_vac_hallazgo, "Vacías con stock", ft.Icons.WARNING_AMBER_ROUNDED, UI["alerta"]),
+            ], spacing=12, run_spacing=12),
+            ui_tarjeta(ft.Column([
+                ui_pestanas([("Cíclico por SKU", ft.Icons.TRACK_CHANGES_ROUNDED),
+                             ("Ubicaciones vacías", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED)], cambiar_pestana_resultados),
+                panel_resultado_ciclico, panel_resultado_vacias,
+            ], spacing=12, tight=True)),
+        ], spacing=12)
+
+        # ---------- Conciliación WMS vs NetSuite ----------
+        txt_buscar_inv.expand = None
+        txt_buscar_inv.width = 320
+        vista_3_conciliacion = ft.Column([
+            ft.ResponsiveRow([
+                ui_kpi(lbl_kpi_total_wms, "Unidades en WMS", ft.Icons.WAREHOUSE_OUTLINED, UI["acento"]),
+                ui_kpi(lbl_kpi_total_erp, "Unidades en NetSuite", ft.Icons.CLOUD_OUTLINED, UI["texto_2"]),
+                ui_kpi(lbl_kpi_dif_global, "Diferencia absoluta", ft.Icons.COMPARE_ARROWS_ROUNDED, UI["alerta"]),
+                ui_kpi(lbl_kpi_avance_audi, "Tareas de conteo abiertas", ft.Icons.CHECKLIST_ROUNDED, UI["exito"]),
+            ], spacing=12, run_spacing=12),
+            ui_tarjeta(
+                ft.Column([lbl_estado_erp_cruce, cont_cruce], spacing=10, tight=True),
+                titulo="SKU a SKU", icono=ft.Icons.COMPARE_ARROWS_ROUNDED,
+                acciones=[
+                    txt_buscar_inv,
+                    ui_boton("Cruzar con NetSuite", ft.Icons.SYNC_ALT_ROUNDED, ejecutar_cruce_erp_wms),
+                    ui_menu("Exportar", ft.Icons.DOWNLOAD_ROUNDED, [
+                        ("Stock WMS por SKU (Excel)", ft.Icons.TABLE_VIEW_ROUNDED, lambda e: (
+                            os.makedirs("reportes_inventario", exist_ok=True),
+                            pd.DataFrame(datos_stock_wms).to_excel(os.path.join("reportes_inventario", "Stock_WMS.xlsx"), index=False),
+                            descargar_o_abrir_archivo(self.page, os.path.join("reportes_inventario", "Stock_WMS.xlsx")),
+                        )),
+                    ]),
+                ],
+            ),
+        ], spacing=12)
+
+        # ---------- Trazabilidad ----------
+        txt_traz_buscar_lpn.width = 360
+        txt_traz_buscar_ubic.width = 360
+        panel_traz_lpn = ft.Column([
+            ft.Row([txt_traz_buscar_lpn, ui_boton("Buscar", ft.Icons.SEARCH_ROUNDED, buscar_trazabilidad_lpn)], spacing=10, wrap=True),
+            ft.Row([lbl_traz_lpn_actual, lbl_traz_lpn_estado], spacing=16, wrap=True),
+            cont_traz_lpn,
         ], spacing=10)
+        panel_traz_ubic = ft.Column([
+            ft.Row([txt_traz_buscar_ubic, ui_boton("Buscar", ft.Icons.SEARCH_ROUNDED, buscar_trazabilidad_ubic)], spacing=10, wrap=True),
+            lbl_traz_ubic_actual,
+            cont_traz_ubic,
+        ], spacing=10, visible=False)
 
-        # ZONA 3: TRAZABILIDAD (LPN HISTORY & LOGS UBICACIONES)
-        vista_3_trazabilidad = ft.Column([
-            tarjeta_dark(ft.Column([
-                ft.Text("TRAZABILIDAD TRANSVERSAL DE PALLET (LPN HISTORY)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                ft.Text("Visualiza el ciclo de vida completo de un pallet, sus movimientos, validaciones y operadores involucrados en la bodega activa.", size=11, color=TEXT_MUTED),
-                ft.Divider(color=BORDER_COLOR, height=4),
-                ft.Row([txt_traz_buscar_lpn, boton_primario("BUSCAR LPN", ft.Icons.SEARCH_ROUNDED, buscar_trazabilidad_lpn, ACCENT_CYAN, height_val=34)], spacing=10),
-                ft.Container(
-                    padding=10, bgcolor="#141A1C", border_radius=6, border=ft.Border.all(1, BORDER_COLOR),
-                    content=ft.Row([lbl_traz_lpn_actual, lbl_traz_lpn_estado], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ),
-                cont_traz_lpn,
-            ], spacing=8)),
+        def cambiar_pestana_traz(i: int):
+            panel_traz_lpn.visible = i == 0
+            panel_traz_ubic.visible = i == 1
+            page.update()
 
-            tarjeta_dark(ft.Column([
-                ft.Text("HISTÓRICO DE MOVIMIENTOS POR UBICACIÓN EN RACK", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                ft.Text("Conoce exactamente quiénes, qué LPNs y cuándo fueron extraídos o ingresados a una posición de rack específica.", size=11, color=TEXT_MUTED),
-                ft.Divider(color=BORDER_COLOR, height=4),
-                ft.Row([txt_traz_buscar_ubic, boton_primario("BUSCAR UBICACIÓN", ft.Icons.SEARCH_ROUNDED, buscar_trazabilidad_ubic, ACCENT_PURPLE, height_val=34)], spacing=10),
-                ft.Container(
-                    padding=10, bgcolor="#141A1C", border_radius=6, border=ft.Border.all(1, BORDER_COLOR),
-                    content=ft.Row([lbl_traz_ubic_actual], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ),
-                cont_traz_ubic,
-            ], spacing=8)),
-        ], spacing=10)
+        vista_4_trazabilidad = ft.Column([
+            ui_tarjeta(ft.Column([
+                ui_pestanas([("Por pallet (LPN)", ft.Icons.QR_CODE_2_ROUNDED),
+                             ("Por ubicación", ft.Icons.PLACE_OUTLINED)], cambiar_pestana_traz),
+                panel_traz_lpn, panel_traz_ubic,
+            ], spacing=12, tight=True)),
+        ], spacing=12)
 
-        # ZONA 4: AUDITORÍA EN PISO (DESVÍOS)
-        vista_4_desvios = ft.Column([
-            ft.Row([
-                tarjeta_dark(ft.Column([
-                    ft.Text("AUDITORÍA DE PISO: ALERTAS Y DESVÍOS REPORTADOS POR GRÚEROS (APP RF)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Text("Monitorea incidencias en tiempo real reportadas desde las terminales RF en la bodega activa.", size=11, color=TEXT_MUTED),
-                    ft.Divider(color=BORDER_COLOR, height=4),
-                    ft.Row([txt_buscar_desvios, boton_primario("ACTUALIZAR", ft.Icons.REFRESH_ROUNDED, lambda e: cargar_desvios_grua(), ACCENT_TEAL, height_val=30)], spacing=10),
-                ], spacing=6), expand_val=True),
+        # ---------- Alertas y desvíos ----------
+        vista_5_desvios = ft.Column([
+            ft.ResponsiveRow([
+                ui_kpi(lbl_dig_desv_pendientes, "Pendientes", ft.Icons.WARNING_AMBER_ROUNDED, UI["peligro"], col={"xs": 12, "sm": 6}),
+                ui_kpi(lbl_dig_desv_resueltos, "Resueltos", ft.Icons.TASK_ALT_ROUNDED, UI["exito"], col={"xs": 12, "sm": 6}),
+            ], spacing=12, run_spacing=12),
+            ui_tarjeta(cont_desvios, titulo="Alertas reportadas desde los celulares", icono=ft.Icons.NOTIFICATIONS_ACTIVE_OUTLINED,
+                       subtitulo="Ubicaciones vacías con stock y diferencias de conteo cíclico."),
+        ], spacing=12)
 
-                tarjeta_dark(ft.Row([
-                    crear_caja_digital(lbl_dig_desv_pendientes, "Desvíos Críticos Pendientes", "#EF4444", 160),
-                    crear_caja_digital(lbl_dig_desv_resueltos, "Incidencias Resueltas", "#10B981", 160),
-                ], spacing=15, alignment=ft.MainAxisAlignment.CENTER), width_val=380),
-            ], spacing=10),
-
-            tarjeta_dark(ft.Column([cont_desvios], spacing=0)),
-        ], spacing=10)
-
-        # --- 12. BARRA DE NAVEGACIÓN Y ARMADO FINAL ---
-        contenedor_subvista_inv = ft.Container(content=vista_1_control)
-
-        btn_modo_control = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=12, vertical=7), bgcolor=ACCENT_TEAL, border_radius=6, border=ft.Border.all(1, ACCENT_CYAN), ink=True,
-            content=ft.Row([ft.Icon(ft.Icons.RULE_ROUNDED, color=TEXT_WHITE, size=16), ft.Text("1. PASILLOS Y CRUCE ERP", size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)], spacing=6, tight=True),
-        )
-        btn_modo_ciclico = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=12, vertical=7), bgcolor="#181E20", border_radius=6, border=ft.Border.all(1, BORDER_COLOR), ink=True,
-            content=ft.Row([ft.Icon(ft.Icons.TRACK_CHANGES_ROUNDED, color=ACCENT_GREEN, size=16), ft.Text("2. SKU DIRIGIDO & UBIC. VACÍAS", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED)], spacing=6, tight=True),
-        )
-        btn_modo_traz = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=12, vertical=7), bgcolor="#181E20", border_radius=6, border=ft.Border.all(1, BORDER_COLOR), ink=True,
-            content=ft.Row([ft.Icon(ft.Icons.HISTORY_ROUNDED, color=ACCENT_CYAN, size=16), ft.Text("3. TRAZABILIDAD LPN / RACK", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED)], spacing=6, tight=True),
-        )
-        btn_modo_desv = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=12, vertical=7), bgcolor="#181E20", border_radius=6, border=ft.Border.all(1, BORDER_COLOR), ink=True,
-            content=ft.Row([ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=ACCENT_AMBER, size=16), ft.Text("4. ALERTAS Y DESVÍOS (RF)", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED)], spacing=6, tight=True),
-        )
+        # ---------- Armado ----------
+        vistas_inv = [vista_0_consulta, vista_1_tareas, vista_2_resultados, vista_3_conciliacion, vista_4_trazabilidad, vista_5_desvios]
+        titulos_inv = [
+            ("Consulta de stock", "Cuánto hay de un producto y dónde está, con lo comprometido en OV."),
+            ("Tareas de conteo", "Asigne pasillos o SKU a un operador; las ve en su celular."),
+            ("Resultados de conteo", "Revise y valide lo que contaron los operadores."),
+            ("Conciliación WMS vs NetSuite", "Diferencias SKU a SKU entre el stock físico y el ERP."),
+            ("Trazabilidad", "Historia completa de un pallet o de una ubicación."),
+            ("Alertas y desvíos", "Incidencias reportadas desde los terminales RF."),
+        ]
+        contenedor_subvista_inv = ft.Container(content=vista_0_consulta)
+        lbl_titulo_inv = ft.Text(titulos_inv[0][0], size=18, weight=ft.FontWeight.W_700, color=UI["texto"])
+        lbl_sub_inv = ft.Text(titulos_inv[0][1], size=12, color=UI["texto_2"])
 
         def cambiar_subvista_inv(idx: int):
             nonlocal subvista_activa_idx
-            if idx not in (0, 1, 2, 3):
-                idx = 0
+            idx = idx if 0 <= idx < len(vistas_inv) else 0
             subvista_activa_idx = idx
-            contenedor_subvista_inv.content = [
-                vista_1_control,
-                vista_2_conteos_ciclicos,
-                vista_3_trazabilidad,
-                vista_4_desvios,
-            ][idx]
-
-            pares_botones = [
-                (0, btn_modo_control),
-                (1, btn_modo_ciclico),
-                (2, btn_modo_traz),
-                (3, btn_modo_desv),
-            ]
-            for i_b, b_ctrl in pares_botones:
-                activo = i_b == idx
-                b_ctrl.bgcolor = ACCENT_TEAL if activo else "#181E20"
-                b_ctrl.border = ft.Border.all(1.5 if activo else 1, ACCENT_CYAN if activo else BORDER_COLOR)
-                b_ctrl.content.controls[1].color = TEXT_WHITE if activo else TEXT_MUTED
+            contenedor_subvista_inv.content = vistas_inv[idx]
+            lbl_titulo_inv.value, lbl_sub_inv.value = titulos_inv[idx]
             page.update()
 
-        btn_modo_control.on_click = lambda e: cambiar_subvista_inv(0)
-        btn_modo_ciclico.on_click = lambda e: cambiar_subvista_inv(1)
-        btn_modo_traz.on_click = lambda e: cambiar_subvista_inv(2)
-        btn_modo_desv.on_click = lambda e: cambiar_subvista_inv(3)
+        encabezado = ft.Row([
+            ft.Row([ft.Icon(ft.Icons.INVENTORY_OUTLINED, size=24, color=UI["acento"]),
+                    ft.Column([lbl_titulo_inv, lbl_sub_inv], spacing=1, tight=True)],
+                   spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ui_boton("Actualizar", ft.Icons.SYNC_ROUNDED, actualizar_todos_los_datos, "secundario"),
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True)
 
-        barra_titulo = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=16, vertical=10), bgcolor="#222A2C", border_radius=8, border=ft.Border.all(1, BORDER_COLOR),
-            content=ft.Row([
-                ft.Row([
-                    ft.Icon(ft.Icons.LIBRARY_BOOKS_OUTLINED, color=ACCENT_CYAN, size=22),
-                    ft.Text("MÓDULO DE INVENTARIO: PASILLOS, CONTEO CÍCLICO DIRIGIDO Y TRAZABILIDAD", size=14, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                ], spacing=8),
-                ft.Row([
-                    btn_modo_control, btn_modo_ciclico, btn_modo_traz, btn_modo_desv,
-                    ft.IconButton(icon=ft.Icons.SYNC_ROUNDED, icon_color=ACCENT_CYAN, tooltip="Sincronizar Datos y Conteos", on_click=actualizar_todos_los_datos),
-                ], spacing=8, wrap=True),
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
-        )
-
-        col_principal = ft.Column([barra_titulo, contenedor_subvista_inv], spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
-
-        self.vista = ft.Container(padding=14, bgcolor=BG_MODULO, content=col_principal, expand=True)
+        col_principal = ft.Column([encabezado, contenedor_subvista_inv], spacing=16, scroll=ft.ScrollMode.AUTO, expand=True)
+        self.vista = ft.Container(padding=ft.Padding.only(left=16, top=14, right=16, bottom=16), bgcolor=UI["bg"], content=col_principal, expand=True)
         self.cambiar_subvista_inv_func = cambiar_subvista_inv
         self.actualizar_todos_los_datos_func = actualizar_todos_los_datos
 
@@ -1710,6 +1778,5 @@ class InventarioModulo:
         self.actualizar_todos_los_datos_func(e)
 
     def sel_sub_inventario(self, idx: int):
-        mapa_idx = {0: 0, 1: 1, 2: 2, 3: 3, 4: 2, 5: 3}
-        self.actualizar_todos_los_datos_func()
-        self.cambiar_subvista_inv_func(mapa_idx.get(idx, 0))
+        # Antes el menú lateral solo recargaba datos y nunca cambiaba de pantalla
+        self.cambiar_subvista_inv_func(idx)

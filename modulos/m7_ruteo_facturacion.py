@@ -411,101 +411,40 @@ class RuteoFacturacionModulo:
         # =====================================================================
         # TABLA 1: MESA DE FACTURACIÓN Y CRUCE NETSUITE (Reemplaza Facturacion-Nuevo(1).xlsx)
         tabla_mesa_facturacion = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=34,
-            data_row_min_height=36,
-            data_row_max_height=42,
-            column_spacing=12,
-            horizontal_margin=8,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("SEL.", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("OV / CORTE", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("N° FACTURA", weight=ft.FontWeight.BOLD, size=10.5, color="#FBBF24")),
-                ft.DataColumn(ft.Text("CLIENTE / AGENDAMIENTO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("DIRECCIÓN / COMUNA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ZONA", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
-                ft.DataColumn(ft.Text("MONTO NETO", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("BULTOS / PESO", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("ARENAS", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
-                ft.DataColumn(ft.Text("EJECUTIVO / NOTA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("EDITAR", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=40, data_row_max_height=52,
+            column_spacing=20, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['', 'OV · corte', 'Factura', 'Cliente', 'Dirección · comuna', 'Zona', 'Monto neto', 'Bultos · peso', 'Arenas', 'Ejecutivo · nota', '']],
             rows=[],
         )
 
         # TABLA 2: PLANIFICADOR DE RUTEO Y HOJA DE RUTA (Reemplaza PruebaYasneri.xlsm)
         tabla_ruteo_drivin = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=34,
-            data_row_min_height=36,
-            data_row_max_height=42,
-            column_spacing=12,
-            horizontal_margin=8,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("SEL.", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("PATENTE / VUELTA", weight=ft.FontWeight.BOLD, size=10.5, color="#FBBF24")),
-                ft.DataColumn(ft.Text("CHOFER", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("OV / FACTURA", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("CLIENTE", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("DIRECCIÓN / COMUNA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("BULTOS / GRUPO", weight=ft.FontWeight.BOLD, size=10, color="#A78BFA")),
-                ft.DataColumn(ft.Text("KILOS", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("DETALLE ARENAS", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
-                ft.DataColumn(ft.Text("NOTA DESPACHO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=40, data_row_max_height=52,
+            column_spacing=20, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['', 'Camión · vuelta', 'Conductor', 'OV · factura', 'Cliente', 'Dirección · comuna', 'Bultos', 'Kilos', 'Arenas', '']],
             rows=[],
         )
 
         # TABLA 3: REPORTE DIARIO DE ENTREGAS, INCIDENCIAS Y SLA/OTIF (Reemplaza Base Reporte Diario - Yasneri.xlsx)
         tabla_entregas_sla = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=34,
-            data_row_min_height=36,
-            data_row_max_height=42,
-            column_spacing=12,
-            horizontal_margin=8,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("FECHA ENTREGA", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("PATENTE / FLOTA", weight=ft.FontWeight.BOLD, size=10, color="#FBBF24")),
-                ft.DataColumn(ft.Text("OV / FACT", weight=ft.FontWeight.BOLD, size=10.5, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("CLIENTE / COMUNA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("STATUS ENTREGA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("RECIBIDO POR", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("INCIDENCIA", weight=ft.FontWeight.BOLD, size=10, color="#F87171")),
-                ft.DataColumn(ft.Text("SLA 36H / 72H", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("ACCIÓN RÁPIDA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=40, data_row_max_height=52,
+            column_spacing=20, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['Entrega', 'Camión', 'OV · factura', 'Cliente · comuna', 'Estado', 'Recibido por', 'Incidencia', 'SLA', '']],
             rows=[],
         )
 
         # TABLA 4: MAESTRA DE FLOTA Y CONDUCTORES
         tabla_maestra_flota = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=34,
-            data_row_min_height=34,
-            data_row_max_height=40,
-            column_spacing=16,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("PATENTE", weight=ft.FontWeight.BOLD, size=11, color="#FBBF24")),
-                ft.DataColumn(ft.Text("CONDUCTOR TITULAR", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("PEONETA DEFAULT", weight=ft.FontWeight.BOLD, size=11, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("TIPO DE FLOTA", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("CAPACIDAD (KG)", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
-                ft.DataColumn(ft.Text("CAPACIDAD (TON)", weight=ft.FontWeight.BOLD, size=11, color=TEXT_MUTED)),
-                ft.DataColumn(ft.Text("BODEGA", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIÓN", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=40, data_row_max_height=52,
+            column_spacing=20, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ['Patente', 'Conductor', 'Peoneta', 'Tipo de flota', 'Capacidad', '', 'Bodega', '']],
             rows=[],
         )
 
-        cont_t1 = envolver_tabla_scroll(tabla_mesa_facturacion, 390)
-        cont_t2 = envolver_tabla_scroll(tabla_ruteo_drivin, 360)
-        cont_t3 = envolver_tabla_scroll(tabla_entregas_sla, 390)
-        cont_t4 = envolver_tabla_scroll(tabla_maestra_flota, 320)
+        cont_t1 = ui_tabla(tabla_mesa_facturacion, 520)
+        cont_t2 = ui_tabla(tabla_ruteo_drivin, 480)
+        cont_t3 = ui_tabla(tabla_entregas_sla, 520)
+        cont_t4 = ui_tabla(tabla_maestra_flota, 420)
 
         # =====================================================================
         # CARGA Y SINCRONIZACIÓN DE DATOS DESDE SUPABASE Y PACKING RF
@@ -584,41 +523,25 @@ class RuteoFacturacionModulo:
                 filas_flota.append(
                     ft.DataRow(
                         cells=[
-                            ft.DataCell(ft.Text(pat, weight=ft.FontWeight.W_900, size=11.5, color="#FBBF24")),
-                            ft.DataCell(ft.Text(chofer, size=11, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(peo, size=11, color=TEXT_MUTED)),
-                            ft.DataCell(ft.Text(t_flota, size=11, color=ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(f"{cap_k} kg", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
-                            ft.DataCell(ft.Text(f"{cap_k / 1000.0:.1f} Ton", size=11, color=TEXT_MUTED)),
-                            ft.DataCell(ft.Text(str(v.get("bodega") or "Bodega Santiago"), size=11, color=TEXT_WHITE)),
-                            ft.DataCell(
-                                ft.Row(
-                                    [
-                                        boton_accion(
-                                            "CARGAR",
-                                            ft.Icons.EDIT_OUTLINED,
-                                            lambda ev, item_v=v: (
-                                                setattr(txt_flota_patente, "value", str(item_v.get("patente") or "")),
-                                                setattr(txt_flota_conductor, "value", str(item_v.get("conductor") or "")),
-                                                setattr(txt_flota_peoneta, "value", str(item_v.get("peoneta_default") or "")),
-                                                setattr(txt_flota_cap_kg, "value", str(int(float(item_v.get("capacidad_kg") or 2800)))),
-                                                self.page.update(),
-                                            ),
-                                            ACCENT_BLUE,
-                                            height_val=26,
-                                        ),
-                                        boton_accion(
-                                            "BORRAR",
-                                            ft.Icons.DELETE_OUTLINE,
-                                            lambda ev, p_del=pat: eliminar_camion_flota(p_del),
-                                            "#B91C1C",
-                                            height_val=26,
-                                        ),
-                                    ],
-                                    spacing=4,
-                                    tight=True,
-                                )
-                            ),
+                            ft.DataCell(ft.Text(pat, weight=ft.FontWeight.W_900, size=12.5, color="#FBBF24")),
+                            ft.DataCell(ft.Text(chofer, size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Text(peo, size=12, color=UI["texto_2"])),
+                            ft.DataCell(ft.Text(t_flota, size=12, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(f"{cap_k} kg", weight=ft.FontWeight.BOLD, size=12, color="#34D399")),
+                            ft.DataCell(ft.Text(f"{cap_k / 1000.0:.1f} Ton", size=12, color=UI["texto_2"])),
+                            ft.DataCell(ft.Text(str(v.get("bodega") or "Bodega Santiago"), size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Row([
+                                ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, icon_size=18, icon_color=UI["acento"], tooltip="Editar en el formulario",
+                                              on_click=lambda ev, item_v=v: (
+                                                  setattr(txt_flota_patente, "value", str(item_v.get("patente") or "")),
+                                                  setattr(txt_flota_conductor, "value", str(item_v.get("conductor") or "")),
+                                                  setattr(txt_flota_peoneta, "value", str(item_v.get("peoneta_default") or "")),
+                                                  setattr(txt_flota_cap_kg, "value", str(int(float(item_v.get("capacidad_kg") or 2800)))),
+                                                  self.page.update(),
+                                              )),
+                                ft.IconButton(icon=ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=18, icon_color=UI["peligro"], tooltip="Eliminar camión",
+                                              on_click=lambda ev, p_del=pat: eliminar_camion_flota(p_del)),
+                            ], spacing=0, tight=True)),
                         ]
                     )
                 )
@@ -914,10 +837,41 @@ class RuteoFacturacionModulo:
                 except Exception as ex_u:
                     notificar(f"No se pudo cargar el archivo en web: {ex_u}", "#B91C1C")
 
-        picker_excel_ns = ft.FilePicker(on_result=al_elegir_excel_picker, on_upload=al_subir_excel_picker)
+        _params_fp = inspect.signature(ft.FilePicker.__init__).parameters
+        _kw_fp = {}
+        if "on_result" in _params_fp:
+            _kw_fp["on_result"] = al_elegir_excel_picker
+        if "on_upload" in _params_fp:
+            _kw_fp["on_upload"] = al_subir_excel_picker
+        picker_excel_ns = ft.FilePicker(**_kw_fp)
         # Flet 1.x: FilePicker es un Service, no un control visual.
         if picker_excel_ns not in self.page.services:
             self.page.services.append(picker_excel_ns)
+
+        async def abrir_selector_excel_ns(e=None):
+            try:
+                kw = {"allow_multiple": False, "allowed_extensions": ["xlsx", "xlsm", "xls"]}
+                if "with_data" in inspect.signature(picker_excel_ns.pick_files).parameters:
+                    kw["with_data"] = True
+                res = picker_excel_ns.pick_files(**kw)
+                if inspect.isawaitable(res):
+                    res = await res
+                    archivos = getattr(res, "files", res) if res is not None else None
+                    if not archivos:
+                        return
+                    f_obj = archivos[0]
+                    datos = getattr(f_obj, "bytes", None)
+                    if datos and not (getattr(f_obj, "path", None) and os.path.exists(f_obj.path)):
+                        os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
+                        ruta = os.path.join("assets", "uploads", os.path.basename(str(f_obj.name)))
+                        with open(ruta, "wb") as fh:
+                            fh.write(bytes(datos))
+                        await procesar_excel_base_netsuite(ruta)
+                        return
+                    from types import SimpleNamespace
+                    await al_elegir_excel_picker(SimpleNamespace(files=archivos))
+            except Exception as ex:
+                notificar(f"No se pudo abrir el selector de archivos: {ex}", "#B91C1C")
 
         # =====================================================================
         # MODAL DE EDICIÓN HUMANA AMIGABLE POR OV (FACTURA, BULTOS, ARENAS, RUTA)
@@ -1486,8 +1440,9 @@ class RuteoFacturacionModulo:
 
             lbl_kpi_total_ov.value = str(total_ovs)
             lbl_kpi_facturadas.value = str(facturadas_cnt)
-            lbl_kpi_kilos_ruta.value = f"{kilos_tot:,.0f} kg"
+            lbl_kpi_kilos_ruta.value = f"{kilos_tot:,.0f} kg".replace(",", ".")
             lbl_kpi_arenas_sacos.value = str(sacos_ar_tot)
+            lbl_det_kilos.value = f"{sacos_ar_tot} sacos de arena"
             lbl_kpi_otif_36.value = f"{pct_otif}%"
 
             filas_t1 = []
@@ -1528,7 +1483,7 @@ class RuteoFacturacionModulo:
                         color="#2A2419" if req_ag else None,
                         cells=[
                             ft.DataCell(chk),
-                            ft.DataCell(ft.Text(f"{ov_cod}\n{r.get('ola_picking', 'Corte 09:00')}", size=10.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(f"{ov_cod}\n{r.get('ola_picking', 'Corte 09:00')}", size=12, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
                             ft.DataCell(
                                 crear_badge_estado(fac_cod, "#065F46", "#D1FAE5")
                                 if fac_cod
@@ -1542,15 +1497,14 @@ class RuteoFacturacionModulo:
                                     color="#FBBF24" if req_ag else TEXT_WHITE,
                                 )
                             ),
-                            ft.DataCell(ft.Text(f"{dir_txt[:26]} • {com_txt}", size=10.5, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(zona_txt, size=10.5, weight=ft.FontWeight.BOLD, color="#A78BFA")),
-                            ft.DataCell(ft.Text(f"${monto_n:,.0f}", size=10.5, weight=ft.FontWeight.BOLD, color="#34D399")),
-                            ft.DataCell(ft.Text(f"{etiq_b} | {peso_k:.1f} kg", size=10.5, color=ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(f"{sacos_a} sacos" if sacos_a > 0 else "-", size=10.5, weight=ft.FontWeight.BOLD, color="#FBBF24" if sacos_a > 0 else TEXT_MUTED)),
-                            ft.DataCell(ft.Text(f"{str(r.get('ejecutivo_ventas') or '')[:14]} | {str(r.get('nota_despacho') or '')[:18]}", size=10, color=TEXT_MUTED)),
-                            ft.DataCell(
-                                boton_accion("EDITAR", ft.Icons.EDIT_OUTLINED, lambda ev, it=r: abrir_modal_editar_ov_completa(it), ACCENT_BLUE, height_val=26)
-                            ),
+                            ft.DataCell(ft.Text(f"{dir_txt[:26]} • {com_txt}", size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Text(zona_txt, size=12, weight=ft.FontWeight.BOLD, color="#A78BFA")),
+                            ft.DataCell(ft.Text(f"${monto_n:,.0f}", size=12, weight=ft.FontWeight.BOLD, color="#34D399")),
+                            ft.DataCell(ft.Text(f"{etiq_b} | {peso_k:.1f} kg", size=12, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(f"{sacos_a} sacos" if sacos_a > 0 else "-", size=12, weight=ft.FontWeight.BOLD, color="#FBBF24" if sacos_a > 0 else TEXT_MUTED)),
+                            ft.DataCell(ft.Text(f"{str(r.get('ejecutivo_ventas') or '')[:14]} | {str(r.get('nota_despacho') or '')[:18]}", size=11, color=UI["texto_2"])),
+                            ft.DataCell(ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, icon_size=18, icon_color=UI["acento"], tooltip="Editar factura, bultos y arenas",
+                                                      on_click=lambda ev, it=r: abrir_modal_editar_ov_completa(it))),
                         ],
                     )
                 )
@@ -1565,17 +1519,16 @@ class RuteoFacturacionModulo:
                     ft.DataRow(
                         cells=[
                             ft.DataCell(chk_r2),
-                            ft.DataCell(ft.Text(f"{pat_s} ({vuelta_s})", size=10.5, weight=ft.FontWeight.BOLD, color="#FBBF24" if pat_s != "SIN ASIGNAR" else TEXT_MUTED)),
-                            ft.DataCell(ft.Text(chof_s[:18], size=10.5, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(f"OV {ov_cod} | F:{fac_cod or 'S/F'}", size=10.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(cli_nom[:26], size=10.5, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(f"{dir_txt[:22]} ({com_txt})", size=10.5, color=TEXT_WHITE)),
-                            ft.DataCell(ft.Text(etiq_b, size=10.5, weight=ft.FontWeight.BOLD, color="#A78BFA")),
-                            ft.DataCell(ft.Text(f"{peso_k:.1f} kg", size=10.5, weight=ft.FontWeight.BOLD, color="#34D399")),
-                            ft.DataCell(ft.Text(resumen_ar[:28], size=10, color="#FBBF24" if sacos_a > 0 else TEXT_MUTED)),
-                            ft.DataCell(
-                                boton_accion("FICHA / ARENAS", ft.Icons.EDIT_NOTE_ROUNDED, lambda ev, it=r: abrir_modal_editar_ov_completa(it), "#334155", height_val=26)
-                            ),
+                            ft.DataCell(ft.Text(f"{pat_s} ({vuelta_s})", size=12, weight=ft.FontWeight.BOLD, color="#FBBF24" if pat_s != "SIN ASIGNAR" else TEXT_MUTED)),
+                            ft.DataCell(ft.Text(chof_s[:18], size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Text(f"OV {ov_cod} | F:{fac_cod or 'S/F'}", size=12, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(cli_nom[:26], size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Text(f"{dir_txt[:22]} ({com_txt})", size=12, color=UI["texto"])),
+                            ft.DataCell(ft.Text(etiq_b, size=12, weight=ft.FontWeight.BOLD, color="#A78BFA")),
+                            ft.DataCell(ft.Text(f"{peso_k:.1f} kg", size=12, weight=ft.FontWeight.BOLD, color="#34D399")),
+                            ft.DataCell(ft.Text(resumen_ar[:28], size=11, color="#FBBF24" if sacos_a > 0 else TEXT_MUTED)),
+                            ft.DataCell(ft.IconButton(icon=ft.Icons.EDIT_NOTE_ROUNDED, icon_size=18, icon_color=UI["acento"], tooltip="Ficha y arenas",
+                                                      on_click=lambda ev, it=r: abrir_modal_editar_ov_completa(it))),
                         ]
                     )
                 )
@@ -1596,13 +1549,13 @@ class RuteoFacturacionModulo:
                 filas_t3.append(
                     ft.DataRow(
                         cells=[
-                            ft.DataCell(ft.Text(f_en, size=10.5, weight=ft.FontWeight.BOLD, color="#34D399")),
-                            ft.DataCell(ft.Text(f"{pat_s} ({chof_s[:14]})", size=10.5, color="#FBBF24")),
-                            ft.DataCell(ft.Text(f"{ov_cod} / {fac_cod or '-'}", size=10.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(f"{cli_nom[:24]} ({com_txt})", size=10.5, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(f_en, size=12, weight=ft.FontWeight.BOLD, color="#34D399")),
+                            ft.DataCell(ft.Text(f"{pat_s} ({chof_s[:14]})", size=12, color="#FBBF24")),
+                            ft.DataCell(ft.Text(f"{ov_cod} / {fac_cod or '-'}", size=12, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(f"{cli_nom[:24]} ({com_txt})", size=12, color=UI["texto"])),
                             ft.DataCell(badge_st),
-                            ft.DataCell(ft.Text(str(r.get("recibido_por") or "-"), size=10.5, color=ACCENT_CYAN)),
-                            ft.DataCell(ft.Text(str(r.get("incidencia") or "0"), size=10.5, color="#F87171" if str(r.get("incidencia") or "0") != "0" else TEXT_MUTED)),
+                            ft.DataCell(ft.Text(str(r.get("recibido_por") or "-"), size=12, color=ACCENT_CYAN)),
+                            ft.DataCell(ft.Text(str(r.get("incidencia") or "0"), size=12, color="#F87171" if str(r.get("incidencia") or "0") != "0" else TEXT_MUTED)),
                             ft.DataCell(
                                 ft.Text(
                                     f"{dias_hab}d | 36h:{c36} | 72h:{c72}",
@@ -1611,16 +1564,13 @@ class RuteoFacturacionModulo:
                                     color="#34D399" if c36 == "Cumple" else "#F87171",
                                 )
                             ),
-                            ft.DataCell(
-                                ft.Row(
-                                    [
-                                        boton_accion("ENTREGADO ✓", ft.Icons.CHECK_CIRCLE_OUTLINE, lambda ev, it=r: cambiar_estado_entrega_rapido(it, "ENTREGADO"), "#047857", height_val=26),
-                                        boton_accion("INCIDENCIA", ft.Icons.WARNING_AMBER_ROUNDED, lambda ev, it=r: abrir_modal_editar_ov_completa(it), "#B45309", height_val=26),
-                                    ],
-                                    spacing=4,
-                                    tight=True,
-                                )
-                            ),
+                            ft.DataCell(ft.Row([
+                                ft.IconButton(icon=ft.Icons.TASK_ALT_ROUNDED, icon_size=19, tooltip="Marcar entregado",
+                                              icon_color=UI["exito"] if st_ent != "ENTREGADO" else UI["texto_3"], disabled=st_ent == "ENTREGADO",
+                                              on_click=lambda ev, it=r: cambiar_estado_entrega_rapido(it, "ENTREGADO")),
+                                ft.IconButton(icon=ft.Icons.REPORT_PROBLEM_OUTLINED, icon_size=19, icon_color=UI["alerta"], tooltip="Registrar incidencia",
+                                              on_click=lambda ev, it=r: abrir_modal_editar_ov_completa(it)),
+                            ], spacing=0, tight=True)),
                         ]
                     )
                 )
@@ -1656,227 +1606,123 @@ class RuteoFacturacionModulo:
         # =====================================================================
         # COMPOSICIÓN VISUAL DE LAS 4 SUB-VISTAS DEL MÓDULO
         # =====================================================================
-        barra_kpis_y_filtros = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Row(
-                                [
-                                    caja_kpi_ruteo(lbl_kpi_total_ov, "Total OVs en Vista", ACCENT_TEAL),
-                                    caja_kpi_ruteo(lbl_kpi_facturadas, "Con Factura NS", ACCENT_CYAN),
-                                    caja_kpi_ruteo(lbl_kpi_kilos_ruta, "Peso Total (KG)", "#F59E0B"),
-                                    caja_kpi_ruteo(lbl_kpi_arenas_sacos, "Sacos de Arena", "#8B5CF6"),
-                                    caja_kpi_ruteo(lbl_kpi_otif_36, "Cumplimiento SLA 36h", "#10B981"),
-                                ],
-                                spacing=8,
-                                wrap=True,
-                            ),
-                            ft.Row(
-                                [
-                                    boton_accion(
-                                        "SUBIR EXCEL BASE NS",
-                                        ft.Icons.UPLOAD_FILE_ROUNDED,
-                                        lambda e: picker_excel_ns.pick_files(allowed_extensions=["xlsx", "xlsm", "xls"]),
-                                        "#6D28D9",
-                                        height_val=34,
-                                    ),
-                                    boton_accion("PLANILLA DRIVIN", ft.Icons.LOCAL_SHIPPING_OUTLINED, exportar_planilla_drivin, "#0F766E", height_val=34),
-                                    boton_accion("RUTA + ARENAS (XLSX)", ft.Icons.TABLE_VIEW_OUTLINED, lambda e: exportar_hoja_ruta_y_arenas(e, formato_pdf=False), "#B45309", height_val=34),
-                                    boton_accion("PAPELETA ARENAS (PDF)", ft.Icons.PICTURE_AS_PDF_OUTLINED, lambda e: exportar_hoja_ruta_y_arenas(e, formato_pdf=True), "#DC2626", height_val=34),
-                                    boton_accion("REPORTE DIARIO SLA", ft.Icons.ASSESSMENT_OUTLINED, exportar_reporte_diario_sla, "#1E3A8A", height_val=34),
-                                ],
-                                spacing=6,
-                                wrap=True,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=6),
-                    ft.Row(
-                        [
-                            txt_filtro_fecha,
-                            boton_accion("📅 CALENDARIO", ft.Icons.CALENDAR_MONTH_ROUNDED, abrir_calendario_filtro, "#1E3A8A", height_val=32),
-                            boton_accion("TODAS FECHAS", ft.Icons.EVENT_REPEAT_ROUNDED, lambda e: (setattr(txt_filtro_fecha, "value", ""), renderizar_tablas_ruteo()), "#334155", height_val=32),
-                            dd_filtro_patente,
-                            dd_filtro_status,
-                            txt_buscar_general,
-                            boton_accion("MARCAR TODAS", ft.Icons.CHECK_BOX_OUTLINED, lambda e: marcar_desmarcar_visibles(True), "#334155", height_val=32),
-                            boton_accion("DESMARCAR", ft.Icons.CHECK_BOX_OUTLINE_BLANK, lambda e: marcar_desmarcar_visibles(False), "#475569", height_val=32),
-                            boton_accion("SINCRONIZAR PACKING / NS", ft.Icons.SYNC_ROUNDED, sincronizar_ovs_desde_packing_y_netsuite, ACCENT_BLUE, height_val=32),
-                        ],
-                        spacing=8,
-                        wrap=True,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                ],
-                spacing=8,
-            )
-        )
+        # =====================================================================
+        # PANTALLAS: indicadores y filtros comunes arriba, una tarea por pantalla
+        # =====================================================================
+        lbl_det_kilos = ft.Text("", size=11, color=UI["texto_3"])
+        fila_kpis = ft.ResponsiveRow([
+            ui_kpi(lbl_kpi_total_ov, "OV en la vista", ft.Icons.RECEIPT_LONG_OUTLINED, UI["texto_2"]),
+            ui_kpi(lbl_kpi_facturadas, "Con factura", ft.Icons.TASK_ALT_ROUNDED, UI["exito"]),
+            ui_kpi(lbl_kpi_kilos_ruta, "Peso total", ft.Icons.SCALE_OUTLINED, UI["acento"], lbl_det_kilos),
+            ui_kpi(lbl_kpi_otif_36, "Cumplimiento SLA 36 h", ft.Icons.TIMER_OUTLINED, UI["alerta"]),
+        ], spacing=12, run_spacing=12)
 
-        # SUB-VISTA 1: MESA DE FACTURACIÓN Y CRUCE NETSUITE
-        self.sub_facturacion = ft.Column(
-            [
-                barra_kpis_y_filtros,
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Text("1. MESA DE FACTURACIÓN, AGENDAMIENTO Y BULTOS (MULTI-PC EN TIEMPO REAL)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            cont_t1,
-                        ],
-                        spacing=6,
-                    )
-                ),
-            ],
-            spacing=10,
-        )
+        txt_filtro_fecha.label = "Fecha (AAAA-MM-DD)"
+        txt_filtro_fecha.width = 170
+        txt_filtro_fecha.suffix = ft.IconButton(icon=ft.Icons.CALENDAR_MONTH_OUTLINED, icon_size=18, icon_color=UI["acento"],
+                                                tooltip="Elegir en calendario", on_click=abrir_calendario_filtro)
+        dd_filtro_patente.label = "Camión"
+        dd_filtro_status.label = "Estado de ruta"
+        txt_buscar_general.label = "Buscar OV, factura, cliente, comuna o ejecutivo"
+        txt_buscar_general.width = 340
+        txt_buscar_general.prefix_icon = ft.Icons.SEARCH_ROUNDED
 
-        # SUB-VISTA 2: PLANIFICADOR DE RUTEO Y PAPELETA DE ARENAS
-        panel_asignacion_camion = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.LOCAL_SHIPPING_ROUNDED, color="#FBBF24", size=20),
-                            ft.Text("ASIGNACIÓN DE CAMIÓN, CONDUCTOR Y VUELTA A OVs SELECCIONADAS:", size=12.5, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            lbl_capacidad_camion,
-                        ],
-                        spacing=8,
-                        wrap=True,
-                    ),
-                    ft.Row(
-                        [
-                            dd_asignar_patente,
-                            txt_asignar_chofer,
-                            txt_asignar_peoneta1,
-                            dd_asignar_vuelta,
-                            txt_asignar_fecha_ent,
-                            boton_accion("ASIGNAR CAMIÓN A OVs MARCADAS", ft.Icons.SEND_ROUNDED, asignar_camion_a_ovs_seleccionadas, "#047857", height_val=34),
-                        ],
-                        spacing=8,
-                        wrap=True,
-                    ),
-                ],
-                spacing=8,
-            )
-        )
+        def limpiar_filtros(e=None):
+            txt_filtro_fecha.value = ""
+            dd_filtro_patente.value = "TODAS"
+            dd_filtro_status.value = "TODOS"
+            txt_buscar_general.value = ""
+            renderizar_tablas_ruteo()
 
-        self.sub_ruteo = ft.Column(
-            [
-                barra_kpis_y_filtros,
-                panel_asignacion_camion,
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Text("2. PLANIFICADOR DE RUTEO DRIVIN, CONTROL DE KILOS Y PAPELETA DE 24 SKUs DE ARENAS", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            cont_t2,
-                        ],
-                        spacing=6,
-                    )
-                ),
-            ],
-            spacing=10,
+        barra_filtros = ui_tarjeta(
+            ft.Row([
+                txt_filtro_fecha, dd_filtro_patente, dd_filtro_status, txt_buscar_general,
+                ui_boton("Limpiar", ft.Icons.FILTER_ALT_OFF_OUTLINED, limpiar_filtros, "texto"),
+            ], spacing=10, wrap=True, run_spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=12,
         )
+        bloque_comun = ft.Column([fila_kpis, barra_filtros], spacing=12)
 
-        # SUB-VISTA 3: REPORTE DIARIO DE ENTREGAS Y SLA (36H / 72H)
-        self.sub_sla_diario = ft.Column(
-            [
-                barra_kpis_y_filtros,
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Text("3. SEGUIMIENTO DIARIO DE ENTREGAS, INCIDENCIAS Y CUMPLIMIENTO SLA 36H / 72H (SIN DOMINGOS)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            cont_t3,
-                        ],
-                        spacing=6,
-                    )
-                ),
-            ],
-            spacing=10,
-        )
+        # 1. Mesa de facturación
+        self.sub_facturacion = ft.Column([
+            ui_tarjeta(cont_t1, titulo="Órdenes por despachar",
+                       subtitulo="Filas en amarillo: el cliente exige agendar la entrega.", icono=ft.Icons.RECEIPT_LONG_ROUNDED,
+                       acciones=[ui_boton("Traer desde packing / NetSuite", ft.Icons.SYNC_ROUNDED, sincronizar_ovs_desde_packing_y_netsuite)]),
+        ], spacing=12)
 
-        # SUB-VISTA 4: MAESTRA DE FLOTA Y CONDUCTORES (CON FORMULARIO CRUD)
-        self.sub_flota = ft.Column(
-            [
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Text("AGREGAR O ACTUALIZAR CAMIÓN EN LA MAESTRA DE FLOTA:", size=12.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
-                            ft.Row(
-                                [
-                                    txt_flota_patente,
-                                    txt_flota_conductor,
-                                    txt_flota_peoneta,
-                                    dd_flota_tipo,
-                                    txt_flota_cap_kg,
-                                    boton_accion("GUARDAR CAMIÓN", ft.Icons.SAVE_ROUNDED, guardar_camion_flota, "#047857", height_val=34),
-                                ],
-                                spacing=8,
-                                wrap=True,
-                            ),
-                        ],
-                        spacing=8,
-                    )
-                ),
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Text("4. MAESTRA OFICIAL DE FLOTA, CONDUCTORES Y CAPACIDAD EN KILOS", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            cont_t4,
-                        ],
-                        spacing=6,
-                    )
-                ),
-            ],
-            spacing=10,
+        # 2. Ruteo
+        lbl_capacidad_camion.size = 12
+        lbl_capacidad_camion.color = UI["texto_2"]
+        dd_asignar_patente.label = "Camión"
+        txt_asignar_chofer.label = "Conductor"
+        txt_asignar_peoneta1.label = "Peoneta"
+        dd_asignar_vuelta.label = "Vuelta"
+        txt_asignar_fecha_ent.label = "Fecha de entrega"
+        panel_asignacion_camion = ui_tarjeta(
+            ft.Column([
+                ft.Row([dd_asignar_patente, txt_asignar_chofer, txt_asignar_peoneta1, dd_asignar_vuelta, txt_asignar_fecha_ent,
+                        ui_boton("Asignar a las OV marcadas", ft.Icons.SEND_ROUNDED, asignar_camion_a_ovs_seleccionadas)],
+                       spacing=10, wrap=True, run_spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                lbl_capacidad_camion,
+            ], spacing=8, tight=True),
+            titulo="Asignar camión", icono=ft.Icons.LOCAL_SHIPPING_OUTLINED,
         )
+        self.sub_ruteo = ft.Column([
+            panel_asignacion_camion,
+            ui_tarjeta(cont_t2, titulo="Plan de ruta", icono=ft.Icons.ROUTE_OUTLINED,
+                       acciones=[
+                           ui_menu("Selección", ft.Icons.CHECKLIST_ROUNDED, [
+                               ("Marcar todas las visibles", ft.Icons.CHECK_BOX_OUTLINED, lambda e: marcar_desmarcar_visibles(True)),
+                               ("Desmarcar todas", ft.Icons.CHECK_BOX_OUTLINE_BLANK_ROUNDED, lambda e: marcar_desmarcar_visibles(False)),
+                           ]),
+                           ui_menu("Documentos", ft.Icons.DESCRIPTION_OUTLINED, [
+                               ("Planilla Drivin (Excel)", ft.Icons.LOCAL_SHIPPING_OUTLINED, exportar_planilla_drivin),
+                               ("Hoja de ruta + arenas (Excel)", ft.Icons.TABLE_VIEW_OUTLINED, lambda e: exportar_hoja_ruta_y_arenas(e, formato_pdf=False)),
+                               ("Papeleta de arenas (PDF)", ft.Icons.PICTURE_AS_PDF_OUTLINED, lambda e: exportar_hoja_ruta_y_arenas(e, formato_pdf=True)),
+                           ]),
+                       ]),
+        ], spacing=12)
+
+        # 3. Entregas y SLA
+        self.sub_sla_diario = ft.Column([
+            ui_tarjeta(cont_t3, titulo="Entregas del día", subtitulo="SLA en días hábiles (sin domingos) desde la aprobación de la OV.",
+                       icono=ft.Icons.VERIFIED_OUTLINED,
+                       acciones=[ui_boton("Reporte diario SLA", ft.Icons.ASSESSMENT_OUTLINED, exportar_reporte_diario_sla, "secundario")]),
+        ], spacing=12)
+
+        # 4. Flota
+        self.sub_flota = ft.Column([
+            ui_tarjeta(
+                ft.Row([txt_flota_patente, txt_flota_conductor, txt_flota_peoneta, dd_flota_tipo, txt_flota_cap_kg,
+                        ui_boton("Guardar camión", ft.Icons.SAVE_ROUNDED, guardar_camion_flota)],
+                       spacing=10, wrap=True, run_spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                titulo="Agregar o actualizar camión", subtitulo="Para editar uno existente, use el lápiz de la tabla.",
+                icono=ft.Icons.ADD_ROUNDED,
+            ),
+            ui_tarjeta(cont_t4, titulo="Flota", icono=ft.Icons.LOCAL_SHIPPING_OUTLINED),
+        ], spacing=12)
 
         self.contenedor = ft.Container(content=self.sub_facturacion)
+        self.bloque_comun = bloque_comun
+        self.lbl_titulo = ft.Text("Mesa de facturación", size=18, weight=ft.FontWeight.W_700, color=UI["texto"])
+        self.lbl_subtitulo = ft.Text("", size=12, color=UI["texto_2"])
 
-        barra_titulo = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
-            bgcolor="#222A2C",
-            border_radius=8,
-            border=ft.Border.all(1, BORDER_COLOR),
-            content=ft.Row(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, color=ACCENT_CYAN, size=22),
-                            ft.Text("MÓDULO 7: FACTURACIÓN, RUTEO DRIVIN, PAPELETA DE ARENAS & SLA DIARIO", size=14.5, weight=ft.FontWeight.W_900, color=TEXT_WHITE),
-                        ],
-                        spacing=10,
-                    ),
-                    ft.Row(
-                        [
-                            boton_accion("1. MESA FACTURACIÓN", ft.Icons.RECEIPT_LONG_ROUNDED, lambda e: self.sel_sub_ruteo(0), ACCENT_TEAL, height_val=28),
-                            boton_accion("2. RUTEO & ARENAS", ft.Icons.LOCAL_SHIPPING_OUTLINED, lambda e: self.sel_sub_ruteo(1), "#1E3A8A", height_val=28),
-                            boton_accion("3. ENTREGAS & SLA", ft.Icons.VERIFIED_OUTLINED, lambda e: self.sel_sub_ruteo(2), "#047857", height_val=28),
-                            boton_accion("4. FLOTA CAMIONES", ft.Icons.BADGE_OUTLINED, lambda e: self.sel_sub_ruteo(3), "#475569", height_val=28),
-                        ],
-                        spacing=6,
-                        wrap=True,
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                wrap=True,
-            ),
-        )
+        encabezado = ft.Row([
+            ft.Row([ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, size=24, color=UI["acento"]),
+                    ft.Column([self.lbl_titulo, self.lbl_subtitulo], spacing=1, tight=True)],
+                   spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([
+                ui_menu("Importar", ft.Icons.UPLOAD_FILE_ROUNDED, [
+                    ("Excel base de NetSuite", ft.Icons.TABLE_VIEW_OUTLINED, abrir_selector_excel_ns),
+                ]),
+                ui_boton("Actualizar", ft.Icons.SYNC_ROUNDED, lambda e: cargar_datos_ruteo_y_facturacion(), "secundario"),
+            ], spacing=8),
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True)
 
-        col_principal = ft.Column(
-            [
-                barra_titulo,
-                self.contenedor,
-            ],
-            spacing=10,
-            scroll=ft.ScrollMode.ALWAYS,
-            expand=True,
-        )
-
+        col_principal = ft.Column([encabezado, bloque_comun, self.contenedor], spacing=14, scroll=ft.ScrollMode.AUTO, expand=True)
         self.vista = ft.Container(
-            padding=ft.Padding.only(left=12, top=10, right=16, bottom=12),
-            bgcolor=BG_MODULO,
+            padding=ft.Padding.only(left=16, top=14, right=16, bottom=16),
+            bgcolor=UI["bg"],
             content=col_principal,
             expand=True,
         )
@@ -1887,6 +1733,14 @@ class RuteoFacturacionModulo:
 
     def sel_sub_ruteo(self, idx: int):
         vistas = [self.sub_facturacion, self.sub_ruteo, self.sub_sla_diario, self.sub_flota]
-        self.contenedor.content = vistas[idx if 0 <= idx < len(vistas) else 0]
+        titulos = [
+            ("Mesa de facturación", "Factura, dirección, bultos y arenas de cada OV antes de rutear."),
+            ("Ruteo", "Asigne camión y vuelta a las OV y genere los documentos de ruta."),
+            ("Entregas y SLA", "Confirme entregas, registre incidencias y mida el cumplimiento."),
+            ("Flota de camiones", "Camiones, conductores y capacidad de carga."),
+        ]
+        idx = idx if 0 <= idx < len(vistas) else 0
+        self.contenedor.content = vistas[idx]
+        self.lbl_titulo.value, self.lbl_subtitulo.value = titulos[idx]
+        self.bloque_comun.visible = idx != 3
         self.cargar_datos_ruteo_func()
-        self.page.update()
