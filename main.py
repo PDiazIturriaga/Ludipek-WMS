@@ -997,8 +997,8 @@ def main(page: ft.Page):
                     recep_ccp.refrescar,
                     recep_ccp.sel_sub_recepcion_ccp,
                     [
-                        ("1. Bandeja Traslados en Tránsito", _ico("LOCAL_SHIPPING_OUTLINED", "ALL_INBOX_OUTLINED")),
-                        ("2. Recepción por LPN", _ico("QR_CODE_SCANNER_ROUNDED", "MOVE_TO_INBOX_ROUNDED")),
+                        ("En camino y recibiendo", _ico("LOCAL_SHIPPING_OUTLINED", "ALL_INBOX_OUTLINED")),
+                        ("Recibidas y diferencias", _ico("FACT_CHECK_OUTLINED", "MOVE_TO_INBOX_ROUNDED")),
                     ],
                 )
             )
