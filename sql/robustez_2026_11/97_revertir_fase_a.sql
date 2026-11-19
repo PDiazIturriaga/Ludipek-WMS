@@ -34,7 +34,12 @@ drop function if exists public.wms_actualizar_tarea_conteo(bigint, text, text);
 drop trigger if exists tg_estado_unico_ov on public.netsuite_ordenes_venta;
 drop function if exists public.wms_tg_estado_unico_ov();
 drop function if exists public.wms_cerrar_packing(bigint, text, jsonb, integer, text, text, text, numeric, numeric, bigint, text);
+drop function if exists public.wms_cerrar_packing(bigint, text, jsonb, integer, text, text, text, numeric, numeric, bigint, text, text);
 drop function if exists public.wms_cerrar_picking(bigint, jsonb, text);
+drop function if exists public.wms_cerrar_picking(bigint, jsonb, text, text);
+drop function if exists public.wms_ordenes_en_mesa(text, text);
+drop function if exists public.wms_asignar_mesa_packing(bigint, text, text);
+drop function if exists public.wms_normalizar_mesa(text);
 drop function if exists public.wms_cambiar_estado_ov(bigint, text, text, text, boolean);
 drop function if exists public.wms_orden_estado_ov(text);
 -- wms_login y wms_cambiar_password se conservan: las apps nuevas las necesitan para entrar.

@@ -899,7 +899,7 @@ class PickingModulo:
             for parte in str(r.get("canal_venta") or "").split("|"):
                 clave, _, valor = parte.partition(":")
                 clave = clave.strip().upper()
-                if valor.strip() and clave in ("BULTOS", "TIPO", "COMUNA", "LPN", "PESO_KG"):
+                if valor.strip() and clave in ("BULTOS", "TIPO", "COMUNA", "LPN", "PESO_KG", "FALTANTE", "MOTIVO_FALTANTE"):
                     meta_ov[{"TIPO": "tipo_empaque"}.get(clave, clave.lower())] = valor.strip()
             comuna_str = str(r.get("comuna") or meta_ov.get("comuna") or ("CONCEPCIÓN" if "CONCEPCION" in cli_val.upper() else "SANTIAGO")).strip().upper()
             tipo_emp_str = str(meta_ov.get("tipo_empaque") or "BULTO").strip().upper()
@@ -920,6 +920,10 @@ class PickingModulo:
                 "tipo_empaque": tipo_emp_str,
                 "bultos": bultos_cnt,
                 "lpn": lpn_str,
+                "mesa": str(r.get("mesa_packing") or "").strip().upper(),
+                # Cierre de packing con faltante (script 10): unidades que no viajaron y motivo
+                "faltante": int(float(meta_ov.get("faltante") or 0)) if str(meta_ov.get("faltante") or "0").replace(".", "").isdigit() else 0,
+                "motivo_faltante": str(meta_ov.get("motivo_faltante") or ""),
                 "estado": est_val,
                 "es_farmacia": es_fa,
                 "corte": corte_str,
@@ -1258,6 +1262,14 @@ class PickingModulo:
                     dlg_det.open = False
                 page.update()
 
+            aviso_faltante = (
+                [ft.Container(
+                    padding=10, border_radius=8, bgcolor=ft.Colors.with_opacity(0.12, UI["peligro"]),
+                    border=ft.Border.all(1, UI["peligro"]),
+                    content=ft.Text(f"Salió CON FALTANTE de {info_ov.get('faltante')} UN · motivo: {info_ov.get('motivo_faltante') or '-'}",
+                                    size=12.5, weight=ft.FontWeight.W_600, color="#FCA5A5"),
+                )] if info_ov.get("faltante") else []
+            )
             datos = ft.Row([
                 chip_canal(info_ov),
                 chip(nombre_etapa(info_ov), COLORES_ETAPA[etapa_ov(info_ov.get("estado"))]),
@@ -1265,6 +1277,29 @@ class PickingModulo:
                         size=12, color=UI["texto_2"]),
             ], spacing=8, wrap=True)
             acciones = [ui_boton("Cerrar", None, cerrar_d, "texto")]
+            if etapa_ov(info_ov.get("estado")) <= 1 and info_ov.get("id"):
+                dd_mesa = dropdown_dark(
+                    label="Mesa de packing", width=170, value=info_ov.get("mesa") or None,
+                    options=[opt_w(f"MESA {i}", f"Mesa {i}") for i in range(1, 7)],
+                )
+
+                def guardar_mesa(ev=None):
+                    if not dd_mesa.value:
+                        return
+                    try:
+                        supabase.rpc("wms_asignar_mesa_packing", {
+                            "p_orden_id": info_ov.get("id"), "p_mesa": dd_mesa.value,
+                            "p_usuario": str(getattr(self.page, "usuario_actual", None) or "PC"),
+                        }).execute()
+                    except Exception as ex:
+                        notificar(f"No se pudo cambiar la mesa: {ex}", "#B91C1C")
+                        return
+                    cerrar_d()
+                    notificar(f"{ov_num} quedó en {dd_mesa.value.capitalize()}.", "#047857")
+                    cargar_monitor_packing_dual()
+
+                dd_mesa.on_select = guardar_mesa
+                acciones.insert(0, dd_mesa)
             if info_ov.get("pallets_detalle"):
                 acciones.insert(0, ui_boton("PDF pallets", ft.Icons.PICTURE_AS_PDF_OUTLINED,
                                             lambda ev: (cerrar_d(), descargar_pdf_contenido_pallets(info_ov)), "secundario"))
@@ -1281,6 +1316,7 @@ class PickingModulo:
                 content=ft.Container(
                     width=640,
                     content=ft.Column([
+                        *aviso_faltante,
                         datos,
                         ft.Container(
                             height=min(420, 60 + 58 * len(filas)),
@@ -1571,6 +1607,7 @@ class PickingModulo:
             return 0
 
         COLORES_ETAPA = [UI["alerta"], UI["acento"], "#818CF8", UI["exito"]]
+        ordenes_resumen = []
 
         def nombre_etapa(r: dict) -> str:
             et = etapa_ov(r.get("estado"))
@@ -1579,6 +1616,8 @@ class PickingModulo:
                 return "En tránsito a CCP" if es_ot else "En facturación"
             if et == 3:
                 return "Recibida en CCP" if es_ot else "Facturada"
+            if et == 1 and r.get("mesa"):
+                return f"En packing · {str(r.get('mesa')).capitalize()}"
             return ("En picking", "En packing")[et]
 
         def chip(texto: str, color: str, size: float = 11):
@@ -1643,6 +1682,7 @@ class PickingModulo:
         def renderizar_monitor_cortes_y_tablas():
             # ---------- 1. Resumen: KPI y avance por corte ----------
             base_resumen = [r for r in registros_packing_db if cumple_filtros_comunes(r)]
+            ordenes_resumen[:] = base_resumen
             por_etapa = [0, 0, 0, 0]
             for r in base_resumen:
                 por_etapa[etapa_ov(r.get("estado"))] += 1
@@ -1653,6 +1693,18 @@ class PickingModulo:
             lbl_kpi_packing.value = str(por_etapa[1])
             lbl_kpi_fact.value = str(por_etapa[2] + por_etapa[3])
             lbl_det_fact.value = f"{por_etapa[3]} ya facturadas / recibidas"
+            renderizar_mesas(base_resumen)
+            con_faltante = [r for r in base_resumen if r.get("faltante")]
+            alerta_faltantes.visible = bool(con_faltante)
+            lbl_alerta_faltantes.value = f"{len(con_faltante)} orden(es) salieron con faltante"
+            fila_chips_faltantes.controls = [
+                ft.Container(
+                    content=chip(f"{r['ov']} · {r.get('faltante')} UN", UI["peligro"], 11.5),
+                    on_click=lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it),
+                    tooltip=f"{r.get('cliente', '')} · {r.get('motivo_faltante') or ''}",
+                    ink=True, border_radius=12,
+                ) for r in con_faltante
+            ]
 
             cortes_orden = ["09:00", "10:00", "12:00", "13:00", ">13:00"]
             agrupado = {c: [] for c in cortes_orden}
@@ -1737,7 +1789,10 @@ class PickingModulo:
                         ft.DataCell(ft.Text(str(r.get("cliente") or "-")[:44], size=12.5, color=UI["texto"], tooltip=str(r.get("cliente") or ""))),
                         ft.DataCell(ft.Text(f"{pick} / {ped} UN", size=12.5, weight=ft.FontWeight.W_600,
                                             color=UI["exito"] if ped and pick >= ped else (UI["alerta"] if pick else UI["texto_2"]))),
-                        ft.DataCell(pasos_avance(r)),
+                        ft.DataCell(ft.Row([
+                            pasos_avance(r),
+                            *([chip(f"Faltante {r.get('faltante')} UN", UI["peligro"])] if r.get("faltante") else []),
+                        ], spacing=8, tight=True)),
                         ft.DataCell(ft.Text(bultos_txt, size=12, color=UI["texto_2"])),
                         ft.DataCell(menu_fila([
                             ("Ver detalle de SKU y lotes", ft.Icons.LIST_ALT_ROUNDED, lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it)),
@@ -1781,7 +1836,10 @@ class PickingModulo:
                     ft.DataCell(ft.Text(str(r.get("comuna") or "SANTIAGO"), size=12, color=UI["texto_2"])),
                     ft.DataCell(ft.Text(f"{r.get('bultos', 1)} {str(r.get('tipo_empaque') or 'BULTO').lower()}", size=12.5, color=UI["texto"])),
                     ft.DataCell(ft.Text(f"{int(r.get('unidades_pickeadas') or r.get('unidades') or 0)} UN", size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])),
-                    ft.DataCell(chip("Facturada", UI["exito"]) if est == "FACTURADO" else chip("Por facturar", "#818CF8")),
+                    ft.DataCell(ft.Row([
+                        chip("Facturada", UI["exito"]) if est == "FACTURADO" else chip("Por facturar", "#818CF8"),
+                        *([chip(f"Faltante {r.get('faltante')} UN", UI["peligro"])] if r.get("faltante") else []),
+                    ], spacing=6, tight=True)),
                     ft.DataCell(menu_fila([
                         ("Excel NetSuite de esta OV", ft.Icons.TABLE_VIEW_ROUNDED, lambda e, it=r: exportar_excel_facturacion_netsuite(solo_ov=it)),
                         ("Etiquetas de bultos", ft.Icons.QR_CODE_2_ROUNDED, lambda e, it=r: imprimir_etiqueta_packing_bultos_ov(it)),
@@ -2201,6 +2259,128 @@ class PickingModulo:
         txt_vacio_prev.visible = True
 
         # ---------- 1. RESUMEN ----------
+        def mostrar_lista_kpi(titulo: str, etapas: tuple):
+            """Al tocar un indicador: lista de OV con su cliente; cada fila abre el detalle."""
+            lista = [r for r in ordenes_resumen if etapas is None or etapa_ov(r.get("estado")) in etapas]
+            lista.sort(key=lambda r: (str(r.get("corte") or ""), str(r.get("ov") or "")))
+
+            def cerrar(ev=None):
+                try:
+                    page.pop_dialog()
+                except Exception:
+                    dlg.open = False
+                page.update()
+
+            def abrir(r):
+                cerrar()
+                mostrar_modal_detalle_ov(r["ov"], r)
+
+            filas = [
+                ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                    border=ft.Border(bottom=ft.BorderSide(0.5, UI["borde"])),
+                    ink=True,
+                    on_click=lambda e, it=r: abrir(it),
+                    content=ft.Row([
+                        ft.Column([
+                            ft.Text(r["ov"], size=13.5, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                            ft.Text(str(r.get("cliente") or "-"), size=12, color=UI["texto_2"], max_lines=1,
+                                    overflow=ft.TextOverflow.ELLIPSIS),
+                        ], spacing=1, tight=True, expand=True),
+                        chip_canal(r),
+                        ft.Text(f"{r.get('fecha_ov', '-')} · {r.get('corte', '-')}", size=11.5, color=UI["texto_3"], width=130),
+                        chip(nombre_etapa(r), COLORES_ETAPA[etapa_ov(r.get("estado"))]),
+                    ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                )
+                for r in lista
+            ] or [ft.Container(padding=20, content=ft.Text("No hay órdenes en este grupo.", size=12.5, color=UI["texto_2"]))]
+
+            dlg = ft.AlertDialog(
+                title=ft.Column([
+                    ft.Text(titulo, size=18, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                    ft.Text(f"{len(lista)} orden(es) · toque una para ver sus SKU", size=12, color=UI["texto_2"]),
+                ], spacing=2, tight=True),
+                bgcolor=UI["card"],
+                content=ft.Container(
+                    width=720,
+                    height=min(480, 70 + 62 * len(filas)),
+                    border=ft.Border.all(1, UI["borde"]),
+                    border_radius=8,
+                    content=ft.Column(filas, spacing=0, scroll=ft.ScrollMode.AUTO),
+                ),
+                actions=[ui_boton("Cerrar", None, cerrar, "texto")],
+            )
+            page.show_dialog(dlg)
+            page.update()
+
+        fila_chips_faltantes = ft.Row(spacing=6, wrap=True, run_spacing=6)
+        lbl_alerta_faltantes = ft.Text("", size=13, weight=ft.FontWeight.W_700, color="#FCA5A5")
+        alerta_faltantes = ft.Container(
+            visible=False, padding=14, border_radius=10,
+            bgcolor=ft.Colors.with_opacity(0.10, UI["peligro"]), border=ft.Border.all(1, UI["peligro"]),
+            content=ft.Column([
+                ft.Row([ft.Icon(ft.Icons.REPORT_PROBLEM_OUTLINED, color=UI["peligro"], size=20), lbl_alerta_faltantes], spacing=8),
+                ft.Text("Revise el stock de esos SKU (quedaron como FALTANTE_PACKING en el kardex). Toque una OV para ver el motivo.",
+                        size=11.5, color=UI["texto_2"]),
+                fila_chips_faltantes,
+            ], spacing=8, tight=True),
+        )
+
+        CANTIDAD_MESAS = 6
+        fila_mesas = ft.ResponsiveRow(spacing=12, run_spacing=12)
+
+        def renderizar_mesas(base: list):
+            en_mesa = {}
+            for r in base:
+                if etapa_ov(r.get("estado")) == 1 and r.get("mesa"):
+                    en_mesa.setdefault(r["mesa"], []).append(r)
+            nombres = [f"MESA {i}" for i in range(1, CANTIDAD_MESAS + 1)]
+            nombres += sorted(m for m in en_mesa if m not in nombres)
+            sin_mesa = [r for r in base if etapa_ov(r.get("estado")) == 1 and not r.get("mesa")]
+            tiles = []
+            for m in nombres:
+                ovs = en_mesa.get(m, [])
+                tiles.append(ft.Container(
+                    col={"xs": 6, "md": 4, "lg": 2},
+                    padding=12, border_radius=10,
+                    bgcolor=UI["card_alt"],
+                    border=ft.Border.all(1, UI["acento"] if ovs else UI["borde"]),
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Text(m.capitalize(), size=14, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                            chip(f"{len(ovs)} OV" if ovs else "Libre", UI["acento"] if ovs else UI["texto_3"], 10.5),
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        *[ft.Container(
+                            ink=True, border_radius=6, padding=ft.Padding.symmetric(horizontal=4, vertical=3),
+                            on_click=lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it),
+                            content=ft.Column([
+                                ft.Text(r["ov"], size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"]),
+                                ft.Text(str(r.get("cliente") or "-"), size=11, color=UI["texto_2"], max_lines=1,
+                                        overflow=ft.TextOverflow.ELLIPSIS),
+                            ], spacing=0, tight=True),
+                        ) for r in ovs],
+                    ], spacing=6, tight=True),
+                ))
+            if sin_mesa:
+                tiles.append(ft.Container(
+                    col={"xs": 12, "md": 8, "lg": 4},
+                    padding=12, border_radius=10, bgcolor=UI["card_alt"], border=ft.Border.all(1, UI["alerta"]),
+                    content=ft.Column([
+                        ft.Text(f"{len(sin_mesa)} pickeada(s) sin mesa registrada", size=13, weight=ft.FontWeight.W_700, color=UI["alerta"]),
+                        ft.Row([ft.Container(content=chip(r["ov"], UI["alerta"], 11), ink=True, border_radius=12,
+                                             on_click=lambda e, it=r: mostrar_modal_detalle_ov(it["ov"], it)) for r in sin_mesa],
+                               wrap=True, spacing=6, run_spacing=6),
+                    ], spacing=6, tight=True),
+                ))
+            fila_mesas.controls = tiles
+
+        tarjeta_mesas = ui_tarjeta(
+            fila_mesas,
+            titulo="Mesas de packing",
+            subtitulo="Pedidos pickeados esperando en cada mesa. Toque una OV para ver su detalle o cambiarla de mesa.",
+            icono=ft.Icons.TABLE_RESTAURANT_ROUNDED,
+        )
+
         fila_kpis_resumen = ft.ResponsiveRow([
             ui_kpi(lbl_kpi_total_ovs, "Órdenes del período", ft.Icons.RECEIPT_LONG_OUTLINED, UI["texto_2"], lbl_det_total),
             ui_kpi(lbl_kpi_picking, "En picking", ft.Icons.SHOPPING_CART_OUTLINED, UI["alerta"],
@@ -2209,6 +2389,16 @@ class PickingModulo:
                    ft.Text("Pickeadas, por empacar", size=11, color=UI["texto_3"])),
             ui_kpi(lbl_kpi_fact, "Enviadas a facturación", ft.Icons.TASK_ALT_ROUNDED, UI["exito"], lbl_det_fact),
         ], spacing=12, run_spacing=12)
+        # Indicadores clicables: muestran las OV del grupo con su cliente
+        for kpi_ctrl, (titulo_kpi, etapas_kpi) in zip(fila_kpis_resumen.controls, [
+            ("Órdenes del período", None),
+            ("En picking", (0,)),
+            ("En packing", (1,)),
+            ("Enviadas a facturación", (2, 3)),
+        ]):
+            kpi_ctrl.ink = True
+            kpi_ctrl.tooltip = "Ver las órdenes"
+            kpi_ctrl.on_click = lambda e, t=titulo_kpi, et=etapas_kpi: mostrar_lista_kpi(t, et)
 
         leyenda_etapas = ft.Row([
             ft.Row([ft.Container(width=10, height=10, border_radius=2, bgcolor=COLORES_ETAPA[i]),
@@ -2223,7 +2413,7 @@ class PickingModulo:
             icono=ft.Icons.SCHEDULE_ROUNDED,
             acciones=[leyenda_etapas],
         )
-        subvista_resumen = ft.Column([fila_kpis_resumen, tarjeta_cortes], spacing=12)
+        subvista_resumen = ft.Column([alerta_faltantes, fila_kpis_resumen, tarjeta_mesas, tarjeta_cortes], spacing=12)
 
         # ---------- 2. CREAR / LIBERAR OLAS ----------
         tarjeta_origen = ui_tarjeta(

@@ -20,6 +20,8 @@ Cada script es una transacción (si falla, no cambia nada) y se puede volver a e
 | 7 | `07_estados_picking_packing.sql` | **Obligatorio para el celular nuevo.** Cierre de picking (`wms_cerrar_picking`) y de packing (`wms_cerrar_packing`) en una sola transacción, con historial de estados y errores visibles. Agrega al catálogo PENDIENTE_FACTURACION, FACTURADO, DESPACHADO, ANULADO, CERRADO. Corrige bodegas mal escritas que bloqueaban el cambio de estado. |
 | 8 | `08_estado_unico_ov.sql` | Las columnas `estado` y `estado_ns` de las órdenes quedan siempre iguales, y cualquier cambio de estado (también "Marcar facturada" del PC) queda en `wms_historial_estados`. |
 | 9 | `09_tareas_conteo.sql` | Tareas de conteo (pasillo, vacías de un pasillo o SKU) asignadas desde el PC → el operador las ve en su celular con su avance. Convierte las asignaciones antiguas "RACK A" al formato nuevo. |
+| 10 | `10_packing_faltantes.sql` | Packing: mensaje claro si se empaca más de lo pickeado y opción de **cerrar con faltante** (con motivo). El faltante queda en la orden, en el historial y en el kardex como FALTANTE_PACKING; el PC lo muestra en rojo. |
+| 11 | `11_mesas_packing.sql` | Mesas de packing (MESA 1–6): el picker indica en qué mesa deja el pedido; el packer escanea la mesa y ve sus OV; el PC muestra qué hay en cada mesa. |
 | — | `07b_diagnostico_ov.sql` | Solo lectura: radiografía de una orden (cabecera, líneas, kardex, packing, historial). Cambiar el número en la primera línea. |
 
 Después de la Fase A: ejecutar de nuevo `00_diagnostico.sql`. Lo que quede son casos para conteo cíclico (filas duplicadas, LPN en dos ubicaciones).
