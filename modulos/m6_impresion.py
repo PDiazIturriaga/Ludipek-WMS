@@ -8,14 +8,17 @@ from dependencias import *
 from servicio_ubicaciones_etiquetas import (
     generar_ubicaciones_concepcion,
     generar_pdfs_ubicaciones,
+    generar_pdfs_ubicaciones_stgo,
+    describir_ubicacion_stgo,
 )
 
 
 class ImpresionModulo:
     """Centro de impresión WMS.
 
-    La sección de ubicaciones de Concepción es exclusivamente de impresión:
-    no crea ubicaciones individuales y no escribe en Supabase.
+    Ubicaciones: una pestaña por bodega.
+      · Santiago: lee las ubicaciones reales de bodega_ubicaciones (racks A-H y arena).
+      · Concepción: ubicaciones de piso fijas (no escribe en Supabase).
     """
 
     def __init__(
@@ -147,7 +150,7 @@ class ImpresionModulo:
             )
         )
 
-        self.sub_ubicaciones = ft.Column(
+        self.panel_ccp = ft.Column(
             [
                 self._tarjeta(
                     ft.Column(
@@ -231,6 +234,26 @@ class ImpresionModulo:
                         spacing=10,
                     )
                 )
+            ],
+            spacing=10,
+        )
+
+        self._construir_panel_santiago()
+        es_ccp = "CONCEPCION" in obtener_bodega_activa(self.page).upper().replace("Ó", "O")
+        self.cont_ubicaciones = ft.Container(content=self.panel_ccp if es_ccp else self.panel_stgo, expand=True)
+        self.pestanas_bodega = ui_pestanas(
+            [("Bodega Santiago", ft.Icons.WAREHOUSE_ROUNDED), ("Bodega Concepción", ft.Icons.LOCATION_CITY_ROUNDED)],
+            self._cambiar_bodega_ubicaciones, 1 if es_ccp else 0,
+        )
+        self.sub_ubicaciones = ft.Column(
+            [
+                ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=6), bgcolor=self.CARD, border_radius=8,
+                    border=ft.Border.all(1, self.BORDER),
+                    content=ft.Row([ft.Text("Etiquetas de ubicación de:", size=12, color=self.MUTED), self.pestanas_bodega],
+                                   spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ),
+                self.cont_ubicaciones,
             ],
             spacing=10,
             scroll=ft.ScrollMode.AUTO,
@@ -508,6 +531,188 @@ class ImpresionModulo:
                 "#B91C1C",
             )
 
+    # ==================================================================
+    # UBICACIONES BODEGA SANTIAGO (racks y arena, desde bodega_ubicaciones)
+    # ==================================================================
+    def _dd(self, label: str, width: int, opciones: list, value=None, visible=True):
+        return ft.Dropdown(
+            label=label, width=width, value=value, dense=True, visible=visible,
+            bgcolor=self.INPUT, color=self.WHITE, border_color=self.BORDER, focused_border_color=self.CYAN,
+            text_style=ft.TextStyle(color=self.WHITE, size=12),
+            options=[self._opcion(k, t) for k, t in opciones],
+            on_select=self._actualizar_seleccion_stgo,
+        )
+
+    def _construir_panel_santiago(self):
+        self.ubic_stgo = []          # [describir_ubicacion_stgo(...)]
+        self.dd_zona_stgo = self._dd("Rack o zona", 250, [("TODOS_RACKS", "TODOS LOS RACKS")], "TODOS_RACKS")
+        self.dd_nivel_stgo = self._dd("Nivel", 190, [("TODOS", "TODOS LOS NIVELES"), ("PICKING", "SOLO PICKING (01)"),
+                                                    ("RESERVA", "SOLO RESERVA (02+)")], "TODOS")
+        self.dd_desde_stgo = self._dd("Desde columna", 150, [], None)
+        self.dd_hasta_stgo = self._dd("Hasta columna", 150, [], None)
+        self.txt_codigos_stgo = ft.TextField(
+            label="O escriba ubicaciones puntuales (ej. H-02-01, BE-03-12)", width=420, dense=True,
+            bgcolor=self.INPUT, color=self.WHITE, border_color=self.BORDER, focused_border_color=self.CYAN,
+            label_style=ft.TextStyle(color=self.MUTED, size=11), on_change=self._actualizar_seleccion_stgo,
+        )
+        self.lbl_sel_stgo = ft.Text("Cargando ubicaciones de Bodega Santiago…", size=11, color=self.CYAN,
+                                    weight=ft.FontWeight.BOLD)
+        self.lbl_res_stgo = ft.Text("Elija qué imprimir y presione GENERAR ETIQUETAS PDF.", size=11, color=self.MUTED)
+        leyenda = ft.Row([
+            ft.Row([ft.Container(width=12, height=12, border_radius=3, bgcolor=c), ft.Text(t, size=11, color=self.MUTED)],
+                   spacing=5, tight=True)
+            for c, t in [("#047857", "Picking (nivel 01)"), ("#1E293B", "Reserva"), ("#855C2D", "Arena"), ("#991B1B", "Mermas arena")]
+        ], spacing=14, wrap=True)
+        self.panel_stgo = self._tarjeta(ft.Column([
+            self._titulo_seccion(
+                ft.Icons.LOCATION_ON_ROUNDED,
+                "ETIQUETAS DE UBICACIONES - BODEGA SANTIAGO",
+                "Racks A a H (rack-columna-nivel, el nivel 01 es picking) y zonas de arena (MK, ME, BE). "
+                "Una etiqueta 20 × 10 cm por ubicación con código QR.",
+            ),
+            ft.Divider(color=self.BORDER, height=2),
+            ft.Container(
+                padding=12, bgcolor="#202728", border_radius=8, border=ft.Border.all(1, self.BORDER),
+                content=ft.Column([
+                    ft.Text("SELECCIÓN DE ETIQUETAS", size=11, color=self.WHITE, weight=ft.FontWeight.BOLD),
+                    ft.Row([self.dd_zona_stgo, self.dd_nivel_stgo, self.dd_desde_stgo, self.dd_hasta_stgo],
+                           wrap=True, spacing=8, run_spacing=8),
+                    self.txt_codigos_stgo,
+                    self.lbl_sel_stgo,
+                    leyenda,
+                ], spacing=8),
+            ),
+            ft.Row([
+                boton_primario("GENERAR ETIQUETAS PDF", ft.Icons.PICTURE_AS_PDF_OUTLINED, self._generar_etiquetas_stgo, "#0284C7"),
+                boton_primario("RECARGAR UBICACIONES", ft.Icons.REFRESH_ROUNDED, lambda e: self._cargar_ubicaciones_stgo(), "#475569"),
+            ], wrap=True),
+            ft.Container(
+                padding=10, bgcolor="#172022", border_radius=7, border=ft.Border.all(1, self.BORDER),
+                content=ft.Row([
+                    ft.Icon(ft.Icons.INFO_OUTLINE_ROUNDED, size=18, color=self.CYAN),
+                    ft.Column([ft.Text("RESULTADO", size=10, color=self.MUTED, weight=ft.FontWeight.BOLD), self.lbl_res_stgo],
+                              spacing=2, expand=True),
+                ], spacing=8),
+            ),
+        ], spacing=10))
+
+    def _cargar_ubicaciones_stgo(self):
+        try:
+            filas = leer_tabla_paginada(lambda: supabase.table("bodega_ubicaciones")
+                                        .select("codigo_ubicacion, bodega").eq("bodega", "Bodega Santiago"))
+        except Exception as ex:
+            self.lbl_sel_stgo.value = f"No se pudieron leer las ubicaciones: {ex}"
+            self.lbl_sel_stgo.color = self.RED
+            self.page.update()
+            return
+        codigos = sorted({str(f.get("codigo_ubicacion") or "").strip().upper() for f in filas
+                          if f.get("codigo_ubicacion") and not str(f.get("codigo_ubicacion")).upper().startswith("ZONA")})
+        self.ubic_stgo = [describir_ubicacion_stgo(c) for c in codigos]
+        zonas = []
+        for d in self.ubic_stgo:
+            if d["grupo"] not in [z[0] for z in zonas]:
+                zonas.append((d["grupo"], d["zona"]))
+        orden = lambda z: (0 if z[0].startswith("RACK_") else 1 if z[0].startswith("ARENA_") else 2, z[0])
+        opciones = [("TODOS_RACKS", f"TODOS LOS RACKS ({sum(1 for d in self.ubic_stgo if d['grupo'].startswith('RACK_'))})")]
+        for g, nom in sorted(zonas, key=orden):
+            n = sum(1 for d in self.ubic_stgo if d["grupo"] == g)
+            opciones.append((g, f"{nom} ({n})"))
+        self.dd_zona_stgo.options = [self._opcion(k, t) for k, t in opciones]
+        if self.dd_zona_stgo.value not in [k for k, _ in opciones]:
+            self.dd_zona_stgo.value = "TODOS_RACKS"
+        self._actualizar_seleccion_stgo()
+
+    def _actualizar_seleccion_stgo(self, e=None):
+        zona = self.dd_zona_stgo.value or "TODOS_RACKS"
+        es_rack = zona.startswith("RACK_") or zona == "TODOS_RACKS"
+        es_arena = zona.startswith("ARENA_")
+        self.dd_nivel_stgo.visible = es_rack
+        self.dd_desde_stgo.visible = self.dd_hasta_stgo.visible = zona.startswith("RACK_") or es_arena
+        etiqueta = "fila" if es_arena else "columna"
+        self.dd_desde_stgo.label = f"Desde {etiqueta}"
+        self.dd_hasta_stgo.label = f"Hasta {etiqueta}"
+        if self.dd_desde_stgo.visible:
+            nums = sorted({d["columna"] for d in self.ubic_stgo if d["grupo"] == zona})
+            claves = [f"{n:02d}" for n in nums]
+            opts = [(c, f"{etiqueta.upper()} {c}") for c in claves]
+            if [o.key for o in (self.dd_desde_stgo.options or [])] != claves:
+                self.dd_desde_stgo.options = [self._opcion(k, t) for k, t in opts]
+                self.dd_hasta_stgo.options = [self._opcion(k, t) for k, t in opts]
+                self.dd_desde_stgo.value = claves[0] if claves else None
+                self.dd_hasta_stgo.value = claves[-1] if claves else None
+        sel = self._seleccion_stgo()
+        if (self.txt_codigos_stgo.value or "").strip():
+            no_existen = [c for c in self._codigos_escritos() if c not in {d["codigo"] for d in self.ubic_stgo}]
+            self.lbl_sel_stgo.value = (f"Se generarán {len(sel)} etiqueta(s) de las ubicaciones escritas."
+                                       + (f" No existen en la maestra: {', '.join(no_existen[:6])}" if no_existen else ""))
+            self.lbl_sel_stgo.color = self.AMBER if no_existen else self.CYAN
+        else:
+            pick = sum(1 for d in sel if d["tipo"] == "PICKING")
+            self.lbl_sel_stgo.value = (f"Se generarán {len(sel)} etiqueta(s)"
+                                       + (f": {pick} de picking y {len(sel) - pick} de reserva." if es_rack else ".")
+                                       if sel else "No hay ubicaciones para esta selección.")
+            self.lbl_sel_stgo.color = self.CYAN if sel else self.AMBER
+        self.page.update()
+
+    def _codigos_escritos(self) -> list:
+        texto = (self.txt_codigos_stgo.value or "").upper().replace(";", ",").replace("\n", ",")
+        return [c.strip().replace(" ", "") for c in texto.split(",") if c.strip()]
+
+    def _seleccion_stgo(self) -> list:
+        escritos = self._codigos_escritos()
+        if escritos:
+            existentes = {d["codigo"]: d for d in self.ubic_stgo}
+            return [existentes[c] for c in dict.fromkeys(escritos) if c in existentes]
+        zona = self.dd_zona_stgo.value or "TODOS_RACKS"
+        if zona == "TODOS_RACKS":
+            sel = [d for d in self.ubic_stgo if d["grupo"].startswith("RACK_")]
+        else:
+            sel = [d for d in self.ubic_stgo if d["grupo"] == zona]
+        if self.dd_desde_stgo.visible and self.dd_desde_stgo.value and self.dd_hasta_stgo.value:
+            a, b = sorted((int(self.dd_desde_stgo.value), int(self.dd_hasta_stgo.value)))
+            sel = [d for d in sel if a <= d["columna"] <= b]
+        nivel = self.dd_nivel_stgo.value or "TODOS"
+        if self.dd_nivel_stgo.visible and nivel != "TODOS":
+            sel = [d for d in sel if d["tipo"] == nivel]
+        return sel
+
+    async def _generar_etiquetas_stgo(self, e=None):
+        sel = self._seleccion_stgo()
+        if not sel:
+            self._notificar("No hay ubicaciones para la selección indicada.", "#D97706")
+            return
+        try:
+            marca = datetime.now().strftime("%Y%m%d_%H%M%S")
+            nombre = "PUNTUALES" if self._codigos_escritos() else (self.dd_zona_stgo.value or "TODOS")
+            carpeta = Path("reportes_ubicaciones") / f"STGO_{nombre}_{marca}"
+            archivos = generar_pdfs_ubicaciones_stgo([d["codigo"] for d in sel], str(carpeta))
+            if not archivos:
+                raise RuntimeError("El generador no produjo archivos PDF.")
+            ruta_zip = shutil.make_archive(str(carpeta), "zip", root_dir=str(carpeta))
+            destino = await self.file_picker.save_file(
+                dialog_title="Guardar etiquetas de ubicaciones",
+                file_name=Path(ruta_zip).name,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["zip"],
+                src_bytes=Path(ruta_zip).read_bytes(),
+            )
+            detalle = f"Guardado en: {destino}" if destino else "Descarga enviada al navegador. Revise Descargas."
+            self.lbl_res_stgo.value = f"Listo: {len(sel)} etiquetas en {len(archivos)} PDF (uno por rack o zona). {detalle}"
+            self.lbl_res_stgo.color = self.GREEN
+            self.page.update()
+            self._notificar(f"Se generaron {len(sel)} etiquetas de Bodega Santiago.", "#047857")
+        except Exception as ex:
+            self.lbl_res_stgo.value = f"Error: {ex}"
+            self.lbl_res_stgo.color = self.RED
+            self.page.update()
+            self._notificar(f"Error generando etiquetas de ubicaciones: {ex}", "#B91C1C")
+
+    def _cambiar_bodega_ubicaciones(self, idx: int):
+        self.cont_ubicaciones.content = self.panel_ccp if idx == 1 else self.panel_stgo
+        if idx == 0 and not self.ubic_stgo:
+            self._cargar_ubicaciones_stgo()
+        self.page.update()
+
     def sel_sub_imp(self, idx: int):
         vistas = [
             self.sub_lpn,
@@ -517,4 +722,6 @@ class ImpresionModulo:
         ]
         indice = idx if 0 <= idx < len(vistas) else 0
         self.contenedor.content = vistas[indice]
+        if indice == 1 and self.cont_ubicaciones.content is self.panel_stgo and not self.ubic_stgo:
+            self._cargar_ubicaciones_stgo()
         self.page.update()
