@@ -1,4 +1,6 @@
 import os
+import time
+import inspect
 from datetime import datetime
 import pandas as pd
 import flet as ft
@@ -32,6 +34,7 @@ class PutawayModulo:
         mapa_descripciones_sku = {}
         mapa_multiplos_sku = {}
         zona_seleccionada = "TODOS_RACKS"
+        ubicaciones_bodega = []          # códigos de bodega_ubicaciones (para ocupación y gemelo 3D)
         ultima_bodega_sincronizada = None
 
         # --- HELPERS DE AISLAMIENTO MULTI-BODEGA CON RESPALDO SEGURO ---
@@ -289,49 +292,34 @@ class PutawayModulo:
             ("ETIQUETA", TEXT_WHITE),
         ]
         tabla_monitor_zona = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=34,
-            data_row_min_height=32,
-            data_row_max_height=38,
-            column_spacing=15,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[ft.DataColumn(ft.Text(t, weight=ft.FontWeight.BOLD, size=10, color=c)) for t, c in cols_stock],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=40, data_row_max_height=48,
+            column_spacing=20, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ["Ubicación", "Zona", "Nivel", "LPN", "SKU", "Descripción", "Unidades", "Lote", "Vencimiento", "Calidad", ""]],
             rows=[],
         )
         tabla_consultador_avanzado = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=34,
-            data_row_min_height=32,
-            data_row_max_height=38,
-            column_spacing=15,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[ft.DataColumn(ft.Text(t, weight=ft.FontWeight.BOLD, size=10, color=c)) for t, c in cols_stock],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=40, data_row_max_height=48,
+            column_spacing=20, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ["Ubicación", "Zona", "Nivel", "LPN", "SKU", "Descripción", "Unidades", "Lote", "Vencimiento", "Calidad", ""]],
             rows=[],
         )
         tabla_reabastecimiento = ft.DataTable(
-            heading_row_color="#181E20",
-            heading_row_height=34,
-            data_row_min_height=32,
-            data_row_max_height=38,
-            column_spacing=16,
-            data_text_style=ft.TextStyle(color=TEXT_WHITE),
-            columns=[
-                ft.DataColumn(ft.Text("PRIORIDAD", weight=ft.FontWeight.BOLD, size=10, color="#F87171")),
-                ft.DataColumn(ft.Text("SKU", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("DESCRIPCIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("STOCK NIVEL 1", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_AMBER)),
-                ft.DataColumn(ft.Text("STOCK RESERVA (N2+)", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
-                ft.DataColumn(ft.Text("LPN SUGERIDO (FEFO)", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
-                ft.DataColumn(ft.Text("DESDE UBICACIÓN", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
-                ft.DataColumn(ft.Text("ACCIÓN RF", weight=ft.FontWeight.BOLD, size=10, color=TEXT_MUTED)),
-            ],
+            heading_row_color=UI["card_alt"], heading_row_height=38, data_row_min_height=40, data_row_max_height=48,
+            column_spacing=20, horizontal_margin=14, divider_thickness=0.5,
+            columns=[ft.DataColumn(ft.Text(c, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"])) for c in ["Prioridad", "SKU", "Descripción", "Stock nivel 1", "Stock reserva", "Bajar este LPN (FEFO)", "Desde", ""]],
             rows=[],
         )
 
-        cont_tabla_monitor = envolver_tabla_scroll(tabla_monitor_zona, 285)
-        cont_tabla_consultador = envolver_tabla_scroll(tabla_consultador_avanzado, 340)
-        cont_tabla_reapro = envolver_tabla_scroll(tabla_reabastecimiento, 320)
-        contenedor_gemelo_visual = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
+        cont_tabla_monitor = ui_tabla(tabla_monitor_zona, 460)
+        cont_tabla_consultador = ui_tabla(tabla_consultador_avanzado, 520)
+        cont_tabla_reapro = ui_tabla(tabla_reabastecimiento, 520)
+        fila_racks = ft.ResponsiveRow(spacing=12, run_spacing=12)
+        col_ocupacion_gemelo = ft.Column(spacing=10, tight=True)
+        txt_buscar_zona = ft.TextField(
+            label="Filtrar esta zona (SKU, LPN, lote, ubicación)", prefix_icon=ft.Icons.SEARCH_ROUNDED, width=360, dense=True,
+            text_size=12.5, color=UI["texto"], bgcolor=UI["input"], border_color=UI["borde"], focused_border_color=UI["acento"],
+            label_style=ft.TextStyle(size=11.5, color=UI["texto_2"]), border_radius=8,
+        )
 
         # --- 7. SINCRONIZACIÓN DE DATOS CON SUPABASE ---
         def construir_item_stock(
@@ -364,8 +352,17 @@ class PutawayModulo:
             }
 
         def sincronizar_datos_supabase():
-            nonlocal lpns_en_anden, stock_en_racks, mapa_descripciones_sku, mapa_multiplos_sku, ultima_bodega_sincronizada
+            nonlocal lpns_en_anden, stock_en_racks, mapa_descripciones_sku, mapa_multiplos_sku, ultima_bodega_sincronizada, ubicaciones_bodega
             bodega_act = obtener_bodega_actual()
+            try:
+                ubicaciones_bodega = sorted({
+                    str(u.get("codigo_ubicacion") or "").strip().upper()
+                    for u in leer_tabla_paginada(lambda: supabase.table("bodega_ubicaciones").select("codigo_ubicacion, bodega").eq("bodega", bodega_act))
+                    if u.get("codigo_ubicacion") and not str(u.get("codigo_ubicacion")).upper().startswith("ZONA")
+                })
+            except Exception as ex_u:
+                print(f"[WARN] Ubicaciones de {bodega_act}: {ex_u}")
+                ubicaciones_bodega = []
             try:
                 filas_mae = cargar_tabla_paginada("maestra_sku", 4000, filtrar_bodega=False)
                 mapa_descripciones_sku = {}
@@ -399,7 +396,7 @@ class PutawayModulo:
             ubicados_map = {}
             lpns_ubicados_set = set()
 
-            for nom_tabla in ("bodega_inventario_ubicacion", "bodega_ubicaciones", "inventario_ubicaciones", "stock_ubicaciones", "ubicaciones_stock"):
+            for nom_tabla in ("bodega_inventario_ubicacion",):
                 # Si la tabla principal ya cargó el inventario de los racks, evitamos llamadas HTTP innecesarias a las tablas secundarias
                 if nom_tabla != "bodega_inventario_ubicacion" and ubicados_map:
                     continue
@@ -511,51 +508,35 @@ class PutawayModulo:
             ultima_bodega_sincronizada = bodega_act
 
         # --- 8. COMPONENTES DINÁMICOS (BOTONES DE RACKS Y FILAS DE TABLA) ---
+        def chip(texto: str, color: str):
+            return ft.Container(
+                padding=ft.Padding.symmetric(horizontal=8, vertical=3), border_radius=12,
+                bgcolor=ft.Colors.with_opacity(0.14, color), border=ft.Border.all(1, ft.Colors.with_opacity(0.5, color)),
+                content=ft.Text(texto, size=11, weight=ft.FontWeight.W_600, color=color),
+            )
+
         def crear_fila_tabla_stock(it: dict) -> ft.DataRow:
             es_anden = it["rack"] == "RECEPCION"
-            badge_niv = (
-                crear_badge_estado("ANDÉN RECEPCIÓN", "#92400E", "#FEF3C7")
-                if es_anden
-                else (
-                    crear_badge_estado("PICKING NIVEL 1", "#065F46", "#D1FAE5")
-                    if it["nivel_num"] <= 1
-                    else crear_badge_estado("RESERVA ALTURA", "#1E3A8A", "#DBEAFE")
-                )
-            )
+            zona_txt = "Andén" if es_anden else it["rack"].replace("RACK ", "Rack ")
+            nivel = chip("Andén", UI["alerta"]) if es_anden else (chip("Picking N1", UI["exito"]) if it["nivel_num"] <= 1 else chip(f"Reserva N{it['nivel_num']}", UI["acento"]))
             qa_val = it["qa"]
-            badge_qa = (
-                crear_badge_estado("APROBADO", "#065F46", "#D1FAE5")
-                if qa_val == "APROBADO"
-                else (
-                    crear_badge_estado("CUARENTENA", "#92400E", "#FEF3C7")
-                    if qa_val == "CUARENTENA"
-                    else crear_badge_estado("RECHAZADO", "#991B1B", "#FEE2E2")
-                )
-            )
+            qa = chip("Aprobado", UI["exito"]) if qa_val == "APROBADO" else (chip("Cuarentena", UI["alerta"]) if qa_val == "CUARENTENA" else chip("Rechazado", UI["peligro"]))
             lpn_c = it["lpn"]
-            return ft.DataRow(
-                cells=[
-                    ft.DataCell(ft.Text(it["ubicacion"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_AMBER if es_anden else ACCENT_CYAN)),
-                    ft.DataCell(ft.Text(it["rack"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                    ft.DataCell(badge_niv),
-                    ft.DataCell(ft.Text(lpn_c, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
-                    ft.DataCell(ft.Text(it["sku"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                    ft.DataCell(ft.Text(it["descripcion"][:28], size=11, color=TEXT_MUTED)),
-                    ft.DataCell(ft.Text(str(it["unidades"]), weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
-                    ft.DataCell(ft.Text(it["lote"], size=11, color=TEXT_WHITE)),
-                    ft.DataCell(ft.Text(it["vencimiento"], size=11, color=TEXT_WHITE)),
-                    ft.DataCell(badge_qa),
-                    ft.DataCell(
-                        boton_primario(
-                            "LPN 15x10",
-                            ft.Icons.PRINT_OUTLINED,
-                            lambda ev, cod=lpn_c: reimprimir_desde_fila(cod),
-                            ACCENT_TEAL,
-                            height_val=26,
-                        )
-                    ),
-                ]
-            )
+            return ft.DataRow(cells=[
+                ft.DataCell(ft.Text(it["ubicacion"], weight=ft.FontWeight.W_700, size=12.5, color=UI["texto"])),
+                ft.DataCell(ft.Text(zona_txt, size=12, color=UI["texto_2"])),
+                ft.DataCell(nivel),
+                ft.DataCell(ft.Text(lpn_c, size=12, color=UI["texto"])),
+                ft.DataCell(ft.Text(it["sku"], weight=ft.FontWeight.W_600, size=12, color=UI["texto"])),
+                ft.DataCell(ft.Text(it["descripcion"][:36], size=12, color=UI["texto_2"], tooltip=it["descripcion"])),
+                ft.DataCell(ft.Text(f"{it['unidades']:,}".replace(",", "."), weight=ft.FontWeight.W_700, size=12.5, color=UI["texto"])),
+                ft.DataCell(ft.Text(it["lote"], size=12, color=UI["texto"])),
+                ft.DataCell(ft.Text(it["vencimiento"], size=12, color=UI["texto"])),
+                ft.DataCell(qa),
+                ft.DataCell(ft.IconButton(icon=ft.Icons.PRINT_OUTLINED, icon_size=18, icon_color=UI["acento"],
+                                          tooltip="Reimprimir etiqueta LPN 15x10",
+                                          on_click=lambda ev, cod=lpn_c: reimprimir_desde_fila(cod))),
+            ])
 
         def crear_boton_zona_rack(
             clave_zona: str,
@@ -714,101 +695,84 @@ class PutawayModulo:
                 opt_w("RECEPCION", "SOLO EN RECEPCIÓN"),
             ] + [opt_w(rk, rk) for rk in racks_base]
 
-            fila_botones_zonas.controls.clear()
-            fila_barras_racks.controls.clear()
-
             def sel_zona(nueva_z: str):
                 nonlocal zona_seleccionada
                 zona_seleccionada = nueva_z
                 renderizar_todo_el_modulo()
 
-            # Botón Recepción y Botón Todos los Racks
-            fila_botones_zonas.controls.append(
-                crear_boton_zona_rack(
-                    "RECEPCION",
-                    "RECEPCIÓN (ANDÉN)",
-                    ft.Icons.MOVE_TO_INBOX_ROUNDED,
-                    len(lpns_en_anden),
-                    sum(x["unidades"] for x in lpns_en_anden),
-                    len({x["sku"] for x in lpns_en_anden}),
-                    ACCENT_AMBER,
-                    lambda e: sel_zona("RECEPCION"),
-                )
-            )
-            fila_botones_zonas.controls.append(
-                crear_boton_zona_rack(
-                    "TODOS_RACKS",
-                    "TODOS LOS RACKS",
-                    ft.Icons.WAREHOUSE_OUTLINED,
-                    len(stock_en_racks),
-                    sum(x["unidades"] for x in stock_en_racks),
-                    len({x["sku"] for x in stock_en_racks}),
-                    ACCENT_CYAN,
-                    lambda e: sel_zona("TODOS_RACKS"),
-                )
-            )
+            # Ocupación por rack: posiciones de la maestra vs posiciones con stock
+            pos_por_rack = {}
+            for cod in ubicaciones_bodega:
+                pos_por_rack.setdefault(clasificar_rack_y_nivel(cod)[0], set()).add(cod)
+            ocup_por_rack = {}
+            for x in stock_en_racks:
+                ocup_por_rack.setdefault(x["rack"], set()).add(x["ubicacion"])
+            for rk in pos_por_rack:
+                if rk.startswith("RACK ") and rk not in racks_base:
+                    racks_base.append(rk)
+            racks_base.sort()
 
-            colores_rk = [ACCENT_GREEN, ACCENT_BLUE, ACCENT_PURPLE, "#EC4899", "#14B8A6", "#F97316"]
-            datos_graf = [("RECEPCIÓN", len(lpns_en_anden), ACCENT_AMBER, "RECEPCION")]
+            def tarjeta_zona(clave, titulo, icono, color, items, ocupadas=None, total=None):
+                activo = zona_seleccionada == clave
+                pct = (ocupadas / total) if total else None
+                return ft.Container(
+                    col={"xs": 6, "md": 4, "lg": 2},
+                    padding=12, border_radius=10, ink=True,
+                    on_click=lambda e, c=clave: sel_zona(c),
+                    bgcolor=ft.Colors.with_opacity(0.10, color) if activo else UI["card_alt"],
+                    border=ft.Border.all(1.5 if activo else 1, color if activo else UI["borde"]),
+                    content=ft.Column([
+                        ft.Row([ft.Icon(icono, size=16, color=color),
+                                ft.Text(titulo, size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])], spacing=6),
+                        ft.Row([
+                            ft.Text(str(len(items)), size=22, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                            ft.Text("LPN", size=11, color=UI["texto_2"]),
+                        ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.END),
+                        ft.Text(f"{sum(x['unidades'] for x in items):,} UN · {len({x['sku'] for x in items})} SKU".replace(",", "."),
+                                size=11, color=UI["texto_2"]),
+                        *([ft.ProgressBar(value=min(1.0, pct), height=5, color=color, bgcolor="#2A3538", border_radius=3),
+                           ft.Text(f"{ocupadas}/{total} posiciones · {int(round(pct * 100))}%", size=10.5, color=UI["texto_3"])]
+                          if pct is not None else []),
+                    ], spacing=4, tight=True),
+                )
 
-            for i_r, nom_rk in enumerate(racks_base):
+            total_pos = sum(len(v) for k, v in pos_por_rack.items() if k.startswith("RACK "))
+            total_ocup = sum(len(ocup_por_rack.get(k, set()) & v) for k, v in pos_por_rack.items())
+            tarjetas = [
+                tarjeta_zona("RECEPCION", "Andén", ft.Icons.MOVE_TO_INBOX_ROUNDED, UI["alerta"], lpns_en_anden),
+                tarjeta_zona("TODOS_RACKS", "Todos los racks", ft.Icons.WAREHOUSE_OUTLINED, UI["acento"], stock_en_racks,
+                             total_ocup, total_pos),
+            ]
+            for nom_rk in racks_base:
                 items_r = [x for x in stock_en_racks if x["rack"] == nom_rk]
-                col_r = colores_rk[i_r % len(colores_rk)]
-                fila_botones_zonas.controls.append(
-                    crear_boton_zona_rack(
-                        nom_rk,
-                        nom_rk,
-                        ft.Icons.DNS_OUTLINED,
-                        len(items_r),
-                        sum(x["unidades"] for x in items_r),
-                        len({x["sku"] for x in items_r}),
-                        col_r,
-                        lambda e, rk_s=nom_rk: sel_zona(rk_s),
-                    )
-                )
-                datos_graf.append((nom_rk, len(items_r), col_r, nom_rk))
+                pos_r = pos_por_rack.get(nom_rk, set())
+                tarjetas.append(tarjeta_zona(nom_rk, nom_rk.replace("RACK ", "Rack "), ft.Icons.VIEW_COLUMN_OUTLINED, "#818CF8",
+                                             items_r, len(ocup_por_rack.get(nom_rk, set()) & pos_r) if pos_r else None, len(pos_r) or None))
+            fila_racks.controls = tarjetas
+            lbl_dig_ocupacion.value = f"{int(round(total_ocup * 100 / total_pos))}%" if total_pos else "—"
+            lbl_det_ocupacion.value = f"{total_ocup} de {total_pos} posiciones con stock" if total_pos else "Sin maestra de ubicaciones"
 
-            max_g = max([d[1] for d in datos_graf] + [1])
-            for et_g, cnt_g, col_g, cl_g in datos_graf:
-                alto_b = max(10, int((cnt_g / max_g) * 95)) if cnt_g > 0 else 5
-                fila_barras_racks.controls.append(
-                    ft.Column(
-                        [
-                            ft.Text(str(cnt_g), size=10, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            ft.Container(
-                                width=44,
-                                height=95,
-                                bgcolor="#141A1C",
-                                border_radius=4,
-                                alignment=ft.Alignment.BOTTOM_CENTER,
-                                ink=True,
-                                on_click=lambda e, c=cl_g: sel_zona(c),
-                                content=ft.Container(width=44, height=alto_b, bgcolor=col_g, border_radius=4),
-                            ),
-                            ft.Text(
-                                et_g,
-                                size=10,
-                                weight=ft.FontWeight.BOLD,
-                                color=ACCENT_CYAN if zona_seleccionada == cl_g else TEXT_MUTED,
-                            ),
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=3,
-                    )
-                )
+            # Ocupación por rack para la pantalla del gemelo
+            col_ocupacion_gemelo.controls = [
+                ft.Row([
+                    ft.Text(rk.replace("RACK ", "Rack "), size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"], width=70),
+                    ft.Container(content=ft.ProgressBar(value=(len(ocup_por_rack.get(rk, set()) & pos_por_rack.get(rk, set())) / len(pos_por_rack[rk])) if pos_por_rack.get(rk) else 0,
+                                                        height=8, color=UI["acento"], bgcolor="#2A3538", border_radius=4), expand=True),
+                    ft.Text(f"{len(ocup_por_rack.get(rk, set()) & pos_por_rack.get(rk, set()))}/{len(pos_por_rack.get(rk, set()))}",
+                            size=12, color=UI["texto_2"], width=70, text_align=ft.TextAlign.RIGHT),
+                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                for rk in racks_base
+            ]
 
             if zona_seleccionada == "RECEPCION":
                 items_vista = lpns_en_anden
-                lbl_titulo_tabla_monitor.value = f"📥 [{bodega_act}] LPNs EN RECEPCIÓN PENDIENTES DE UBICAR ({len(items_vista)} LPNs)"
-                lbl_titulo_tabla_monitor.color = ACCENT_AMBER
+                lbl_titulo_tabla_monitor.value = f"Andén · {len(items_vista)} LPN pendientes de ubicar"
             elif zona_seleccionada == "TODOS_RACKS":
                 items_vista = stock_en_racks
-                lbl_titulo_tabla_monitor.value = f"🏢 [{bodega_act}] MAPA GENERAL DE STOCK EN TODOS LOS RACKS ({len(items_vista)} LPNs)"
-                lbl_titulo_tabla_monitor.color = ACCENT_CYAN
+                lbl_titulo_tabla_monitor.value = f"Todos los racks · {len(items_vista)} LPN"
             else:
                 items_vista = [x for x in stock_en_racks if x["rack"] == zona_seleccionada]
-                lbl_titulo_tabla_monitor.value = f"🗄️ [{bodega_act}] PALLETS (LPNs) ALMACENADOS EN {zona_seleccionada} ({len(items_vista)} LPNs)"
-                lbl_titulo_tabla_monitor.color = ACCENT_GREEN
+                lbl_titulo_tabla_monitor.value = f"{zona_seleccionada.replace('RACK ', 'Rack ')} · {len(items_vista)} LPN"
 
             lbl_dig_anden.value = str(len(lpns_en_anden))
             lbl_dig_racks.value = str(len(stock_en_racks))
@@ -819,7 +783,12 @@ class PutawayModulo:
             lbl_dig_skus_zona.value = str(len({x["sku"] for x in items_vista}))
             lbl_dig_pos_ocup.value = str(len({x["ubicacion"] for x in items_vista}))
 
-            tabla_monitor_zona.rows = [crear_fila_tabla_stock(it) for it in items_vista[:200]]
+            q_zona = (txt_buscar_zona.value or "").strip().upper()
+            if q_zona:
+                items_vista = [x for x in items_vista if q_zona in f"{x['ubicacion']} {x['lpn']} {x['sku']} {x['descripcion']} {x['lote']}".upper()]
+            lbl_subtitulo_tabla_monitor.value = (f"{len(items_vista)} resultado(s) para «{q_zona}»" if q_zona else
+                                                 "Toque un rack arriba para ver solo sus pallets.")
+            tabla_monitor_zona.rows = [crear_fila_tabla_stock(it) for it in items_vista[:300]]
 
             # Alertas de Reabastecimiento (Reserva N2+ -> Picking N1) con ordenamiento FEFO real y umbral inteligente
             por_sku = {}
@@ -854,328 +823,204 @@ class PutawayModulo:
                     tabla_reabastecimiento.rows.append(
                         ft.DataRow(
                             cells=[
-                                ft.DataCell(
-                                    crear_badge_estado(
-                                        "QUIEBRE N1" if crit else "REABASTECER",
-                                        "#991B1B" if crit else "#92400E",
-                                        "#FEE2E2" if crit else "#FEF3C7",
-                                    )
-                                ),
+                                ft.DataCell(chip("Sin stock en N1" if crit else "Reabastecer", UI["peligro"] if crit else UI["alerta"])),
                                 ft.DataCell(ft.Text(sk, weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                                 ft.DataCell(ft.Text(mapa_descripciones_sku.get(sk, "-")[:30], size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(f"{d_n['n1']} UN ({d_n['cajas_n1']} Cj)", weight=ft.FontWeight.BOLD, size=11, color="#F87171" if crit else ACCENT_AMBER)),
                                 ft.DataCell(ft.Text(f"{d_n['res']} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
                                 ft.DataCell(ft.Text(f"{cand['lpn']}{venc_cand_txt}", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                                 ft.DataCell(ft.Text(cand["ubicacion"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
-                                ft.DataCell(ft.Text("📱 Bajar con App RF", size=10, color=TEXT_MUTED)),
+                                ft.DataCell(ft.Text("Bajar con el celular", size=11.5, color=UI["texto_3"])),
                             ]
                         )
                     )
             lbl_dig_alertas_reapro.value = str(alertas_cnt)
-
-            # Gemelo Digital Visual
-            contenedor_gemelo_visual.controls.clear()
-            for nom_rk in racks_base:
-                items_r = [x for x in stock_en_racks if x["rack"] == nom_rk]
-                chips = [
-                    ft.Container(
-                        width=124,
-                        padding=8,
-                        bgcolor="#064E3B" if p["nivel_num"] <= 1 else "#1E3A8A",
-                        border_radius=6,
-                        border=ft.Border.all(1, "#34D399" if p["nivel_num"] <= 1 else ACCENT_CYAN),
-                        content=ft.Column(
-                            [
-                                ft.Text(p["ubicacion"], size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                                ft.Text(p["lpn"], size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN),
-                                ft.Text(f"{p['sku']} • {p['unidades']} UN", size=9, color=TEXT_WHITE),
-                            ],
-                            spacing=2,
-                        ),
-                    )
-                    for p in items_r[:36]
-                ] or [ft.Text(f"Sin posiciones ocupadas en {nom_rk}", size=11, color=TEXT_MUTED)]
-                contenedor_gemelo_visual.controls.append(
-                    tarjeta_dark(
-                        ft.Column(
-                            [
-                                ft.Text(
-                                    f"MAPA DE POSICIONES ({bodega_act}) — {nom_rk} ({len(items_r)} LPNs)",
-                                    size=12,
-                                    weight=ft.FontWeight.BOLD,
-                                    color=TEXT_WHITE,
-                                ),
-                                ft.Divider(color=BORDER_COLOR, height=4),
-                                ft.Row(chips, wrap=True, spacing=8, run_spacing=8),
-                            ],
-                            spacing=6,
-                        )
-                    )
-                )
 
             ejecutar_filtro_consultador()
 
         def cargar_inventario_ubicaciones(e=None):
             sincronizar_datos_supabase()
             renderizar_todo_el_modulo()
-
-        # --- 9. VISTAS DEL MÓDULO ---
-        panel_relojes_izquierdo = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Text("Distribución global de pallets (LPNs) en Bodega", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Row(
-                        [
-                            crear_caja_digital(lbl_dig_anden, "En Recepción", ACCENT_AMBER, 88),
-                            crear_caja_digital(lbl_dig_racks, "En Racks", ACCENT_CYAN, 88),
-                            crear_caja_digital(lbl_dig_picking_n1, "Picking N1", ACCENT_GREEN, 88),
-                            crear_caja_digital(lbl_dig_reserva_alt, "Reserva N2+", ACCENT_PURPLE, 88),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=8),
-                    ft.Text("Indicadores de la Zona / Rack seleccionado", size=12, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                    ft.Row(
-                        [
-                            crear_caja_digital(lbl_dig_unid_zona, "Unid. Zona", ACCENT_TEAL, 88),
-                            crear_caja_digital(lbl_dig_skus_zona, "SKUs Zona", ACCENT_BLUE, 88),
-                            crear_caja_digital(lbl_dig_pos_ocup, "Ubic. Ocup.", "#10B981", 88),
-                            crear_caja_digital(lbl_dig_alertas_reapro, "Alertas N1", "#EF4444", 88),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                ],
-                spacing=8,
-            ),
-            width_val=425,
-        )
-
-        panel_grafico_derecho = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Text("Ocupación de LPNs: Recepción vs. Racks (A, B, C, D...)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
-                            ft.Text("📱 Putaway exclusivo vía App Móvil RF", size=11, color=ACCENT_CYAN, weight=ft.FontWeight.BOLD),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=6),
-                    ft.Container(
-                        height=150,
-                        padding=10,
-                        bgcolor="#181E20",
-                        border_radius=6,
-                        alignment=ft.Alignment.BOTTOM_LEFT,
-                        content=fila_barras_racks,
-                    ),
-                ],
-                spacing=8,
-            ),
-            expand_val=True,
-        )
-
-        vista_1_monitor_racks = ft.Column(
-            [
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Text(
-                                "SELECCIONE UN BOTÓN DE ZONA O RACK PARA VER SUS LPNs EN TIEMPO REAL",
-                                size=12,
-                                weight=ft.FontWeight.BOLD,
-                                color=TEXT_WHITE,
-                            ),
-                            ft.Divider(color=BORDER_COLOR, height=4),
-                            fila_botones_zonas,
-                        ],
-                        spacing=8,
-                    )
-                ),
-                ft.Row([panel_relojes_izquierdo, panel_grafico_derecho], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
-                tarjeta_dark(
-                    ft.Column(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Column([lbl_titulo_tabla_monitor, lbl_subtitulo_tabla_monitor], spacing=2),
-                                    ft.Row(
-                                        [
-                                            boton_primario(
-                                                "IR A ZONA CONSULTADOR",
-                                                ft.Icons.MANAGE_SEARCH_ROUNDED,
-                                                lambda e: self.sel_sub_put(2),
-                                                ACCENT_BLUE,
-                                                height_val=30,
-                                            ),
-                                            boton_primario(
-                                                "EXPORTAR EXCEL",
-                                                ft.Icons.TABLE_VIEW_OUTLINED,
-                                                exportar_excel_consultador,
-                                                ACCENT_TEAL,
-                                                height_val=30,
-                                            ),
-                                        ],
-                                        spacing=8,
-                                    ),
-                                ],
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                wrap=True,
-                            ),
-                            ft.Divider(color=BORDER_COLOR, height=1),
-                            cont_tabla_monitor,
-                        ],
-                        spacing=8,
-                    )
-                ),
-            ],
-            spacing=10,
-        )
-
-        vista_2_reabastecimiento = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Text(
-                                "ALERTAS DE REABASTECIMIENTO (RESERVA ALTURA -> NIVEL 1 PICKING)",
-                                size=13,
-                                weight=ft.FontWeight.BOLD,
-                                color=TEXT_WHITE,
-                            ),
-                            boton_primario(
-                                "REFRESCAR ALERTAS",
-                                ft.Icons.REFRESH_ROUNDED,
-                                cargar_inventario_ubicaciones,
-                                ACCENT_TEAL,
-                                height_val=30,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=1),
-                    cont_tabla_reapro,
-                ],
-                spacing=8,
-            )
-        )
-
-        vista_3_consultador_aparte = tarjeta_dark(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Text(
-                                "🔍 ZONA CONSULTADOR AVANZADO DE STOCK, UBICACIONES Y LPNs",
-                                size=14,
-                                weight=ft.FontWeight.W_900,
-                                color=TEXT_WHITE,
-                            ),
-                            ft.Row(
-                                [
-                                    boton_primario(
-                                        "LIMPIAR FILTROS",
-                                        ft.Icons.FILTER_ALT_OFF_OUTLINED,
-                                        limpiar_filtros_consultador,
-                                        "#475569",
-                                        height_val=30,
-                                    ),
-                                    boton_primario(
-                                        "EXPORTAR EXCEL (.XLSX)",
-                                        ft.Icons.DOWNLOAD_ROUNDED,
-                                        exportar_excel_consultador,
-                                        "#047857",
-                                        height_val=30,
-                                    ),
-                                ],
-                                spacing=8,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
-                    ),
-                    ft.Divider(color=BORDER_COLOR, height=4),
-                    ft.Row([txt_cons_buscar, dd_cons_zona, dd_cons_nivel, dd_cons_qa], spacing=8, wrap=True),
-                    ft.Container(
-                        padding=ft.Padding.symmetric(horizontal=14, vertical=8),
-                        bgcolor="#181E20",
-                        border_radius=6,
-                        border=ft.Border.all(1, BORDER_COLOR),
-                        content=ft.Row(
-                            [
-                                ft.Text("RESUMEN DE BÚSQUEDA:", size=11, weight=ft.FontWeight.BOLD, color=TEXT_MUTED),
-                                lbl_cons_res_lpns,
-                                lbl_cons_res_unid,
-                                lbl_cons_res_skus,
-                                lbl_cons_res_ubic,
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            wrap=True,
-                        ),
-                    ),
-                    cont_tabla_consultador,
-                ],
-                spacing=10,
-            )
-        )
-
-        vista_4_gemelo_digital = ft.Column([contenedor_gemelo_visual], spacing=10)
-        contenedor_subvista_putaway = ft.Container(content=vista_1_monitor_racks)
-
-        def cambiar_subvista_interna(idx: int):
-            contenedor_subvista_putaway.content = [
-                vista_1_monitor_racks,
-                vista_2_reabastecimiento,
-                vista_3_consultador_aparte,
-                vista_4_gemelo_digital,
-            ][idx]
+            actualizar_detalle_kpis()
             page.update()
 
-        barra_titulo_monitor = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
-            bgcolor="#222A2C",
-            border_radius=8,
-            border=ft.Border.all(1, BORDER_COLOR),
-            content=ft.Row(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.ACCOUNT_TREE_OUTLINED, color=ACCENT_CYAN, size=22),
-                            ft.Text(
-                                "TORRE DE ALMACENAMIENTO (PUTAWAY MÓVIL RF) & MAPA DE RACKS",
-                                size=15,
-                                weight=ft.FontWeight.W_900,
-                                color=TEXT_WHITE,
-                            ),
-                        ],
-                        spacing=8,
-                    ),
-                    ft.Row(
-                        [
-                            boton_primario("1. MONITOR RACKS", ft.Icons.DOMAIN_OUTLINED, lambda e: cambiar_subvista_interna(0), ACCENT_TEAL, height_val=30),
-                            boton_primario("2. ZONA CONSULTADOR", ft.Icons.MANAGE_SEARCH_ROUNDED, lambda e: cambiar_subvista_interna(2), ACCENT_BLUE, height_val=30),
-                            boton_primario("3. REABASTECIMIENTO N1", ft.Icons.ARROW_DOWNWARD_ROUNDED, lambda e: cambiar_subvista_interna(1), "#D97706", height_val=30),
-                            boton_primario("4. GEMELO DIGITAL", ft.Icons.VIEW_IN_AR_ROUNDED, lambda e: cambiar_subvista_interna(3), ACCENT_PURPLE, height_val=30),
-                            ft.IconButton(
-                                icon=ft.Icons.SYNC_ROUNDED,
-                                icon_color=ACCENT_CYAN,
-                                tooltip="Sincronizar con App RF",
-                                on_click=cargar_inventario_ubicaciones,
-                            ),
-                        ],
-                        spacing=8,
-                        wrap=True,
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                wrap=True,
-            ),
+        # --- 9. PANTALLAS DEL MÓDULO ---
+        lbl_dig_ocupacion = ft.Text("—")
+        lbl_det_ocupacion = ft.Text("", size=11, color=UI["texto_3"])
+        lbl_det_racks = ft.Text("", size=11, color=UI["texto_3"])
+
+        def actualizar_detalle_kpis():
+            n1 = sum(1 for x in stock_en_racks if x["nivel_num"] <= 1)
+            lbl_det_racks.value = f"{n1} en picking N1 · {len(stock_en_racks) - n1} en reserva"
+
+        txt_buscar_zona.on_change = lambda e: renderizar_todo_el_modulo()
+
+        def abrir_gemelo_3d(e=None):
+            """Genera la página 3D con los datos actuales y la abre en una pestaña nueva."""
+            from servicios.gemelo_3d import generar_html_gemelo
+            if not stock_en_racks and not ubicaciones_bodega:
+                sincronizar_datos_supabase()
+            bodega_act = obtener_bodega_actual()
+            html = generar_html_gemelo(bodega_act, ubicaciones_bodega, stock_en_racks, lpns_en_anden)
+            nombre = f"gemelo_3d_{bodega_act.replace(' ', '_').lower()}.html"
+            raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            for carpeta in {os.path.join(os.getcwd(), "assets", "descargas"), os.path.join(raiz, "assets", "descargas")}:
+                try:
+                    os.makedirs(carpeta, exist_ok=True)
+                    with open(os.path.join(carpeta, nombre), "w", encoding="utf-8") as fh:
+                        fh.write(html)
+                except Exception as ex:
+                    print(f"[WARN] Gemelo 3D: {ex}")
+            url = f"/descargas/{nombre}?v={int(time.time())}"
+            btn_ver_gemelo.url = url
+            btn_ver_gemelo.visible = True
+
+            async def _abrir():
+                try:
+                    r = self.page.launch_url(url, web_popup_window_name="_blank")
+                    if inspect.iscoroutine(r):
+                        await r
+                except Exception:
+                    pass
+            try:
+                self.page.run_task(_abrir)
+            except Exception:
+                pass
+            notificar("Gemelo 3D generado. Si no se abrió, use el botón «Ver en pestaña nueva».", "#047857")
+            page.update()
+
+        # ---------- 1. Mapa de racks ----------
+        tarjeta_tabla_zona = ft.Container(
+            padding=16, bgcolor=UI["card"], border_radius=10, border=ft.Border.all(1, UI["borde"]),
+            content=ft.Column([
+                ft.Row([
+                    lbl_titulo_tabla_monitor,
+                    ft.Row([txt_buscar_zona,
+                            ui_menu("Exportar", ft.Icons.DOWNLOAD_ROUNDED, [
+                                ("Todo el stock por ubicación (Excel)", ft.Icons.TABLE_VIEW_ROUNDED, exportar_excel_consultador),
+                            ])], spacing=8, wrap=True),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True, run_spacing=8),
+                lbl_subtitulo_tabla_monitor,
+                cont_tabla_monitor,
+            ], spacing=10, tight=True),
         )
+        vista_1_monitor_racks = ft.Column([
+            ft.ResponsiveRow([
+                ui_kpi(lbl_dig_anden, "Pendientes de ubicar", ft.Icons.MOVE_TO_INBOX_ROUNDED, UI["alerta"],
+                       ft.Text("LPN recibidos sin almacenar", size=11, color=UI["texto_3"])),
+                ui_kpi(lbl_dig_racks, "LPN en racks", ft.Icons.WAREHOUSE_OUTLINED, UI["acento"], lbl_det_racks),
+                ui_kpi(lbl_dig_ocupacion, "Ocupación de racks", ft.Icons.GRID_VIEW_ROUNDED, "#818CF8", lbl_det_ocupacion),
+                ui_kpi(lbl_dig_alertas_reapro, "Por reabastecer", ft.Icons.ARROW_DOWNWARD_ROUNDED, UI["peligro"],
+                       ft.Text("SKU con poco stock en nivel 1", size=11, color=UI["texto_3"])),
+            ], spacing=12, run_spacing=12),
+            ui_tarjeta(fila_racks, titulo="Zonas y racks", subtitulo="Toque una tarjeta para ver sus pallets.",
+                       icono=ft.Icons.VIEW_COLUMN_OUTLINED),
+            tarjeta_tabla_zona,
+        ], spacing=12)
+        lbl_titulo_tabla_monitor.size = 14
+        lbl_titulo_tabla_monitor.weight = ft.FontWeight.W_600
+        lbl_titulo_tabla_monitor.color = UI["texto"]
+        lbl_subtitulo_tabla_monitor.color = UI["texto_2"]
 
-        col_putaway = ft.Column([barra_titulo_monitor, contenedor_subvista_putaway], spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+        # ---------- 2. Reabastecimiento ----------
+        vista_2_reabastecimiento = ft.Column([
+            ui_tarjeta(cont_tabla_reapro, titulo="SKU a bajar de reserva a nivel 1",
+                       subtitulo="Ordenado por menor stock en nivel 1. El LPN sugerido es el que vence primero (FEFO).",
+                       icono=ft.Icons.ARROW_DOWNWARD_ROUNDED),
+        ], spacing=12)
 
-        self.vista = ft.Container(padding=14, bgcolor=BG_MODULO, content=col_putaway, expand=True)
+        # ---------- 3. Buscar pallet / ubicación ----------
+        txt_cons_buscar.prefix_icon = ft.Icons.SEARCH_ROUNDED
+        resumen_busqueda = ft.Row([
+            ft.Row([ft.Icon(ft.Icons.QR_CODE_2_ROUNDED, size=16, color=UI["texto_2"]), lbl_cons_res_lpns], spacing=6, tight=True),
+            ft.Row([ft.Icon(ft.Icons.INVENTORY_2_OUTLINED, size=16, color=UI["texto_2"]), lbl_cons_res_unid], spacing=6, tight=True),
+            ft.Row([ft.Icon(ft.Icons.CATEGORY_OUTLINED, size=16, color=UI["texto_2"]), lbl_cons_res_skus], spacing=6, tight=True),
+            ft.Row([ft.Icon(ft.Icons.PLACE_OUTLINED, size=16, color=UI["texto_2"]), lbl_cons_res_ubic], spacing=6, tight=True),
+        ], spacing=22, wrap=True)
+        for lbl in (lbl_cons_res_lpns, lbl_cons_res_unid, lbl_cons_res_skus, lbl_cons_res_ubic):
+            lbl.size = 13
+            lbl.weight = ft.FontWeight.W_600
+            lbl.color = UI["texto"]
+            lbl.font_family = None
+        vista_3_consultador_aparte = ft.Column([
+            ui_tarjeta(
+                ft.Column([
+                    ft.ResponsiveRow([
+                        ft.Container(content=txt_cons_buscar, col={"xs": 12, "lg": 6}),
+                        ft.Container(content=dd_cons_zona, col={"xs": 12, "sm": 4, "lg": 2}),
+                        ft.Container(content=dd_cons_nivel, col={"xs": 12, "sm": 4, "lg": 2}),
+                        ft.Container(content=dd_cons_qa, col={"xs": 12, "sm": 4, "lg": 2}),
+                    ], spacing=10, run_spacing=10),
+                    resumen_busqueda,
+                    cont_tabla_consultador,
+                ], spacing=12, tight=True),
+                titulo="Buscar en racks y andén", icono=ft.Icons.MANAGE_SEARCH_ROUNDED,
+                acciones=[
+                    ui_boton("Limpiar", ft.Icons.FILTER_ALT_OFF_OUTLINED, limpiar_filtros_consultador, "texto"),
+                    ui_boton("Exportar Excel", ft.Icons.DOWNLOAD_ROUNDED, exportar_excel_consultador, "secundario"),
+                ],
+            ),
+        ], spacing=12)
+
+        # ---------- 4. Gemelo digital 3D ----------
+        btn_ver_gemelo = ft.Button(
+            content=ft.Text("Ver en pestaña nueva", size=12, weight=ft.FontWeight.W_600),
+            icon=ft.Icons.OPEN_IN_NEW_ROUNDED, height=36, visible=False, url="",
+            bgcolor=UI["card_alt"], color=UI["texto"],
+            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=6), side=ft.BorderSide(1, UI["borde"])),
+        )
+        vista_4_gemelo_digital = ft.Column([
+            ft.Container(
+                padding=24, border_radius=12,
+                gradient=ft.LinearGradient(begin=ft.Alignment.TOP_LEFT, end=ft.Alignment.BOTTOM_RIGHT,
+                                           colors=["#0E3A4A", "#1B2122"]),
+                border=ft.Border.all(1, UI["borde"]),
+                content=ft.Row([
+                    ft.Container(width=64, height=64, border_radius=14, bgcolor=ft.Colors.with_opacity(0.18, UI["acento"]),
+                                 alignment=ft.Alignment.CENTER, content=ft.Icon(ft.Icons.VIEW_IN_AR_ROUNDED, size=36, color=UI["acento"])),
+                    ft.Column([
+                        ft.Text("Gemelo digital 3D de la bodega", size=20, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                        ft.Text("Racks, niveles y pallets en tres dimensiones con los datos actuales del WMS. "
+                                "Gire con el mouse, haga zoom, busque un SKU o LPN y coloree por zona, vencimiento o calidad.",
+                                size=12.5, color=UI["texto_2"]),
+                        ft.Row([ui_boton("Abrir gemelo 3D", ft.Icons.VIEW_IN_AR_ROUNDED, abrir_gemelo_3d), btn_ver_gemelo],
+                               spacing=10, wrap=True),
+                    ], spacing=8, expand=True, tight=True),
+                ], spacing=20, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ),
+            ui_tarjeta(col_ocupacion_gemelo, titulo="Ocupación por rack", subtitulo="Posiciones con stock / posiciones de la maestra de ubicaciones.",
+                       icono=ft.Icons.GRID_VIEW_ROUNDED),
+        ], spacing=12)
+
+        # ---------- Armado ----------
+        vistas_put = [vista_1_monitor_racks, vista_2_reabastecimiento, vista_3_consultador_aparte, vista_4_gemelo_digital]
+        titulos_put = [
+            ("Mapa de racks", "Dónde están los pallets: andén, racks y niveles."),
+            ("Reabastecimiento", "Qué bajar de reserva a nivel 1 para que picking no se quede sin stock."),
+            ("Buscar pallet o ubicación", "Encuentre un LPN, SKU, lote o posición en toda la bodega."),
+            ("Gemelo digital 3D", "La bodega en tres dimensiones con su stock actual."),
+        ]
+        contenedor_subvista_putaway = ft.Container(content=vista_1_monitor_racks)
+        lbl_titulo_put = ft.Text(titulos_put[0][0], size=18, weight=ft.FontWeight.W_700, color=UI["texto"])
+        lbl_sub_put = ft.Text(titulos_put[0][1], size=12, color=UI["texto_2"])
+
+        def cambiar_subvista_interna(idx: int):
+            idx = idx if 0 <= idx < len(vistas_put) else 0
+            contenedor_subvista_putaway.content = vistas_put[idx]
+            lbl_titulo_put.value, lbl_sub_put.value = titulos_put[idx]
+            actualizar_detalle_kpis()
+            page.update()
+
+        encabezado = ft.Row([
+            ft.Row([ft.Icon(ft.Icons.WAREHOUSE_OUTLINED, size=24, color=UI["acento"]),
+                    ft.Column([lbl_titulo_put, lbl_sub_put], spacing=1, tight=True)],
+                   spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ui_boton("Actualizar", ft.Icons.SYNC_ROUNDED, cargar_inventario_ubicaciones, "secundario"),
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True)
+
+        col_putaway = ft.Column([encabezado, contenedor_subvista_putaway], spacing=16, scroll=ft.ScrollMode.AUTO, expand=True)
+
+        self.vista = ft.Container(padding=ft.Padding.only(left=16, top=14, right=16, bottom=16), bgcolor=UI["bg"], content=col_putaway, expand=True)
         self.contenedor = contenedor_subvista_putaway
         self.cargar_inventario_ubicaciones_func = cargar_inventario_ubicaciones
         self.cambiar_subvista_interna_func = cambiar_subvista_interna

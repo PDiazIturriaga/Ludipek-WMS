@@ -903,10 +903,10 @@ def main(page: ft.Page):
                 puta.cargar_inventario_ubicaciones,
                 puta.sel_sub_put,
                 [
-                    ("1. Putaway & Mapa de Stock", _ico("ALL_INBOX_OUTLINED", "DOMAIN_OUTLINED")),
-                    ("2. Reabastecimiento (Reserva -> N1)", _ico("INVENTORY_2_OUTLINED", "ARROW_DOWNWARD_ROUNDED")),
-                    ("3. Vista Combinada", _ico("CATEGORY_OUTLINED", "VIEW_AGENDA_OUTLINED")),
-                    ("4. Gemelo Digital 3D", _ico("TOKEN_OUTLINED", "VIEW_IN_AR_ROUNDED")),
+                    ("Mapa de racks", _ico("VIEW_COLUMN_OUTLINED", "DOMAIN_OUTLINED")),
+                    ("Reabastecimiento", _ico("ARROW_DOWNWARD_ROUNDED", "INVENTORY_2_OUTLINED")),
+                    ("Buscar pallet o ubicación", _ico("MANAGE_SEARCH_ROUNDED", "SEARCH_ROUNDED")),
+                    ("Gemelo digital 3D", _ico("VIEW_IN_AR_ROUNDED", "TOKEN_OUTLINED")),
                 ],
             ),
             (
