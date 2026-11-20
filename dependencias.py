@@ -147,6 +147,82 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("Faltan SUPABASE_URL o SUPABASE_KEY en las variables de entorno (.env o Render).")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+# ---------------------------------------------------------------------
+# Registro central de errores del PC (script 26): todo error que el programa
+# escriba en el log con nivel ERROR (incluye fallas dentro de botones y pantallas)
+# queda en wms_log_errores para que se vea en "Requiere atención".
+# ---------------------------------------------------------------------
+import logging as _logging
+import threading as _threading
+
+CONTEXTO_ERRORES_PC = {"usuario": "", "bodega": "", "version": "PC"}
+_estado_registro_pc = {"ultimo": "", "en": 0.0}
+_guardia_registro = _threading.local()
+
+
+def fijar_contexto_errores_pc(usuario=None, bodega=None) -> None:
+    if usuario is not None:
+        CONTEXTO_ERRORES_PC["usuario"] = str(usuario or "")
+    if bodega is not None:
+        CONTEXTO_ERRORES_PC["bodega"] = str(bodega or "")
+
+
+def registrar_error_pc(modulo: str, mensaje: str, detalle: str = "") -> None:
+    """Envía el error a Supabase en segundo plano. Nunca lanza excepción."""
+    import time as _time
+    try:
+        msg = str(mensaje or "").strip()
+        if not msg or msg.startswith("WMS:"):
+            return
+        ahora = _time.time()
+        if msg == _estado_registro_pc["ultimo"] and ahora - _estado_registro_pc["en"] < 60:
+            return
+        _estado_registro_pc.update(ultimo=msg, en=ahora)
+
+        def _enviar():
+            if getattr(_guardia_registro, "activo", False):
+                return
+            _guardia_registro.activo = True
+            try:
+                supabase.rpc("wms_registrar_error", {
+                    "p_origen": "PC", "p_modulo": str(modulo or "")[:60], "p_mensaje": msg[:500],
+                    "p_detalle": str(detalle or "")[:3000], "p_version": CONTEXTO_ERRORES_PC.get("version"),
+                    "p_usuario": CONTEXTO_ERRORES_PC.get("usuario"), "p_bodega": CONTEXTO_ERRORES_PC.get("bodega") or None,
+                }).execute()
+            except Exception:
+                pass
+            finally:
+                _guardia_registro.activo = False
+
+        _threading.Thread(target=_enviar, daemon=True).start()
+    except Exception:
+        pass
+
+
+class _ManejadorErroresPc(_logging.Handler):
+    def emit(self, record):
+        try:
+            if record.levelno < _logging.ERROR or getattr(_guardia_registro, "activo", False):
+                return
+            detalle = ""
+            if record.exc_info:
+                import traceback as _tb
+                detalle = "".join(_tb.format_exception(*record.exc_info))
+            msg = record.getMessage()
+            if record.exc_info and record.exc_info[1] is not None:
+                msg = f"{type(record.exc_info[1]).__name__}: {record.exc_info[1]}"
+            registrar_error_pc(record.name, msg, detalle)
+        except Exception:
+            pass
+
+
+try:
+    if not any(isinstance(h, _ManejadorErroresPc) for h in _logging.getLogger().handlers):
+        _logging.getLogger().addHandler(_ManejadorErroresPc(level=_logging.ERROR))
+except Exception:
+    pass
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if (GEMINI_DISPONIBLE and GEMINI_API_KEY) else None
 
 

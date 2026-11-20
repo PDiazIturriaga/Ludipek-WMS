@@ -312,12 +312,138 @@ class MonitorUsuariosColaModulo:
                 ft.DataColumn(ft.Text("CLIENTE / DESTINO", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("ETAPA EN COLA", weight=ft.FontWeight.BOLD, size=10, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("ASIGNAR OPERADOR RF", weight=ft.FontWeight.BOLD, size=10, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("ANULAR", weight=ft.FontWeight.BOLD, size=10, color="#F87171")),
             ],
             rows=[],
         )
 
+        # Sesiones del celular (script 24): qué operador está conectado y desde dónde
+        tabla_sesiones_rf = ft.DataTable(
+            heading_row_color="#181E20",
+            heading_row_height=34,
+            data_row_min_height=36,
+            data_row_max_height=42,
+            column_spacing=14,
+            horizontal_margin=10,
+            data_text_style=ft.TextStyle(color=TEXT_WHITE),
+            columns=[
+                ft.DataColumn(ft.Text(c, weight=ft.FontWeight.BOLD, size=10, color=col))
+                for c, col in (("OPERADOR", ACCENT_CYAN), ("DISPOSITIVO", TEXT_WHITE), ("INICIO", "#34D399"),
+                               ("ÚLTIMO USO", "#34D399"), ("ESTADO", "#FBBF24"), ("ACCIÓN", "#F87171"))
+            ],
+            rows=[],
+        )
+        lbl_modo_sesion = ft.Text("", size=11, color=TEXT_MUTED)
+
         cont_tabla_usuarios = envolver_tabla_scroll(tabla_usuarios_rf, 240)
         cont_tabla_cola = envolver_tabla_scroll(tabla_cola_picking, 320)
+        cont_tabla_sesiones = envolver_tabla_scroll(tabla_sesiones_rf, 200)
+
+        def es_admin_pc() -> bool:
+            return "ADMIN" in str(getattr(self.page, "rol_actual", "") or "").upper()
+
+        def abrir_anular_ov(id_ov, num_ov: str, cliente: str):
+            if not es_admin_pc():
+                notificar_global(self.page, "Solo un administrador puede anular órdenes.", "#B91C1C")
+                return
+            txt_motivo = ft.TextField(label="Motivo (obligatorio)", multiline=True, min_lines=2, max_lines=3, width=420,
+                                      text_size=12, color=TEXT_WHITE, bgcolor=BG_INPUT, border_color=BORDER_COLOR)
+            lbl_err = ft.Text("", size=12, color="#F87171")
+
+            def cerrar(e=None):
+                try:
+                    self.page.pop_dialog()
+                except Exception:
+                    pass
+
+            def confirmar(e=None):
+                motivo = (txt_motivo.value or "").strip()
+                if len(motivo) < 4:
+                    lbl_err.value = "Escriba el motivo."
+                    self.page.update()
+                    return
+                try:
+                    supabase.rpc("wms_anular_ov", {
+                        "p_orden_id": int(id_ov), "p_usuario": str(getattr(self.page, "usuario_actual", "") or ""),
+                        "p_motivo": motivo,
+                    }).execute()
+                except Exception as ex:
+                    msg = str(getattr(ex, "message", None) or ex)
+                    if "wms_anular_ov" in msg and ("not find" in msg or "does not exist" in msg):
+                        msg = "falta ejecutar 25_anular_ov.sql en Supabase"
+                    lbl_err.value = f"No se anuló: {msg.replace('WMS: ', '')}"
+                    self.page.update()
+                    return
+                cerrar()
+                notificar_global(self.page, f"Orden {num_ov} anulada.", "#047857")
+                refrescar_monitor_usuarios_y_cola()
+
+            self.page.show_dialog(ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"Anular orden {num_ov}", weight=ft.FontWeight.BOLD),
+                content=ft.Container(width=440, content=ft.Column([
+                    ft.Text(cliente, size=12.5),
+                    ft.Text("La orden sale de la cola de picking y queda ANULADA en el historial con su motivo. "
+                            "Solo se puede si no tiene nada pickeado.", size=11.5, color=TEXT_MUTED),
+                    txt_motivo, lbl_err,
+                ], spacing=10, tight=True)),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=cerrar),
+                    ft.TextButton("ANULAR ORDEN", on_click=confirmar, style=ft.ButtonStyle(color="#F87171")),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            ))
+
+        def cerrar_sesion_operador(usuario: str):
+            try:
+                n = supabase.rpc("wms_cerrar_sesiones_usuario", {"p_usuario": usuario}).execute().data
+                notificar_global(self.page, f"Sesión de {usuario} cerrada ({n or 0}). Deberá ingresar su contraseña de nuevo.", "#047857")
+            except Exception as ex:
+                notificar_global(self.page, f"No se pudo cerrar la sesión: {getattr(ex, 'message', None) or ex}", "#B91C1C")
+            refrescar_monitor_usuarios_y_cola()
+
+        def pintar_sesiones():
+            try:
+                modo = (supabase.table("wms_config").select("valor").eq("clave", "auth_modo").execute().data or [{}])[0].get("valor")
+                filas = (supabase.table("wms_sesiones").select("*").order("ultimo_uso", desc=True).limit(80).execute().data or [])
+            except Exception:
+                lbl_modo_sesion.value = "Sin sesiones verificadas todavía (falta ejecutar 24_sesiones_operador.sql)."
+                tabla_sesiones_rf.rows = []
+                return
+            lbl_modo_sesion.value = ("Modo OBLIGATORIO: sin sesión el celular no puede operar."
+                                     if str(modo or "").upper() == "OBLIGATORIO"
+                                     else "Modo OPCIONAL (transición): el celular también puede operar sin sesión verificada.")
+            ahora = obtener_ahora_chile()
+            filas_s = []
+            for f in filas:
+                inicio_raw = f.get("creada_en")
+                try:
+                    from datetime import datetime as _dt
+                    ini = _dt.fromisoformat(str(inicio_raw).replace("Z", "+00:00"))
+                    horas = (ahora - ini).total_seconds() / 3600
+                except Exception:
+                    horas = 0
+                if horas > 24 and f.get("cerrada_en"):
+                    continue
+                if f.get("cerrada_en"):
+                    est, col = "CERRADA", TEXT_MUTED
+                elif horas > 14:
+                    est, col = "VENCIDA", "#FBBF24"
+                else:
+                    est, col = "ACTIVA", "#34D399"
+                usr = str(f.get("usuario") or "")
+                filas_s.append(ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(f"{f.get('nombre') or usr} ({usr})", size=11, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
+                    ft.DataCell(ft.Text(str(f.get("dispositivo") or "-"), size=10.5)),
+                    ft.DataCell(ft.Text(formatear_fecha_hora_chile(inicio_raw), size=10.5)),
+                    ft.DataCell(ft.Text(formatear_fecha_hora_chile(f.get("ultimo_uso")), size=10.5)),
+                    ft.DataCell(ft.Text(est, size=10.5, weight=ft.FontWeight.BOLD, color=col)),
+                    ft.DataCell(ft.IconButton(icon=ft.Icons.LOGOUT_ROUNDED, icon_size=18, icon_color="#F87171",
+                                              tooltip="Cerrar la sesión de este operador",
+                                              on_click=lambda e, u=usr: cerrar_sesion_operador(u))
+                                if est == "ACTIVA" and es_admin_pc() else ft.Text("")),
+                ]))
+            tabla_sesiones_rf.rows = filas_s
 
         def asignar_operador_manual_ov(id_ov: int, num_ov: str, nuevo_op: str):
             try:
@@ -560,6 +686,11 @@ class MonitorUsuariosColaModulo:
                                 ft.DataCell(ft.Text(cli_str[:30], size=11, color=TEXT_WHITE)),
                                 ft.DataCell(badge_etapa),
                                 ft.DataCell(dd_op_fila),
+                                ft.DataCell(
+                                    ft.IconButton(icon=ft.Icons.BLOCK_ROUNDED, icon_size=18, icon_color="#F87171",
+                                                  tooltip="Anular esta orden (solo administradores, sin nada pickeado)",
+                                                  on_click=lambda e, id_o=r.get("id"), n_ov=ov_raw, c=cli_str: abrir_anular_ov(id_o, n_ov, c))
+                                    if es_admin_pc() and est_ov in ("PENDIENTE_PICKING", "PENDIENTE") else ft.Text("")),
                             ],
                         )
                     )
@@ -603,6 +734,10 @@ class MonitorUsuariosColaModulo:
                 tabla_usuarios_rf.rows = filas_u
                 tabla_cola_picking.rows = filas_cola
                 try:
+                    pintar_sesiones()
+                except Exception as ex_s:
+                    print(f"[WARN] Sesiones RF: {ex_s}")
+                try:
                     pintar_equipos(usuarios_lista, ovs_por_operador, mapa_actividad_usr, ov_sin_asignar)
                 except Exception as ex_eq:
                     # Un error en el tablero de equipos no debe dejar en blanco el resto del monitor
@@ -615,6 +750,7 @@ class MonitorUsuariosColaModulo:
                 self.page.update()
             except Exception as ex:
                 print(f"[WARN] Error refrescando Monitor Usuarios y Cola: {ex}")
+                registrar_error_pc("MONITOR_USUARIOS", f"{type(ex).__name__}: {ex}", traceback.format_exc())
                 notificar_global(self.page, f"Monitor de usuarios: {ex}", "#B91C1C")
 
         txt_buscar_cola.on_change = refrescar_monitor_usuarios_y_cola
@@ -740,9 +876,31 @@ class MonitorUsuariosColaModulo:
             ),
         )
 
-        self.sub_completo = ft.Column([fila_kpis, tarjeta_equipos, tarjeta_usuarios, tarjeta_cola], spacing=10)
+        tarjeta_sesiones = ft.Container(
+            padding=12,
+            bgcolor=BG_CARD,
+            border_radius=8,
+            border=ft.Border.all(1, BORDER_COLOR),
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(_ico("PHONELINK_LOCK_ROUNDED", "LOCK_OUTLINE"), color="#34D399", size=18),
+                            ft.Text("SESIONES DEL CELULAR (ÚLTIMAS 24 H)", size=13, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                            lbl_modo_sesion,
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Divider(color=BORDER_COLOR, height=2),
+                    cont_tabla_sesiones,
+                ],
+                spacing=8,
+            ),
+        )
+
+        self.sub_completo = ft.Column([fila_kpis, tarjeta_equipos, tarjeta_usuarios, tarjeta_sesiones, tarjeta_cola], spacing=10)
         self.sub_solo_cola = ft.Column([fila_kpis, tarjeta_cola], spacing=10)
-        self.sub_solo_usuarios = ft.Column([fila_kpis, tarjeta_equipos, tarjeta_usuarios], spacing=10)
+        self.sub_solo_usuarios = ft.Column([fila_kpis, tarjeta_equipos, tarjeta_usuarios, tarjeta_sesiones], spacing=10)
         self.contenedor = ft.Container(content=self.sub_completo)
 
         self.vista = ft.Container(
@@ -859,6 +1017,7 @@ def main(page: ft.Page):
                 page.rol_actual = rol_usr
                 page.bodega_actual = bodega_elegida if tiene_acceso_global else bodega_asignada
                 page.tiene_acceso_multibodega = tiene_acceso_global
+                fijar_contexto_errores_pc(page.usuario_actual, page.bodega_actual)
 
                 mod_pc_str = ",".join(lista_permisos(fila_u.get("modulos_pc") or fila_u.get("permisos_pc")))
                 if not mod_pc_str and os.path.exists("config_permisos_wms.json"):
@@ -1997,6 +2156,7 @@ def main(page: ft.Page):
                 page.update()
                 return
             page.bodega_actual = dd_bodega_header.value or "Bodega Santiago"
+            fijar_contexto_errores_pc(bodega=page.bodega_actual)
             nueva_es_ccp = "CONCEPCION" in str(page.bodega_actual).upper().replace("Ó", "O")
             if nueva_es_ccp != es_bodega_concepcion:
                 # El módulo "Recepción Traslados (Concepción)" se construye al iniciar la torre:

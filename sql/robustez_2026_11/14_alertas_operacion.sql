@@ -101,6 +101,26 @@ begin
     from x having count(*) > 0;
   end if;
 
+  -- 3c) Errores inesperados de la aplicación en las últimas 24 h (evento; requiere 26)
+  if to_regclass('public.wms_log_errores') is not null then
+    return query
+    with x as (
+      select e.mensaje, count(*) n, max(e.creado_en) f,
+             string_agg(distinct e.origen || coalesce(' · ' || e.modulo, ''), ', ') donde,
+             string_agg(distinct coalesce(e.usuario, '-'), ', ') usrs
+      from wms_log_errores e
+      where e.creado_en > now() - interval '24 hours'
+        and (e.bodega is null or e.bodega = v_bodega)
+      group by e.mensaje
+    )
+    select 'ERRORES_APP', 'MEDIA', 'Errores de la aplicación (últimas 24 h)',
+           'Fallas inesperadas del celular o del PC (no son validaciones). Si se repiten, envíe el detalle a soporte.',
+           'SISTEMA', false, sum(n)::int,
+           coalesce(jsonb_agg(jsonb_build_object('ref', left(mensaje, 60), 'fecha', f,
+               'texto', format('%s vez/veces · %s · %s · %s', n, donde, usrs, left(mensaje, 160))) order by f desc), '[]')
+    from x having count(*) > 0;
+  end if;
+
   -- 4) Lotes vencidos con stock (estado)
   return query
   with x as (
