@@ -1464,7 +1464,7 @@ class InventarioModulo:
             def zona_de(ubic: str) -> str:
                 # Picking = nivel 01 de los racks (H-02-01) o la antigua ZONA-PICKING; ME = mermas de arena
                 u = str(ubic or "").upper()
-                if u.startswith("ZONA-PICKING") or re.match(r"^[A-Z]-\d{2}-01$", u):
+                if u.startswith("ZONA-PICKING") or u == "FARMACIA" or re.match(r"^[A-Z]-\d{2}-01$", u):
                     return "Picking"
                 if u.startswith("ZONA-MERMA") or re.match(r"^ME-\d{2}-\d{2}$", u):
                     return "Merma"

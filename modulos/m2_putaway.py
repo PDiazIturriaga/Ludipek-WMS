@@ -164,6 +164,8 @@ class PutawayModulo:
             if not ubi or ubi in ("ANDEN", "RECEPCION", "PENDIENTE", "SIN UBICACION", "NONE", "NULL"):
                 return ("RECEPCION", "ANDÉN RECEPCIÓN", 0)
             # Zonas de arena (posiciones de piso, 2 pallets apilados): MK/BE = arena, ME = mermas de arena
+            if ubi == "FARMACIA":
+                return ("FARMACIA", "PICKING FARMACIA", 1)
             m_arena = re.match(r"^(MK|ME|BE)-\d{2}-\d{2}$", ubi)
             if m_arena:
                 return (ZONAS_ARENA[m_arena.group(1)], "ARENA (PISO)", 0)
@@ -876,6 +878,10 @@ class PutawayModulo:
                     ft.Icons.GRASS_ROUNDED if nom_ar != "MERMA ARENA" else ft.Icons.DELETE_OUTLINE_ROUNDED,
                     COLOR_ARENA if nom_ar != "MERMA ARENA" else UI["peligro"], items_ar,
                     len(ocup_por_rack.get(nom_ar, set()) & pos_ar) if pos_ar else None, len(pos_ar) or None))
+            # Zona única de farmacia (script 37)
+            items_fa = [x for x in stock_en_racks if x["rack"] == "FARMACIA"]
+            if pos_por_rack.get("FARMACIA") or items_fa:
+                zonas.append(tarjeta_zona("FARMACIA", "Farmacia", ft.Icons.MEDICAL_SERVICES_OUTLINED, "#F472B6", items_fa))
             fila_racks.controls = tarjetas
             fila_zonas.controls = zonas
             lbl_dig_ocupacion.value = f"{int(round(total_ocup * 100 / total_pos))}%" if total_pos else "—"

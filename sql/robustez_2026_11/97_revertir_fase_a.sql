@@ -89,6 +89,8 @@ drop function if exists public.wms_reservar_correlativo(text, integer, text, big
 drop function if exists public.wms_max_lpn_rango(text, bigint, bigint);
 drop function if exists public.wms_dashboard_resumen(text, integer);
 -- 30: la función wms_tareas_conteo vuelve a la versión del 20 ejecutando ese script
+drop function if exists public.wms_cerrar_picking_farmacia(bigint, jsonb, text);
+drop function if exists public.wms_es_pedido_farmacia(text);
 drop function if exists public.wms_salud_sistema();
 drop function if exists public.wms_preparacion_sesion();
 drop function if exists public.wms_fijar_config_sistema(text, text, text);
