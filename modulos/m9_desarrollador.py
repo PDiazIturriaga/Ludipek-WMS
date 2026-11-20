@@ -336,7 +336,12 @@ class DesarrolladorModulo:
         self._construir()
 
     def sel_sub_dev(self, idx: int):
+        """Cambia de pantalla (menú lateral) y la construye."""
         self.sub = idx if idx in (0, 1, 2, 3, 4) else 0
+        self.contenedor.controls = [ft.Container(height=120, alignment=ft.Alignment.CENTER,
+                                                 content=ft.ProgressRing(width=24, height=24, stroke_width=2))]
+        self._update()
+        self._construir()
 
     def _update(self):
         try:

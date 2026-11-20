@@ -1306,7 +1306,7 @@ def main(page: ft.Page):
                     "Desarrollador",
                     _ico("TERMINAL_ROUNDED", "CODE_ROUNDED", "BUG_REPORT_OUTLINED"),
                     dev.vista,
-                    dev.refrescar,
+                    None,                 # sel_sub_dev ya construye la pantalla elegida
                     dev.sel_sub_dev,
                     [
                         ("1. Resumen y versiones", _ico("INSIGHTS_ROUNDED", "DASHBOARD_OUTLINED")),
