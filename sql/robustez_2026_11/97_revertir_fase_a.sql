@@ -64,6 +64,13 @@ drop function if exists public.wms_eliminar_pallet(text, text, text, text, text)
 drop function if exists public.wms_lpns_en_anden(text);
 drop function if exists public.wms_es_admin(text);
 drop function if exists public.wms_consulta_stock_operador(text, text);
+-- 24: primero desinstalar el portero
+alter role authenticator reset pgrst.db_pre_request;
+notify pgrst, 'reload config';
+drop function if exists public.wms_pre_request();
+drop function if exists public.wms_iniciar_sesion(text, text, text);
+drop function if exists public.wms_cerrar_sesion();
+drop function if exists public.wms_cerrar_sesiones_usuario(text);
 drop function if exists public.wms_actualizar_tarea_conteo(bigint, text, text);
 drop trigger if exists tg_estado_unico_ov on public.netsuite_ordenes_venta;
 drop function if exists public.wms_tg_estado_unico_ov();

@@ -139,10 +139,11 @@ begin
     and coalesce(i.lote, 'S/L') = coalesce(o.lote, 'S/L')
     and coalesce(i.fecha_vencimiento_cl, '') = coalesce(o.fecha_vencimiento_cl, '')
     and i.cantidad_unidades = o.cantidad_unidades
+    and coalesce(i.lpn, '') = coalesce(o.lpn, '')   -- dos pallets distintos (otro LPN) no son duplicado
   order by i.id
   limit 1;
   if v_gemelo is null then
-    raise exception 'WMS: no hay otra fila igual en % (mismo SKU, lote, vencimiento y cantidad). Si el stock está mal, corríjalo con conteo cíclico.', o.codigo_ubicacion;
+    raise exception 'WMS: no hay otra fila igual en % (mismo LPN, SKU, lote, vencimiento y cantidad). Si el stock está mal, corríjalo con conteo cíclico.', o.codigo_ubicacion;
   end if;
   delete from bodega_inventario_ubicacion where id = o.id;
   perform public.wms_kardex(o.bodega, 'ELIMINAR_DUPLICADO', o.lpn, o.sku, o.lote, o.codigo_ubicacion,

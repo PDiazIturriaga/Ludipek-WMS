@@ -110,6 +110,12 @@ class InventarioModulo:
                 return datetime.now().strftime("%Y-%m-%d %H:%M")
             try:
                 dt = datetime.fromisoformat(str(fh_str).replace("Z", "+00:00"))
+                if dt.tzinfo is not None:   # Supabase guarda en UTC: mostrar hora de Chile
+                    try:
+                        from zoneinfo import ZoneInfo
+                        dt = dt.astimezone(ZoneInfo("America/Santiago"))
+                    except Exception:
+                        dt = dt.astimezone()
                 return dt.strftime("%Y-%m-%d %H:%M")
             except Exception:
                 return str(fh_str)[:16]

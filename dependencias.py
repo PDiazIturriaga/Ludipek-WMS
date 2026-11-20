@@ -28,6 +28,68 @@ import reportlab.graphics.barcode.usps4s
 import reportlab.graphics.barcode.ecc200datamatrix
 
 
+
+# ---------------------------------------------------------------------
+# Menús desplegables oscuros: la app usa tema claro pero pinta los controles
+# oscuros. Un Dropdown con bgcolor oscuro mostraba sus opciones en letra negra
+# sobre fondo negro. Este parche da letra clara a las opciones de esos menús
+# (solo a las que no traen su propio contenido) en TODOS los módulos.
+# ---------------------------------------------------------------------
+_MARCA_OPCION_CLARA = "_ludipek_opcion_clara"
+
+
+def _es_color_oscuro(color) -> bool:
+    s = str(color or "").strip()
+    if not s.startswith("#"):
+        return False
+    h = s[1:]
+    if len(h) == 8:          # #AARRGGBB
+        h = h[2:]
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return False
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return False
+    return (0.299 * r + 0.587 * g + 0.114 * b) < 128
+
+
+def _aclarar_opciones_dropdown(dd) -> None:
+    if not _es_color_oscuro(getattr(dd, "bgcolor", None)):
+        return
+    for op in (getattr(dd, "options", None) or []):
+        texto = getattr(op, "text", None) or str(getattr(op, "key", "") or "")
+        actual = getattr(op, "content", None)
+        if actual is None:
+            op.content = ft.Text(texto, size=12.5, color="#E5E7EB", data=_MARCA_OPCION_CLARA)
+        elif getattr(actual, "data", None) == _MARCA_OPCION_CLARA and getattr(actual, "value", None) != texto:
+            actual.value = texto
+
+
+def _instalar_parche_dropdown_oscuro() -> None:
+    if getattr(ft.Dropdown, "_ludipek_parche_oscuro", False):
+        return
+    original = getattr(ft.Dropdown, "before_update", None)
+
+    def before_update(self):
+        try:
+            _aclarar_opciones_dropdown(self)
+        except Exception as ex:   # nunca romper la pantalla por el estilo
+            print(f"[WARN] Estilo de menú desplegable: {ex}")
+        if callable(original):
+            return original(self)
+
+    ft.Dropdown.before_update = before_update
+    ft.Dropdown._ludipek_parche_oscuro = True
+
+
+try:
+    _instalar_parche_dropdown_oscuro()
+except Exception as _ex_parche:
+    print(f"[WARN] No se aplicó el estilo de menús oscuros: {_ex_parche}")
+
 def obtener_ruta_recurso(relativo: str) -> str:
     """Obtiene la ruta absoluta del recurso, compatible con desarrollo y con PyInstaller (.exe)."""
     try:
