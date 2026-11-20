@@ -65,6 +65,17 @@ drop function if exists public.wms_lpns_en_anden(text);
 drop function if exists public.wms_es_admin(text);
 drop function if exists public.wms_consulta_stock_operador(text, text);
 -- 24: primero desinstalar el portero
+-- Si se aplicó el 36: sin portero, las funciones solo-PC no deben quedar abiertas a sesiones autenticadas
+do $$
+declare f record;
+begin
+  for f in select p.oid::regprocedure sig from pg_proc p
+            where p.pronamespace = 'public'::regnamespace and p.prokind = 'f'
+              and not has_function_privilege('anon', p.oid, 'EXECUTE')
+              and has_function_privilege('authenticated', p.oid, 'EXECUTE') loop
+    execute format('revoke execute on function %s from authenticated', f.sig);
+  end loop;
+end $$;
 alter role authenticator reset pgrst.db_pre_request;
 notify pgrst, 'reload config';
 drop function if exists public.wms_pre_request();
@@ -78,6 +89,13 @@ drop function if exists public.wms_reservar_correlativo(text, integer, text, big
 drop function if exists public.wms_max_lpn_rango(text, bigint, bigint);
 drop function if exists public.wms_dashboard_resumen(text, integer);
 -- 30: la función wms_tareas_conteo vuelve a la versión del 20 ejecutando ese script
+drop function if exists public.wms_salud_sistema();
+drop function if exists public.wms_preparacion_sesion();
+drop function if exists public.wms_fijar_config_sistema(text, text, text);
+drop function if exists public.wms_respaldo_tablas();
+drop function if exists public.wms_respaldo_lote(text, text, integer);
+drop function if exists public.wms_registrar_conexion_pc(text, text, text, text, text);
+drop schema if exists wms_interno cascade;
 drop trigger if exists tg_agrupar_error on public.wms_log_errores;
 drop function if exists public.wms_tg_agrupar_error();
 drop function if exists public.wms_dev_resumen(integer);

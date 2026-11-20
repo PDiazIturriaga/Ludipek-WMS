@@ -123,6 +123,7 @@ do $$ begin
     add constraint wms_errores_grupos_ticket_fk foreign key (ticket_id) references public.wms_tickets(id) on delete set null;
 exception when duplicate_object then null;
 end $$;
+create index if not exists idx_errores_grupos_ticket on public.wms_errores_grupos (ticket_id);
 
 grant select, insert, update, delete on public.wms_errores_grupos, public.wms_tickets, public.wms_tickets_comentarios
   to service_role;

@@ -12,3 +12,7 @@ assets/descargas/
 assets/uploads/
 config_permisos_wms.json
 config_maestra_extra.json
+.env.*
+!herramientas/env.pruebas.ejemplo
+respaldos/
+*.parcial

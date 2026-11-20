@@ -1,4 +1,5 @@
 import os
+import sys
 import math
 import time
 import shutil
@@ -922,7 +923,18 @@ class MonitorUsuariosColaModulo:
 
 
 def main(page: ft.Page):
-    page.title = "LUDIPEK WMS | Cloud Planning"
+    page.title = "LUDIPEK WMS | Cloud Planning" + ("  ·  AMBIENTE DE PRUEBAS" if AMBIENTE == "PRUEBAS" else "")
+
+    def franja_ambiente():
+        """Franja naranja visible en todo momento cuando el PC apunta a la base de PRUEBAS."""
+        return ft.Container(
+            visible=AMBIENTE == "PRUEBAS", bgcolor="#C2410C", padding=ft.Padding.symmetric(horizontal=12, vertical=4),
+            content=ft.Row([
+                ft.Icon(ft.Icons.SCIENCE_OUTLINED, color=ft.Colors.WHITE, size=16),
+                ft.Text("AMBIENTE DE PRUEBAS · los cambios NO afectan la operación real", color=ft.Colors.WHITE,
+                        size=12, weight=ft.FontWeight.W_700),
+            ], spacing=8, alignment=ft.MainAxisAlignment.CENTER),
+        )
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 0
     page.window.maximized = True
@@ -977,22 +989,40 @@ def main(page: ft.Page):
             return
         try:
             fila_u = None
-            try:
-                # Validación en el servidor (acepta contraseñas cifradas bcrypt y las antiguas en texto)
-                res = supabase.rpc("wms_login", {"p_usuario": user_val, "p_password": pass_val}).execute()
-                fila_u = res.data if isinstance(res.data, dict) else None
+            if MODO_CONEXION_PC == "SESION":
+                # PC con llave pública: sesión verificada en el servidor (script 36), sin respaldo local
+                try:
+                    fila_u = iniciar_sesion_pc(user_val, pass_val, page)
+                except Exception as ex_ses:
+                    msg_ses = str(getattr(ex_ses, "message", None) or ex_ses)
+                    if "wms_iniciar_sesion_pc" in msg_ses and ("not find" in msg_ses or "does not exist" in msg_ses):
+                        msg_ses = "falta ejecutar 36_sesion_pc.sql en Supabase"
+                    elif "anonymous" in msg_ses.lower():
+                        msg_ses = "active 'Allow anonymous sign-ins' en Supabase (Authentication > Sign In)"
+                    lbl_login_error.value = "No se pudo iniciar sesión: " + msg_ses.replace("WMS: ", "")
+                    page.update()
+                    return
                 if fila_u and fila_u.get("error") == "USUARIO_INACTIVO":
                     lbl_login_error.value = "Usuario inactivo. Contacte a Gerencia."
                     page.update()
                     return
-            except Exception as ex_rpc:
-                # Respaldo mientras no se ejecute sql/robustez_2026_11/04_funciones_operacion.sql
-                print(f"[WARN] wms_login no disponible, se usa validación local: {ex_rpc}")
-                user_patron = user_val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                res = supabase.table("wms_usuarios").select("*").ilike("usuario", user_patron).limit(1).execute()
-                fila_tmp = res.data[0] if res.data else None
-                if fila_tmp and fila_tmp.get("activo") and verificar_password_seguro(pass_val, fila_tmp.get("password", "")):
-                    fila_u = fila_tmp
+            else:
+                try:
+                    # Validación en el servidor (acepta contraseñas cifradas bcrypt y las antiguas en texto)
+                    res = supabase.rpc("wms_login", {"p_usuario": user_val, "p_password": pass_val}).execute()
+                    fila_u = res.data if isinstance(res.data, dict) else None
+                    if fila_u and fila_u.get("error") == "USUARIO_INACTIVO":
+                        lbl_login_error.value = "Usuario inactivo. Contacte a Gerencia."
+                        page.update()
+                        return
+                except Exception as ex_rpc:
+                    # Respaldo mientras no se ejecute sql/robustez_2026_11/04_funciones_operacion.sql
+                    print(f"[WARN] wms_login no disponible, se usa validación local: {ex_rpc}")
+                    user_patron = user_val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    res = supabase.table("wms_usuarios").select("*").ilike("usuario", user_patron).limit(1).execute()
+                    fila_tmp = res.data[0] if res.data else None
+                    if fila_tmp and fila_tmp.get("activo") and verificar_password_seguro(pass_val, fila_tmp.get("password", "")):
+                        fila_u = fila_tmp
 
             if fila_u:
                 rol_usr = str(fila_u.get("rol") or "OPERADOR").strip().upper()
@@ -1031,6 +1061,8 @@ def main(page: ft.Page):
                         pass
 
                 page.modulos_pc_usuario = mod_pc_str
+                page.usuario_login = user_val
+                registrar_conexion_pc(user_val)
                 iniciar_torre_de_control()
             else:
                 intentos_fallidos += 1
@@ -1087,6 +1119,8 @@ def main(page: ft.Page):
     )
 
     page.bgcolor = "#292526"
+    if AMBIENTE == "PRUEBAS":
+        pantalla_login = ft.Column([franja_ambiente(), pantalla_login], spacing=0, expand=True)
     page.add(pantalla_login)
 
     def iniciar_torre_de_control():
@@ -1278,6 +1312,8 @@ def main(page: ft.Page):
                         ("1. Resumen y versiones", _ico("INSIGHTS_ROUNDED", "DASHBOARD_OUTLINED")),
                         ("2. Errores (celular y PC)", _ico("BUG_REPORT_OUTLINED", "ERROR_OUTLINE_ROUNDED")),
                         ("3. Tickets de usuarios", _ico("CONFIRMATION_NUMBER_OUTLINED", "SUPPORT_AGENT_ROUNDED")),
+                        ("4. Salud del sistema", _ico("HEALTH_AND_SAFETY_OUTLINED", "MONITOR_HEART_OUTLINED")),
+                        ("5. Respaldos", _ico("BACKUP_OUTLINED", "CLOUD_DOWNLOAD_OUTLINED")),
                     ],
                 )
             )
@@ -2179,10 +2215,19 @@ def main(page: ft.Page):
         def cerrar_sesion_actual(e=None):
             nonlocal sesion_activa
             sesion_activa = False
+            page._al_vencer_sesion_pc = None
+            cerrar_sesion_pc(page)
             tarjetas_adaptables.clear()
             kpis_adaptables.clear()
             tablas_scroll_sesion.clear()
             mostrar_pantalla_login()
+
+        def sesion_pc_vencida():
+            # Se llama desde notificar_global cuando la base responde que la sesión del PC no es válida
+            if sesion_activa:
+                cerrar_sesion_actual()
+
+        page._al_vencer_sesion_pc = sesion_pc_vencida
 
         puede_cambiar_bodega_pc = bool(getattr(page, "tiene_acceso_multibodega", False))
 
@@ -2345,11 +2390,15 @@ def main(page: ft.Page):
         page.controls.clear()
         
         page.bgcolor = COLOR_BG_PORTAL
-        page.add(ft.Column([encabezado, cuerpo_principal], spacing=0, expand=True))
+        page.add(ft.Column([franja_ambiente(), encabezado, cuerpo_principal], spacing=0, expand=True))
         adaptar_resolucion_automatica()
 
 
 if __name__ == "__main__":
+    if "--respaldo" in sys.argv:
+        # Respaldo programado (Programador de tareas de Windows): descarga todo y termina, sin pantallas
+        from servicios.respaldo import respaldo_programado
+        sys.exit(respaldo_programado())
     try:
         os.makedirs(os.path.join("assets", "uploads"), exist_ok=True)
         os.makedirs(os.path.join("assets", "descargas"), exist_ok=True)

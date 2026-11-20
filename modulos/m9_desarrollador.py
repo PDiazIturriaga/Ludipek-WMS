@@ -4,6 +4,8 @@
     0 Resumen  · errores por día (celular / PC), pendientes, tickets, versiones en uso
     1 Errores  · agrupados por firma (mismo error aunque cambie un número), con estado
     2 Tickets  · reportes de los usuarios: estado, prioridad, comentarios y respuesta
+    3 Salud    · diagnóstico completo, sesión obligatoria del celular, versión mínima, este PC
+    4 Respaldos· descargar todos los datos a un .zip y ver el historial
 · abrir_reportar_problema(page, modulo): diálogo para que cualquier usuario del PC reporte.
 · abrir_mis_reportes(page): el usuario ve el estado y la respuesta de sus reportes.
 Requiere 34_centro_desarrollador.sql.
@@ -12,8 +14,12 @@ from datetime import datetime, timedelta, timezone
 
 import flet as ft
 
+import os
+import threading
+
 from dependencias import (supabase, UI, ui_boton, ui_kpi, ui_tabla, notificar_global, formatear_fecha_hora_chile,
                           obtener_bodega_activa, CONTEXTO_ERRORES_PC)
+import dependencias as _dep
 
 INK, INK_2, INK_3 = UI["texto"], UI["texto_2"], UI["texto_3"]
 GRILLA, BASE = "#2E393C", "#3B484B"
@@ -311,6 +317,8 @@ class DesarrolladorModulo:
         self.filtro_err = "PENDIENTES"
         self.filtro_origen = "TODOS"
         self.filtro_tk = "ABIERTOS"
+        self.filtro_salud = "REVISAR"
+        self.respaldando = False
         self.contenedor = ft.Column(spacing=12)
         self.lbl_generado = ft.Text("", size=11, color=INK_3)
         self.txt_buscar = _campo("Buscar en mensaje, módulo o usuario", ancho=300)
@@ -328,7 +336,7 @@ class DesarrolladorModulo:
         self._construir()
 
     def sel_sub_dev(self, idx: int):
-        self.sub = idx if idx in (0, 1, 2) else 0
+        self.sub = idx if idx in (0, 1, 2, 3, 4) else 0
 
     def _update(self):
         try:
@@ -338,7 +346,11 @@ class DesarrolladorModulo:
 
     def _construir(self):
         try:
-            if self.sub == 1:
+            if self.sub == 3:
+                controles = self._vista_salud()
+            elif self.sub == 4:
+                controles = self._vista_respaldos()
+            elif self.sub == 1:
                 controles = self._vista_errores()
             elif self.sub == 2:
                 controles = self._vista_tickets()
@@ -723,3 +735,214 @@ class DesarrolladorModulo:
                      ui_boton("Guardar", ft.Icons.SAVE_ROUNDED, guardar, "primario")],
             actions_alignment=ft.MainAxisAlignment.END,
         ))
+
+    # ------------------------------------------------------------- 3 Salud del sistema
+    def _vista_salud(self):
+        page = self.page
+        prep = supabase.rpc("wms_preparacion_sesion", {}).execute().data or {}
+        chequeos = supabase.rpc("wms_salud_sistema", {}).execute().data or []
+
+        # --- Este PC
+        modo = _dep.MODO_CONEXION_PC
+        amb = _dep.AMBIENTE
+        card_pc = _tarjeta("Este PC", "Cómo se conecta este programa a la base", ft.Column([
+            ft.Row([_chip(("Sesión de usuario", ESTADO["bueno"], ft.Icons.VERIFIED_USER_OUTLINED) if modo == "SESION"
+                          else ("Llave maestra (service_role)", ESTADO["serio"], ft.Icons.KEY_ROUNDED)),
+                    _chip(("Ambiente de PRUEBAS", "#C2410C", ft.Icons.SCIENCE_OUTLINED) if amb == "PRUEBAS"
+                          else ("Producción", "#3987e5", ft.Icons.FACTORY_OUTLINED))], spacing=20),
+            ft.Text("Recomendado: sesión de usuario (script 36 y llave pública en el .env). Con la llave maestra, "
+                    "quien copie el .env de este PC tiene acceso total a la base." if modo != "SESION" else
+                    "Este PC trabaja con la llave pública: cada usuario entra con su sesión y la base aplica sus permisos.",
+                    size=11.5, color=INK_2),
+        ], spacing=8), col={"xs": 12, "lg": 4})
+
+        # --- Versión mínima
+        vmin = str(prep.get("version_minima") or "-")
+        vnueva = str(prep.get("version_mas_nueva") or "").strip("{}").replace(",", ".")
+
+        def subir_version(e=None):
+            self._confirmar(f"¿Exigir la versión {vnueva} a todos los celulares?",
+                            "Los celulares con una versión anterior verán el aviso para actualizar y no podrán operar "
+                            "hasta recargar la app.", lambda: self._fijar_config("version_minima_rf", vnueva))
+
+        card_ver = _tarjeta("Versión mínima del celular", "La app avisa y bloquea a quien tenga una versión anterior", ft.Column([
+            ft.Row([ft.Column([ft.Text("Exigida", size=11, color=INK_3), ft.Text(vmin, size=18, weight=ft.FontWeight.W_700, color=INK)],
+                              spacing=0, tight=True),
+                    ft.Column([ft.Text("Más nueva en uso", size=11, color=INK_3),
+                               ft.Text(vnueva or "-", size=18, weight=ft.FontWeight.W_700, color=INK)], spacing=0, tight=True)],
+                   spacing=30),
+            ui_boton(f"Exigir {vnueva}", ft.Icons.SYSTEM_UPDATE_ALT_ROUNDED, subir_version, "secundario",
+                     disabled=not vnueva or _version_tupla(vnueva) <= _version_tupla(vmin)),
+        ], spacing=10), col={"xs": 12, "lg": 4})
+
+        # --- Sesión obligatoria
+        usuarios = prep.get("usuarios") or []
+        activos = [u for u in usuarios if u.get("activo_7d")]
+        listos_act = [u for u in activos if u.get("listo")]
+        modo_ses = str(prep.get("modo") or "OPCIONAL").upper()
+        pendientes = [u for u in activos if not u.get("listo")]
+
+        def activar(e=None):
+            extra = (f" Ojo: {len(pendientes)} operadores que trabajaron esta semana aún no entran con la app nueva "
+                     f"({', '.join(u.get('usuario') for u in pendientes[:8])}). Tendrán que volver a iniciar sesión."
+                     if pendientes else " Todos los operadores activos ya entran con sesión verificada.")
+            self._confirmar("¿Activar la sesión obligatoria en el celular?",
+                            "Desde ese momento el celular solo opera con usuario y contraseña verificados; quien no tenga "
+                            "sesión vuelve al login." + extra, lambda: self._fijar_config("auth_modo", "OBLIGATORIO"))
+
+        def desactivar(e=None):
+            self._confirmar("¿Volver a modo OPCIONAL?", "El celular vuelve a aceptar operaciones sin sesión verificada.",
+                            lambda: self._fijar_config("auth_modo", "OPCIONAL"))
+
+        filas_u = [ft.DataRow(cells=[
+            ft.DataCell(_t(u.get("usuario"), ft.FontWeight.W_600)), ft.DataCell(_t(u.get("nombre") or "", color=INK_2)),
+            ft.DataCell(_t(u.get("bodega") or "", color=INK_2)),
+            ft.DataCell(_t(u.get("ultima_sesion") or "-", color=INK_2)), ft.DataCell(_t(u.get("version") or "-", color=INK_2)),
+            ft.DataCell(_t(u.get("ultimo_movimiento") or "-", color=INK_2)),
+            ft.DataCell(_chip(("Listo", ESTADO["bueno"], ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED) if u.get("listo") else
+                              (("Falta entrar con la app nueva", ESTADO["serio"], ft.Icons.LOGIN_ROUNDED) if u.get("activo_7d")
+                               else ("Sin actividad 7 días", INK_3, ft.Icons.REMOVE_ROUNDED)))),
+        ]) for u in usuarios]
+        tabla_u = ft.DataTable(columns=[_col("Usuario"), _col("Nombre"), _col("Bodega"), _col("Última sesión"),
+                                        _col("Versión"), _col("Último movimiento"), _col("Estado")], rows=filas_u)
+        card_ses = _tarjeta(
+            "Sesión obligatoria del celular",
+            f"Modo actual: {modo_ses} · {len(listos_act)} de {len(activos)} operadores con actividad esta semana ya entran con sesión verificada",
+            ft.Column([
+                ft.Row([_chip(("OBLIGATORIO", ESTADO["bueno"], ft.Icons.LOCK_ROUNDED) if modo_ses == "OBLIGATORIO"
+                              else ("OPCIONAL", ESTADO["advertencia"], ft.Icons.LOCK_OPEN_ROUNDED)),
+                        ui_boton("Volver a opcional", ft.Icons.LOCK_OPEN_ROUNDED, desactivar, "texto") if modo_ses == "OBLIGATORIO"
+                        else ui_boton("Activar sesión obligatoria", ft.Icons.LOCK_ROUNDED, activar, "primario")],
+                       spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ui_tabla(tabla_u, 260) if filas_u else _vacio("Sin operadores."),
+            ], spacing=10), col={"xs": 12})
+
+        # --- Diagnóstico
+        def elegir(x):
+            self.filtro_salud = x
+            self._construir()
+
+        col_g = {"CRITICO": ESTADO["critico"], "ALTO": ESTADO["serio"], "MEDIO": ESTADO["advertencia"], "INFO": INK_3}
+        ver = [c for c in chequeos if self.filtro_salud == "TODOS" or c.get("estado") in ("REVISAR", "NO SE PUDO")]
+        n_rev = sum(1 for c in chequeos if c.get("estado") == "REVISAR")
+        n_crit = sum(1 for c in chequeos if c.get("estado") == "REVISAR" and c.get("gravedad") in ("CRITICO", "ALTO"))
+        filas_c = [ft.DataRow(cells=[
+            ft.DataCell(_chip((c.get("estado"), ESTADO["bueno"] if c.get("estado") == "OK" else
+                               (INK_3 if c.get("estado") == "INFO" else col_g.get(c.get("gravedad"), INK_3)),
+                               ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED if c.get("estado") == "OK" else
+                               (ft.Icons.INFO_OUTLINE_ROUNDED if c.get("estado") == "INFO" else ft.Icons.ERROR_OUTLINE_ROUNDED)))),
+            ft.DataCell(_t(c.get("gravedad"), color=INK_2)), ft.DataCell(_t(c.get("area"), color=INK_2)),
+            ft.DataCell(ft.Container(width=380, content=ft.Text(str(c.get("revision") or ""), size=12, color=INK,
+                                                                max_lines=2, overflow=ft.TextOverflow.ELLIPSIS))),
+            ft.DataCell(_t(_miles(c.get("cantidad")) if c.get("cantidad") is not None else "-", ft.FontWeight.W_600)),
+            ft.DataCell(ft.Container(width=300, content=ft.Text(str(c.get("ejemplos") or ""), size=11.5, color=INK_2,
+                                                                max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
+                                                                tooltip=str(c.get("ejemplos") or "")[:900] or None))),
+            ft.DataCell(ft.Container(width=320, content=ft.Text(str(c.get("que_hacer") or ""), size=11.5, color=INK_2,
+                                                                max_lines=3, overflow=ft.TextOverflow.ELLIPSIS,
+                                                                tooltip=str(c.get("que_hacer") or "") or None))),
+        ]) for c in ver]
+        tabla_c = ft.DataTable(columns=[_col("Estado"), _col("Gravedad"), _col("Área"), _col("Revisión"), _col("Cantidad", True),
+                                        _col("Ejemplos"), _col("Qué hacer")], rows=filas_c)
+        card_dx = _tarjeta(
+            "Diagnóstico completo",
+            f"{len(chequeos)} revisiones · {n_rev} por revisar ({n_crit} críticas o altas). Es el mismo diagnóstico del script 90, "
+            "ahora siempre a mano. Revíselo al menos una vez al mes.",
+            ft.Column([_filtros([("REVISAR", "Por revisar"), ("TODOS", "Todas")], self.filtro_salud, elegir),
+                       ui_tabla(tabla_c, 520) if filas_c else _vacio("Todo en orden. ✔")], spacing=10), col={"xs": 12})
+        return [ft.ResponsiveRow([card_pc, card_ver], spacing=12, run_spacing=12),
+                ft.ResponsiveRow([card_ses], spacing=12), ft.ResponsiveRow([card_dx], spacing=12)]
+
+    def _confirmar(self, titulo, texto, accion):
+        page = self.page
+
+        def ok(e=None):
+            _cerrar(page)
+            accion()
+
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text(titulo, weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=460, content=ft.Text(texto, size=12.5)),
+            actions=[ui_boton("Cancelar", None, lambda e: _cerrar(page), "texto"),
+                     ui_boton("Confirmar", ft.Icons.CHECK_ROUNDED, ok, "primario")],
+            actions_alignment=ft.MainAxisAlignment.END))
+
+    def _fijar_config(self, clave, valor):
+        try:
+            v = supabase.rpc("wms_fijar_config_sistema", {"p_clave": clave, "p_valor": valor,
+                                                          "p_usuario": _usuario(self.page)}).execute().data
+        except Exception as ex:
+            notificar_global(self.page, f"No se cambió: {_msg_error(ex)}", "#B45309")
+            return
+        notificar_global(self.page, f"Listo: {clave} = {v}", "#047857")
+        self._construir()
+
+    # ------------------------------------------------------------- 4 Respaldos
+    def _vista_respaldos(self):
+        from servicios.respaldo import CARPETA_RESPALDOS
+        hist = supabase.table("wms_respaldos").select("*").order("id", desc=True).limit(30).execute().data or []
+        self.lbl_resp = ft.Text("", size=12, color=INK_2)
+        self.barra_resp = ft.ProgressBar(value=0, visible=False, color="#3987e5", bgcolor=UI["card_alt"])
+
+        def respaldar(e=None):
+            if self.respaldando:
+                return
+            self.respaldando = True
+            self.barra_resp.visible = True
+            self.lbl_resp.value = "Preparando…"
+            self._update()
+
+            def progreso(txt, frac):
+                self.lbl_resp.value = txt
+                self.barra_resp.value = frac
+                self._update()
+
+            def trabajo():
+                from servicios.respaldo import ejecutar_respaldo
+                try:
+                    r = ejecutar_respaldo(supabase, _usuario(self.page), _dep.AMBIENTE, progreso)
+                    msg = (f"Respaldo {r['estado']}: {r['tablas']} tablas, {_miles(r['filas'])} filas, "
+                           f"{r['bytes'] / 1_048_576:.1f} MB en {r['segundos']} s.")
+                    notificar_global(self.page, msg, "#047857" if r["estado"] == "OK" else "#B45309")
+                except Exception as ex:
+                    notificar_global(self.page, f"El respaldo falló: {_msg_error(ex)}", "#B91C1C")
+                finally:
+                    self.respaldando = False
+                    self._construir()
+
+            threading.Thread(target=trabajo, daemon=True).start()
+
+        def abrir_carpeta(e=None):
+            try:
+                os.makedirs(CARPETA_RESPALDOS, exist_ok=True)
+                os.startfile(CARPETA_RESPALDOS)          # Windows
+            except Exception:
+                notificar_global(self.page, f"Carpeta: {CARPETA_RESPALDOS}", "#0284C7")
+
+        filas = [ft.DataRow(cells=[
+            ft.DataCell(_t(formatear_fecha_hora_chile(h.get("creado_en")))),
+            ft.DataCell(_chip(("OK", ESTADO["bueno"], ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED) if h.get("estado") == "OK"
+                              else (h.get("estado"), ESTADO["serio"], ft.Icons.WARNING_AMBER_ROUNDED))),
+            ft.DataCell(_t(h.get("usuario") or "-", color=INK_2)), ft.DataCell(_t(h.get("equipo") or "-", color=INK_2)),
+            ft.DataCell(_t(_miles(h.get("tablas")))), ft.DataCell(_t(_miles(h.get("filas")))),
+            ft.DataCell(_t(f"{int(h.get('bytes') or 0) / 1_048_576:.1f} MB")),
+            ft.DataCell(_t(h.get("archivo") or "", color=INK_2, size=11.5)),
+        ]) for h in hist]
+        tabla = ft.DataTable(columns=[_col("Fecha"), _col("Estado"), _col("Usuario"), _col("Equipo"), _col("Tablas", True),
+                                      _col("Filas", True), _col("Tamaño", True), _col("Archivo")], rows=filas)
+        ultimo = formatear_fecha_hora_chile(hist[0].get("creado_en")) if hist else "nunca"
+        return [
+            _tarjeta("Respaldo de datos", f"Último respaldo: {ultimo}. Descarga todas las tablas a un .zip (un CSV por tabla) "
+                     f"en {CARPETA_RESPALDOS}. Se conservan los últimos 30.", ft.Column([
+                         ft.Row([ui_boton("Respaldar ahora", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, respaldar, "primario",
+                                          disabled=self.respaldando),
+                                 ui_boton("Abrir carpeta", ft.Icons.FOLDER_OPEN_OUTLINED, abrir_carpeta, "secundario")], spacing=10),
+                         self.barra_resp, self.lbl_resp,
+                         ft.Text("Automático: programe en Windows (Programador de tareas) el archivo "
+                                 "herramientas\\respaldo_programado.bat todos los días. Si la carpeta del programa está en "
+                                 "OneDrive, los respaldos quedan también en la nube. Ver GUIA_RESPALDO_Y_PRUEBAS.md.",
+                                 size=11.5, color=INK_3),
+                     ], spacing=10)),
+            _tarjeta("Historial de respaldos", "Hechos desde cualquier PC o de forma programada",
+                     ui_tabla(tabla, 380) if filas else _vacio("Aún no hay respaldos.")),
+        ]

@@ -99,9 +99,22 @@ def obtener_ruta_recurso(relativo: str) -> str:
     return os.path.join(base_path, relativo)
 
 
+# Ambiente: PRODUCCION (por defecto) o PRUEBAS. El de pruebas lee .env.pruebas, que apunta a
+# otro proyecto de Supabase, y la pantalla lo muestra con una franja naranja.
+#   Abrir en pruebas:  python main.py --pruebas   (o la variable WMS_AMBIENTE=PRUEBAS)
+AMBIENTE = "PRUEBAS" if ("--pruebas" in sys.argv or os.getenv("WMS_AMBIENTE", "").strip().upper() == "PRUEBAS") else "PRODUCCION"
+
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    if AMBIENTE == "PRUEBAS":
+        _env_pruebas = next((p for p in (os.path.abspath(".env.pruebas"),
+                                         os.path.join(os.path.dirname(os.path.abspath(sys.argv[0] or ".")), ".env.pruebas"))
+                             if os.path.exists(p)), None)
+        if not _env_pruebas:
+            raise RuntimeError("Ambiente de PRUEBAS: falta el archivo .env.pruebas junto al programa.")
+        load_dotenv(_env_pruebas, override=True)
+    else:
+        load_dotenv()
 except ImportError:
     pass
 
@@ -146,7 +159,139 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("Faltan SUPABASE_URL o SUPABASE_KEY en las variables de entorno (.env o Render).")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+_cliente_base: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+_clientes_sesion = {}      # id(page) -> (referencia débil a la pantalla, cliente con la sesión de ese usuario)
+
+
+def _clientes_vigentes() -> list:
+    """Clientes de pantallas que siguen abiertas (descarta las cerradas sin cerrar sesión)."""
+    for k, (ref, _c) in list(_clientes_sesion.items()):
+        if ref is not None and ref() is None:
+            _clientes_sesion.pop(k, None)
+    return [c for _r, c in _clientes_sesion.values()]
+
+
+class _SupabaseSegunUsuario:
+    """Con la llave maestra es el cliente de siempre. Con la llave pública (modo SESION) cada
+    pantalla abierta (cada usuario conectado a este programa) usa su propio cliente con su sesión;
+    así dos personas en el mismo servidor nunca comparten la sesión."""
+
+    def _actual(self):
+        if MODO_CONEXION_PC == "SESION" and _clientes_sesion:
+            try:
+                pg = ft.context.page
+                c = getattr(pg, "_wms_cliente", None)
+                if c is not None:
+                    return c
+            except Exception:
+                pass
+            vigentes = _clientes_vigentes()
+            if len(vigentes) == 1:                  # un solo usuario: también en hilos de fondo
+                return vigentes[0]
+        return _cliente_base
+
+    def __getattr__(self, nombre):
+        return getattr(self._actual(), nombre)
+
+
+supabase: Client = _SupabaseSegunUsuario()
+
+
+# =====================================================================
+# 2b. MODO DE CONEXIÓN DEL PC (script 36)
+#   LLAVE_MAESTRA: SUPABASE_KEY es la llave secreta (service_role). Funciona como siempre.
+#   SESION:        SUPABASE_KEY es la llave pública. Cada usuario abre una sesión verificada
+#                  y la base aplica los permisos. Es lo recomendado.
+# =====================================================================
+def _rol_de_llave(llave: str) -> str:
+    llave = str(llave or "").strip()
+    if llave.startswith("sb_secret_"):
+        return "service_role"
+    if llave.startswith("sb_publishable_"):
+        return "anon"
+    try:
+        import base64 as _b64
+        import json as _json
+        carga = llave.split(".")[1]
+        carga += "=" * (-len(carga) % 4)
+        return str(_json.loads(_b64.urlsafe_b64decode(carga)).get("role") or "")
+    except Exception:
+        return ""
+
+
+MODO_CONEXION_PC = "SESION" if _rol_de_llave(SUPABASE_KEY) == "anon" else "LLAVE_MAESTRA"
+
+
+def _nombre_equipo() -> str:
+    try:
+        import socket as _socket
+        return _socket.gethostname()[:60]
+    except Exception:
+        return "PC"
+
+
+def iniciar_sesion_pc(usuario: str, password: str, page=None):
+    """Modo SESION: abre la sesión verificada del PC con un cliente propio para esta pantalla.
+    Devuelve el usuario (dict), None si la contraseña es incorrecta, o {'error': ...}.
+    Lanza excepción con el motivo si no se pudo."""
+    cliente = create_client(SUPABASE_URL, SUPABASE_KEY)
+    if not hasattr(cliente.auth, "sign_in_anonymously"):
+        raise RuntimeError("La librería supabase de este PC es antigua. Actualícela: pip install -U supabase")
+    cliente.auth.sign_in_anonymously()
+    res = cliente.rpc("wms_iniciar_sesion_pc", {
+        "p_usuario": usuario, "p_password": password,
+        "p_equipo": f"PC {_nombre_equipo()}" + (" · PRUEBAS" if AMBIENTE == "PRUEBAS" else ""),
+    }).execute()
+    datos = res.data if isinstance(res.data, dict) else None
+    if datos and not datos.get("error"):
+        import weakref as _weakref
+        clave = id(page) if page is not None else 0
+        try:
+            ref = _weakref.ref(page) if page is not None else None
+        except TypeError:
+            ref = None
+        _clientes_sesion[clave] = (ref, cliente)
+        if page is not None:
+            page._wms_cliente = cliente
+    else:
+        try:
+            cliente.auth.sign_out()
+        except Exception:
+            pass
+    return datos
+
+
+def cerrar_sesion_pc(page=None) -> None:
+    if MODO_CONEXION_PC != "SESION":
+        return
+    clave = id(page) if page is not None else 0
+    par = _clientes_sesion.pop(clave, None)
+    cliente = (par[1] if par else None) or (getattr(page, "_wms_cliente", None) if page is not None else None)
+    if page is not None:
+        page._wms_cliente = None
+    if cliente is None:
+        return
+    try:
+        cliente.rpc("wms_cerrar_sesion", {}).execute()
+    except Exception:
+        pass
+    try:
+        cliente.auth.sign_out()
+    except Exception:
+        pass
+
+
+def registrar_conexion_pc(usuario: str) -> None:
+    """Deja constancia de cómo se conecta este PC (Salud del sistema avisa si usa la llave maestra)."""
+    def _enviar():
+        try:
+            supabase.rpc("wms_registrar_conexion_pc", {
+                "p_usuario": usuario, "p_equipo": _nombre_equipo(), "p_modo": MODO_CONEXION_PC,
+                "p_ambiente": AMBIENTE, "p_version": CONTEXTO_ERRORES_PC.get("version"),
+            }).execute()
+        except Exception:
+            pass
+    _threading.Thread(target=_enviar, daemon=True).start()
 
 
 # ---------------------------------------------------------------------
@@ -1277,6 +1422,15 @@ def notificar_global(page, texto: str, color: str = "#1E3A8A"):
     # Los avisos en rojo son fallas: quedan también en el registro central (módulo Desarrollador)
     if str(color or "").upper() in _COLORES_ERROR:
         registrar_error_pc(CONTEXTO_ERRORES_PC.get("modulo") or "PC", str(texto or ""))
+    # Sesión del PC vencida o cerrada: volver al login en vez de mostrar errores en cada pantalla
+    al_vencer = getattr(page, "_al_vencer_sesion_pc", None)
+    if ("SESION_PC_REQUERIDA" in str(texto) or "SESION_EXPIRADA" in str(texto)) and al_vencer:
+        try:
+            al_vencer()
+        except Exception:
+            pass
+        texto = "Su sesión del PC venció o fue cerrada. Vuelva a ingresar con su usuario y contraseña."
+        color = "#B45309"
     page.show_dialog(
         ft.SnackBar(
             content=ft.Text(texto, color=ft.Colors.WHITE, weight=ft.FontWeight.W_600, size=12),
