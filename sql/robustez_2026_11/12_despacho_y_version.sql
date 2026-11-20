@@ -77,6 +77,10 @@ $$;
 grant execute on function public.wms_despacho_de_orden(bigint) to anon, authenticated, service_role;
 
 -- ---------- 3. Cierre de packing (misma firma que el script 10) ----------
+-- La versión antigua (11 parámetros, del script 07) debe desaparecer: si conviven las dos,
+-- Supabase no sabe cuál usar ("Could not choose the best candidate function").
+drop function if exists public.wms_cerrar_packing(bigint, text, jsonb, integer, text, text, text, numeric, numeric, bigint, text);
+
 create or replace function public.wms_cerrar_packing(
   p_orden_id bigint, p_modo text, p_detalle jsonb, p_bultos int,
   p_tipo_empaque text default null, p_comuna text default null, p_lpn text default null,

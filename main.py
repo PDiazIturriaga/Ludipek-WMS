@@ -1134,9 +1134,9 @@ def main(page: ft.Page):
                 dash.refrescar_dashboard,
                 dash.sel_sub_dash,
                 [
-                    ("1. Vista Integral (BI + POs)", _ico("VIEW_IN_AR_OUTLINED", "DASHBOARD_OUTLINED")),
-                    ("2. Productividad & Dock-to-Stock", _ico("PRECISION_MANUFACTURING_OUTLINED", "BOLT_ROUNDED")),
-                    ("3. Ocupación, Quiebres & Dead Stock", _ico("CATEGORY_OUTLINED", "PIE_CHART_OUTLINE_ROUNDED")),
+                    ("1. Resumen operativo", _ico("VIEW_IN_AR_OUTLINED", "DASHBOARD_OUTLINED")),
+                    ("2. Flujo y productividad", _ico("PRECISION_MANUFACTURING_OUTLINED", "BOLT_ROUNDED")),
+                    ("3. Inventario y vencimientos", _ico("CATEGORY_OUTLINED", "PIE_CHART_OUTLINE_ROUNDED")),
                 ],
             ),
             (

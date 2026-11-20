@@ -103,6 +103,12 @@ values
       and p.prosrc not like '%r.modulo, r.tipo%'$q$,
  $q$select 'volver a ejecutar 14_alertas_operacion.sql'$q$,
  'Volver a ejecutar el 14.'),
+(200, 'ESTRUCTURA', 'Funciones WMS con dos versiones (el celular falla con "Could not choose the best candidate")', 'CRITICO',
+ $q$select count(*) from (select proname from pg_proc where pronamespace = 'public'::regnamespace and proname like 'wms\_%'
+      group by proname having count(*) > 1) x$q$,
+ $q$select proname || ' x' || count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname like 'wms\_%'
+      group by proname having count(*) > 1 order by 1$q$,
+ 'Borrar la versión antigua (drop function con su lista de parámetros) o volver a ejecutar el script más nuevo.'),
 (203, 'ESTRUCTURA', 'Tablas sin clave primaria', 'MEDIO',
  $q$select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
       and not exists (select 1 from pg_constraint k where k.conrelid = c.oid and k.contype = 'p')$q$,
