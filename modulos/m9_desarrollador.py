@@ -116,6 +116,29 @@ def _filtros(opciones: list, actual: str, al_elegir):
     ], spacing=6, wrap=True, run_spacing=6)
 
 
+_PATRONES_CONEXION = ("sin conexión", "failed to fetch", "clientexception", "socketexception", "xmlhttprequest error",
+                      "timeoutexception", "connection closed", "connection refused", "network is unreachable",
+                      "failed host lookup", "connecterror", "read timed out", "max retries exceeded", "getaddrinfo")
+
+
+def es_error_conexion(msg) -> bool:
+    """Corte de señal / internet / servidor inalcanzable: no es una falla del programa."""
+    m = str(msg or "").lower()
+    return any(p in m for p in _PATRONES_CONEXION)
+
+
+def _mensaje_celda(msg):
+    texto = ft.Text(str(msg or ""), size=12, color=INK, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
+                    tooltip=str(msg or "")[:600], expand=True)
+    if not es_error_conexion(msg):
+        return texto
+    return ft.Row([ft.Container(padding=ft.Padding.symmetric(horizontal=6, vertical=2), border_radius=4,
+                                border=ft.Border.all(1, INK_3),
+                                content=ft.Row([ft.Icon(ft.Icons.WIFI_OFF_ROUNDED, size=12, color=INK_2),
+                                                ft.Text("Conexión", size=10.5, color=INK_2)], spacing=3, tight=True)),
+                   texto], spacing=6)
+
+
 def _version_tupla(v):
     try:
         return tuple(int(x) for x in str(v or "").strip().split("."))
@@ -411,8 +434,7 @@ class DesarrolladorModulo:
             padding=10, border_radius=8, bgcolor=UI["card_alt"], ink=True, on_click=lambda e: self._dialogo_error(g),
             content=ft.Row([
                 _chip(EST_ERROR.get(g.get("estado"), EST_ERROR["NUEVO"])),
-                ft.Text(str(g.get("mensaje") or "")[:110], size=12, color=INK, expand=True, max_lines=2,
-                        overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Container(expand=True, content=_mensaje_celda(str(g.get("mensaje") or "")[:110])),
                 ft.Text(f"{_miles(g.get('ocurrencias'))}×", size=12, color=INK_2),
             ], spacing=10))
 
@@ -448,9 +470,7 @@ class DesarrolladorModulo:
                     ft.DataCell(_chip(EST_ERROR.get(g.get("estado"), EST_ERROR["NUEVO"]))),
                     ft.DataCell(_t("Celular" if g.get("origen") == "RF" else "PC", color=INK_2)),
                     ft.DataCell(_t(g.get("modulo") or "-", color=INK_2)),
-                    ft.DataCell(ft.Container(width=460, content=ft.Text(
-                        str(g.get("mensaje") or ""), size=12, color=INK, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
-                        tooltip=str(g.get("mensaje") or "")[:600]))),
+                    ft.DataCell(ft.Container(width=460, content=_mensaje_celda(g.get("mensaje")))),
                     ft.DataCell(_t(_miles(g.get("ocurrencias")), ft.FontWeight.W_600)),
                     ft.DataCell(_t(formatear_fecha_hora_chile(g.get("ultima_vez")), color=INK_2)),
                     ft.DataCell(_t(g.get("ultima_version") or "-", color=INK_2)),
@@ -554,6 +574,13 @@ class DesarrolladorModulo:
                 ft.Container(padding=10, border_radius=6, bgcolor=UI["card_alt"], border=ft.Border.all(1, UI["borde"]),
                              content=ft.Text(str(g.get("mensaje") or ""), size=12, color=INK, selectable=True,
                                              font_family="Consolas")),
+                *([ft.Row([ft.Icon(ft.Icons.WIFI_OFF_ROUNDED, size=16, color=ESTADO["advertencia"]),
+                           ft.Text("Error de conexión: el equipo no logró hablar con Supabase (se cortó la señal WiFi o "
+                                   "internet, o se agotó el tiempo). No es una falla del programa. Si se repite mucho en "
+                                   "un mismo sector o usuario, revise la cobertura WiFi; si ocurre a todos a la vez, "
+                                   "revise el estado de Supabase. Si es aislado, puede marcarlo como Ignorado.",
+                                   size=11.5, color=INK_2, expand=True)], spacing=8,
+                          vertical_alignment=ft.CrossAxisAlignment.START)] if es_error_conexion(g.get("mensaje")) else []),
                 *([ft.Text("Detalle técnico (último con traza)", size=11.5, color=INK_2),
                    ft.Container(padding=10, border_radius=6, bgcolor=UI["card_alt"], height=150,
                                 content=ft.Column([ft.Text(detalle[:4000], size=11, color=INK_2, selectable=True,
