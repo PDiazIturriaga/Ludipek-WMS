@@ -11,9 +11,10 @@ from servicio_ubicaciones_etiquetas import (
     generar_pdfs_ubicaciones_stgo,
     describir_ubicacion_stgo,
 )
+from modulos.m6_lpn_cencosud import PanelesLpnCencosud
 
 
-class ImpresionModulo:
+class ImpresionModulo(PanelesLpnCencosud):
     """Centro de impresión WMS.
 
     Ubicaciones: una pestaña por bodega.
@@ -123,13 +124,13 @@ class ImpresionModulo:
             color=self.MUTED,
         )
 
-        self.sub_lpn = self._tarjeta(
+        self.sub_lpn_reimpresion = self._tarjeta(
             ft.Column(
                 [
                     self._titulo_seccion(
                         ft.Icons.QR_CODE_2_ROUNDED,
-                        "ETIQUETAS DE PALLET LPN",
-                        "Reimpresión de etiqueta logística 15 × 10 cm.",
+                        "ETIQUETA LOGÍSTICA DE UN PALLET RECIBIDO",
+                        "Reimpresión de la etiqueta 15 × 10 cm de un LPN ya recepcionado (con SKU, lote y vencimiento).",
                     ),
                     ft.Divider(color=self.BORDER, height=2),
                     ft.Row(
@@ -148,6 +149,11 @@ class ImpresionModulo:
                 ],
                 spacing=12,
             )
+        )
+
+        self.sub_lpn = ft.Column(
+            [self._construir_panel_lpn_nuevos(), self.sub_lpn_reimpresion],
+            spacing=10, scroll=ft.ScrollMode.AUTO, expand=True,
         )
 
         self.panel_ccp = ft.Column(
@@ -260,24 +266,8 @@ class ImpresionModulo:
             expand=True,
         )
 
-        # Se mantienen las pestañas de retail/e-commerce para no romper main.py.
-        self.sub_retail = self._tarjeta(
-            ft.Column(
-                [
-                    self._titulo_seccion(
-                        ft.Icons.STORE_OUTLINED,
-                        "ETIQUETAS B2B RETAIL",
-                        "Formatos logísticos para clientes retail.",
-                    ),
-                    ft.Text(
-                        "Seleccione el flujo correspondiente desde el módulo comercial antes de imprimir.",
-                        color=self.MUTED,
-                        size=11,
-                    ),
-                ],
-                spacing=10,
-            )
-        )
+        # Etiquetas Cencosud B2B (antes app_cencosud.py)
+        self.sub_retail = self._construir_panel_cencosud()
         self.sub_meli = self._tarjeta(
             ft.Column(
                 [
@@ -297,6 +287,10 @@ class ImpresionModulo:
         )
 
         self.contenedor = ft.Container(content=self.sub_lpn, expand=True)
+        try:
+            self._cargar_estado_lpn()
+        except Exception as ex:
+            print(f"[WARN] Correlativo LPN: {ex}")
         self.vista = ft.Container(
             padding=14,
             bgcolor=self.BG,
@@ -324,7 +318,7 @@ class ImpresionModulo:
                                             weight=ft.FontWeight.W_900,
                                         ),
                                         ft.Text(
-                                            "LPN, ubicaciones y documentos logísticos",
+                                            "LPN por bodega, ubicaciones y etiquetas Cencosud B2B",
                                             color=self.MUTED,
                                             size=10.5,
                                         ),
@@ -723,6 +717,13 @@ class ImpresionModulo:
         ]
         indice = idx if 0 <= idx < len(vistas) else 0
         self.contenedor.content = vistas[indice]
+        try:
+            if indice == 0:
+                self._cargar_estado_lpn()
+            elif indice == 2:
+                self._cargar_estado_cencosud()
+        except Exception as ex:
+            print(f"[WARN] Centro de impresión: {ex}")
         if indice == 1 and self.cont_ubicaciones.content is self.panel_stgo and not self.ubic_stgo:
             self._cargar_ubicaciones_stgo()
         self.page.update()
