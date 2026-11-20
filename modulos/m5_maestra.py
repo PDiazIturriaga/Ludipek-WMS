@@ -424,6 +424,16 @@ class MaestraModulo:
 
             pc_sel = [k for k, chk in checks_pc.items() if chk.value]
             rf_sel = [k for k, chk in checks_rf.items() if chk.value]
+            # Compatibilidad: los celulares con la app anterior solo entienden los permisos antiguos
+            # (RF_...). Se guardan junto a los nuevos; la app nueva usa solo los APP_ e ignora estos.
+            LEGADO_RF = {
+                "APP_RECEPCION": "RF_RECEPCION", "APP_MAESTRA": "RF_RECEPCION", "APP_TRASLADOS": "RF_TRASLADOS",
+                "APP_ALMACENAMIENTO": "RF_PUTAWAY", "APP_REABASTECIMIENTO": "RF_REABASTECIMIENTO",
+                "APP_PICKING": "RF_PICKING", "APP_PICKING_FARMACIA": "RF_PICKING", "APP_PACKING": "RF_PICKING",
+                "APP_STOCK_CONTEO": "RF_CONSULTA", "APP_VACIAS": "RF_INVENTARIO", "APP_CICLICO_SKU": "RF_INVENTARIO",
+            }
+            if any(k.startswith("APP_") for k in rf_sel):
+                rf_sel = rf_sel + sorted({LEGADO_RF[k] for k in rf_sel if k in LEGADO_RF} - set(rf_sel))
 
             # 1. Guardar permisos y bodega en JSON local
             mapa_local = leer_json_local(RUTA_PERMISOS_LOCAL)
