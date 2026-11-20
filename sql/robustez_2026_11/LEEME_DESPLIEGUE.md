@@ -41,6 +41,7 @@ Cada script es una transacción (si falla, no cambia nada) y se puede volver a e
 | 28 | `28_permisos_pc.sql` | **Permisos del PC** (clave de servicio) sobre las tablas nuevas. Corrige "permission denied for table wms_cencosud_hu" y deja habilitadas las tablas que se creen después. Se puede repetir. |
 | 29 | `29_dashboard.sql` | **Tablero operativo** (m0): una función entrega todos los datos reales del tablero (órdenes por etapa, unidades por día, productividad por operador, ocupación por rack, vencimientos, recepciones abiertas y alertas). Solo lectura. |
 | 30 | `30_tareas_vacias_total.sql` | Tareas "Auditar vacías": el total del PC ahora coincide con lo que muestra el celular (no cuenta las ubicaciones ya marcadas como ocupadas pendientes de inventario antes de crear la tarea). |
+| 31 | `31_catalogo_modulos.sql` | **Catálogo de módulos** (`wms_modulos_app`): la pantalla de permisos del PC se arma desde esta tabla. Celular: un permiso por módulo (APP_...), 12 en total. A los usuarios actuales se les agregan los equivalentes de sus permisos antiguos (nadie pierde acceso). Módulo nuevo = un insert en esta tabla. |
 | 90 | `90_diagnostico_solo_lectura.sql` | **Diagnóstico (solo lectura, se puede ejecutar cuando quiera)**: revisa seguridad, scripts aplicados, estructura, inventario, maestra, operación, usuarios y kardex. Exporte el resultado a CSV. |
 | — | `07b_diagnostico_ov.sql` | Solo lectura: radiografía de una orden (cabecera, líneas, kardex, packing, historial). Cambiar el número en la primera línea. |
 

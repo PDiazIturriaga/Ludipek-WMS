@@ -52,6 +52,22 @@ class MaestraModulo:
             ("RF_INVENTARIO", "RF Auditoría & Conteo Cíclico"),
             ("RF_CONSULTA", "RF Consultor de Stock/LPN"),
         ]
+        # Permisos antiguos del celular -> equivalentes nuevos (se llena desde Supabase)
+        REEMPLAZA_RF = {}
+
+        # Catálogo de módulos en Supabase (script 31): cada módulo nuevo aparece solo aquí
+        try:
+            _cat = (supabase.table("wms_modulos_app").select("codigo, plataforma, nombre, orden, reemplaza, activo")
+                    .eq("activo", True).order("orden").execute().data or [])
+            _rf = [(c["codigo"], c["nombre"]) for c in _cat if c.get("plataforma") == "RF"]
+            _pc = [(c["codigo"], c["nombre"]) for c in _cat if c.get("plataforma") == "PC"]
+            if _rf:
+                MODULOS_RF_LISTA = _rf
+                REEMPLAZA_RF = {c["codigo"]: set(c.get("reemplaza") or []) for c in _cat if c.get("plataforma") == "RF"}
+            if _pc:
+                MODULOS_PC_LISTA = _pc
+        except Exception as _ex_cat:
+            print(f"[WARN] Catálogo de módulos (ejecute 31_catalogo_modulos.sql): {_ex_cat}")
 
         # --- 3. VARIABLES DE ESTADO ---
         lock_datos = threading.Lock()
@@ -207,6 +223,17 @@ class MaestraModulo:
                 dd_usr_rol.value = "SUPERVISOR"
             page.update()
 
+        def permisos_rf_vigentes(rf_lista: list) -> list:
+            """Si el usuario todavía tiene permisos antiguos (RF_PICKING, RF_INVENTARIO...), se muestran como
+            los módulos nuevos equivalentes. Al guardar quedan solo los nuevos."""
+            codigos = {k for k, _ in MODULOS_RF_LISTA}
+            if not REEMPLAZA_RF:
+                return rf_lista
+            if any(str(x).startswith("APP_") for x in rf_lista):
+                return [x for x in rf_lista if x in codigos]
+            antiguos = set(rf_lista)
+            return [k for k in codigos if REEMPLAZA_RF.get(k, set()) & antiguos]
+
         def obtener_permisos_usuario(row_u: dict) -> tuple:
             u_key = str(row_u.get("usuario") or "").strip().upper()
             rol_u = str(row_u.get("rol") or "").strip().upper()
@@ -217,7 +244,7 @@ class MaestraModulo:
 
             if pc_raw is not None or rf_raw is not None:
                 # En Supabase son columnas text[] (llegan como lista)
-                return (lista_permisos(pc_raw), lista_permisos(rf_raw))
+                return (lista_permisos(pc_raw), permisos_rf_vigentes(lista_permisos(rf_raw)))
 
             if u_key in mapa_local:
                 return (

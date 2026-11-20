@@ -144,7 +144,7 @@ const bool kDescontarStockAlPickear = true;
 
 /// Versión de esta app (AAAA.MM.DD). Debe ser >= wms_config.version_minima_rf (script 12);
 /// si no, la app pide recargar para que nadie trabaje con una versión antigua.
-const String kVersionApp = '2026.11.20.6';
+const String kVersionApp = '2026.11.20.7';
 
 /// Devuelve la versión mínima exigida por el servidor, o null si no se pudo consultar.
 Future<String?> versionMinimaServidor() async {
@@ -1928,9 +1928,31 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         .toSet();
     // Sin permisos configurados se mantiene el acceso completo (mismo criterio que el PC).
     if (permisos.isEmpty) return true;
+    // Permisos nuevos (uno por módulo, script 31): si el usuario ya los tiene, mandan ellos
+    if (permisos.any((p) => p.startsWith('APP_'))) {
+      final codigo = _permisoAppPorModulo[idx];
+      return codigo == null || permisos.contains(codigo);
+    }
     final requeridos = _permisosRfPorModulo[idx] ?? const <String>[];
     return requeridos.isEmpty || requeridos.any(permisos.contains);
   }
+
+  /// Un permiso por módulo de la app. Al crear un módulo nuevo: agregarlo aquí y en
+  /// la tabla wms_modulos_app (script 31) para que aparezca en los permisos del PC.
+  static const Map<int, String> _permisoAppPorModulo = {
+    0: 'APP_RECEPCION',
+    1: 'APP_ALMACENAMIENTO',
+    2: 'APP_REABASTECIMIENTO',
+    3: 'APP_STOCK_CONTEO',
+    4: 'APP_MAESTRA',
+    5: 'APP_PICKING_FARMACIA',
+    6: 'APP_VACIAS',
+    7: 'APP_CICLICO_SKU',
+    8: 'APP_PACKING',
+    9: 'APP_PICKING',
+    10: 'APP_TRASLADOS',
+    11: 'APP_CONSULTA_STOCK',
+  };
 
   bool _ovActivaEsFarmacia() {
     final ov = _ovCabeceraActiva;
