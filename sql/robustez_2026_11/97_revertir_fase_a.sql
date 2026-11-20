@@ -78,6 +78,16 @@ drop function if exists public.wms_reservar_correlativo(text, integer, text, big
 drop function if exists public.wms_max_lpn_rango(text, bigint, bigint);
 drop function if exists public.wms_dashboard_resumen(text, integer);
 -- 30: la función wms_tareas_conteo vuelve a la versión del 20 ejecutando ese script
+drop trigger if exists tg_agrupar_error on public.wms_log_errores;
+drop function if exists public.wms_tg_agrupar_error();
+drop function if exists public.wms_dev_resumen(integer);
+drop function if exists public.wms_mis_tickets(text);
+drop function if exists public.wms_reportar_problema(text, text, text, text, text, text, text, text, text, text);
+drop table if exists public.wms_tickets_comentarios;
+drop table if exists public.wms_errores_grupos;
+drop table if exists public.wms_tickets;
+drop function if exists public.wms_firma_error(text, text);
+delete from public.wms_modulos_app where codigo = 'PC_DESARROLLADOR';
 drop function if exists public.wms_deshacer_conciliacion(bigint, text);
 drop function if exists public.wms_conciliar_recepciones(bigint, bigint[], text, text);
 drop function if exists public.wms_recepciones_sin_oc(text, date, date);

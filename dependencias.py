@@ -157,7 +157,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 import logging as _logging
 import threading as _threading
 
-CONTEXTO_ERRORES_PC = {"usuario": "", "bodega": "", "version": "PC"}
+CONTEXTO_ERRORES_PC = {"usuario": "", "bodega": "", "version": "PC", "modulo": ""}
 _estado_registro_pc = {"ultimo": "", "en": 0.0}
 _guardia_registro = _threading.local()
 
@@ -1269,8 +1269,14 @@ def barra_apilada_turno(sector: str, manana_un: int, tarde_un: int, max_total: i
 # =====================================================================
 # 6. APLICACION PRINCIPAL - TORRE DE CONTROL BI & WMS
 # =====================================================================
+_COLORES_ERROR = {"#B91C1C", "#DC2626", "#991B1B", "#EF4444", "#7F1D1D", "RED"}
+
+
 def notificar_global(page, texto: str, color: str = "#1E3A8A"):
     import flet as ft
+    # Los avisos en rojo son fallas: quedan también en el registro central (módulo Desarrollador)
+    if str(color or "").upper() in _COLORES_ERROR:
+        registrar_error_pc(CONTEXTO_ERRORES_PC.get("modulo") or "PC", str(texto or ""))
     page.show_dialog(
         ft.SnackBar(
             content=ft.Text(texto, color=ft.Colors.WHITE, weight=ft.FontWeight.W_600, size=12),

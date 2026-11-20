@@ -7,7 +7,7 @@ import traceback
 import flet as ft
 from datetime import datetime
 from dependencias import *
-from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion, m8_recepcion_ccp
+from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion, m8_recepcion_ccp, m9_desarrollador
 os.environ["TZ"] = "America/Santiago"
 if hasattr(time, "tzset"):
     time.tzset()
@@ -1261,6 +1261,27 @@ def main(page: ft.Page):
                 )
             )
 
+        # Módulo Desarrollador: solo para quien tenga PC_DESARROLLADOR marcado (ni siquiera los ADMIN sin él)
+        es_desarrollador = "PC_DESARROLLADOR" in {
+            p.strip() for p in str(getattr(page, "modulos_pc_usuario", "") or "").upper().replace(";", ",").split(",")
+        }
+        dev = m9_desarrollador.DesarrolladorModulo(page, tarjetas_adaptables, kpis_adaptables) if es_desarrollador else None
+        if dev is not None:
+            vistas_mapa.append(
+                (
+                    "Desarrollador",
+                    _ico("TERMINAL_ROUNDED", "CODE_ROUNDED", "BUG_REPORT_OUTLINED"),
+                    dev.vista,
+                    dev.refrescar,
+                    dev.sel_sub_dev,
+                    [
+                        ("1. Resumen y versiones", _ico("INSIGHTS_ROUNDED", "DASHBOARD_OUTLINED")),
+                        ("2. Errores (celular y PC)", _ico("BUG_REPORT_OUTLINED", "ERROR_OUTLINE_ROUNDED")),
+                        ("3. Tickets de usuarios", _ico("CONFIRMATION_NUMBER_OUTLINED", "SUPPORT_AGENT_ROUNDED")),
+                    ],
+                )
+            )
+
         COLOR_BG_PORTAL = "#1B2122"
         COLOR_PANEL_IZQ = "#20282A"
         COLOR_HEADER = "#141A1B"
@@ -1358,6 +1379,8 @@ def main(page: ft.Page):
         ]
         if es_bodega_concepcion:
             codigos_mod.append("PC_RECEPCION_CCP")
+        if dev is not None:
+            codigos_mod.append("PC_DESARROLLADOR")
 
         def modulo_permitido(idx_sel: int) -> bool:
             """Mismo criterio en el portal, el menú rápido y al abrir el módulo."""
@@ -1366,6 +1389,8 @@ def main(page: ft.Page):
             cod_req = codigos_mod[idx_sel] if idx_sel < len(codigos_mod) else "PC_RECEPCION_CCP"
             if cod_req == "PC_RECEPCION_CCP" and not es_bodega_concepcion:
                 return False
+            if cod_req == "PC_DESARROLLADOR":
+                return es_desarrollador
             rol_usr = str(getattr(page, "rol_actual", "")).upper()
             permisos_set = {
                 p.strip()
@@ -1394,6 +1419,10 @@ def main(page: ft.Page):
                 content=ft.ProgressRing(width=24, height=24, stroke_width=2, color="#38BDF8"),
             )
             registrar_visita_reciente(idx_sel, sub_idx)
+            try:
+                CONTEXTO_ERRORES_PC["modulo"] = f"{vistas_mapa[idx_sel][0].replace(chr(10), ' ')} › {vistas_mapa[idx_sel][5][sub_idx][0]}"[:60]
+            except Exception:
+                pass
             perfil_nav = obtener_perfil_responsive(page)
             panel_submenus.width = perfil_nav["menu_width"]
             panel_submenus.content = generar_menu_lateral(idx_sel, sub_idx, perfil_nav["compacto"])
@@ -1449,6 +1478,8 @@ def main(page: ft.Page):
             "Etiquetas e impresión",
             "Recepción de traslados en CCP",
         ]
+        if dev is not None:
+            DESCRIPCION_MODULOS = DESCRIPCION_MODULOS[:len(vistas_mapa) - 1] + ["Errores, tickets y versiones"]
         botones_grid = []
         for idx, (texto_mod, icono_mod, _, _, _, _) in enumerate(vistas_mapa):
             permitido = modulo_permitido(idx)
@@ -2113,6 +2144,16 @@ def main(page: ft.Page):
         cuerpo_principal = ft.Container(content=vista_portal_home, expand=True)
         btn_home = ft.IconButton(icon=ft.Icons.HOME_OUTLINED, icon_color=ft.Colors.WHITE, tooltip="Volver al Portal de Inicio", on_click=volver_al_home, visible=False)
 
+        def pantalla_actual() -> str:
+            v = str(breadcrumb_txt.value or "")
+            return "" if indice_modulo_activo == -1 else v.replace("  ›  ", " › ")
+
+        btn_reportar = ft.IconButton(
+            icon=ft.Icons.BUG_REPORT_OUTLINED, icon_color=ft.Colors.WHITE,
+            tooltip="Reportar un problema",
+            on_click=lambda e: m9_desarrollador.abrir_reportar_problema(page, pantalla_actual()),
+        )
+
         menu_apps_rapido = ft.PopupMenuButton(
             icon=ft.Icons.APPS_ROUNDED,
             icon_color=ft.Colors.WHITE,
@@ -2210,6 +2251,15 @@ def main(page: ft.Page):
                 ft.PopupMenuItem(content=ft.Row([ft.Icon(ft.Icons.LINK_ROUNDED, size=18), ft.Text(f"NetSuite: {'conectado' if NETSUITE_CONECTADO else 'sin conexión directa'}")], spacing=10)),
                 ft.PopupMenuItem(),
                 ft.PopupMenuItem(
+                    content=ft.Row([ft.Icon(ft.Icons.BUG_REPORT_OUTLINED, size=18), ft.Text("Reportar un problema")], spacing=10),
+                    on_click=lambda e: m9_desarrollador.abrir_reportar_problema(page, pantalla_actual()),
+                ),
+                ft.PopupMenuItem(
+                    content=ft.Row([ft.Icon(ft.Icons.LIST_ALT_ROUNDED, size=18), ft.Text("Mis reportes")], spacing=10),
+                    on_click=lambda e: m9_desarrollador.abrir_mis_reportes(page),
+                ),
+                ft.PopupMenuItem(),
+                ft.PopupMenuItem(
                     content=ft.Row([ft.Icon(ft.Icons.LOGOUT_ROUNDED, size=18, color="#F87171"), ft.Text("Cerrar sesión", color="#F87171")], spacing=10),
                     on_click=cerrar_sesion_actual,
                 ),
@@ -2249,6 +2299,7 @@ def main(page: ft.Page):
                         [
                             dd_bodega_header,
                             btn_home,
+                            btn_reportar,
                             menu_apps_rapido,
                             menu_usuario_header,
                         ],

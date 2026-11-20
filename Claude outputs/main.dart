@@ -10,6 +10,8 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
 import 'package:excel/excel.dart' as excel_lib;
+// Viene incluido con supabase_flutter: guarda el trabajo en curso en el teléfono
+import 'package:shared_preferences/shared_preferences.dart';
 
 // =====================================================================
 // 1. CONFIGURACIÓN DE SUPABASE Y SERVICIO DE VISIÓN IA
@@ -20,6 +22,11 @@ const String kGeminiEdgeFunction = 'analizar-etiqueta';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Errores de pantalla (Flutter) también quedan registrados para el supervisor
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    registrarErrorApp('PANTALLA', details.exception, details.stack);
+  };
 
   ErrorWidget.builder = (FlutterErrorDetails details) {
     return MaterialApp(
@@ -88,6 +95,36 @@ bool _perteneceABodegaActiva(Map<dynamic, dynamic> fila) {
   return rawBod.toUpperCase() == bodegaActiva.toUpperCase();
 }
 
+/// Guarda en Supabase (wms_log_errores, script 26) un error INESPERADO de la app para que el
+/// supervisor lo vea en el PC. Nunca lanza excepción ni bloquea al operador.
+String _ultimoErrorRegistrado = '';
+DateTime _ultimoErrorEn = DateTime.fromMillisecondsSinceEpoch(0);
+
+void registrarErrorApp(String modulo, Object error, [StackTrace? pila]) {
+  try {
+    final msg = error.toString();
+    if (msg.isEmpty || msg.startsWith('WMS:')) return;   // validaciones normales: no son fallas
+    final ahora = DateTime.now();
+    if (msg == _ultimoErrorRegistrado && ahora.difference(_ultimoErrorEn).inSeconds < 60) return;
+    _ultimoErrorRegistrado = msg;
+    _ultimoErrorEn = ahora;
+    final detalle = pila?.toString() ?? '';
+    () async {
+      try {
+        await supabase.rpc('wms_registrar_error', params: {
+          'p_origen': 'RF',
+          'p_modulo': modulo,
+          'p_mensaje': msg.length > 500 ? msg.substring(0, 500) : msg,
+          'p_detalle': detalle.length > 3000 ? detalle.substring(0, 3000) : detalle,
+          'p_version': kVersionApp,
+          'p_usuario': (usuarioActivo?['usuario'] ?? '').toString(),
+          'p_bodega': bodegaActiva,
+        });
+      } catch (_) {}
+    }();
+  } catch (_) {}
+}
+
 Future<Session?> asegurarSesionSupabase() async {
   var sesion = supabase.auth.currentSession;
   if (sesion == null) {
@@ -104,6 +141,35 @@ Future<Session?> asegurarSesionSupabase() async {
 /// Si es true, al FINALIZAR PICKING se descuenta el stock pickeado de
 /// bodega_inventario_ubicacion y se registra SALIDA_PICKING en el kardex.
 const bool kDescontarStockAlPickear = true;
+
+/// Versión de esta app (AAAA.MM.DD). Debe ser >= wms_config.version_minima_rf (script 12);
+/// si no, la app pide recargar para que nadie trabaje con una versión antigua.
+const String kVersionApp = '2026.11.20.8';
+
+/// Devuelve la versión mínima exigida por el servidor, o null si no se pudo consultar.
+Future<String?> versionMinimaServidor() async {
+  try {
+    final v = await supabase.rpc('wms_version_minima');
+    return v?.toString();
+  } catch (_) {
+    return null; // sin el script 12 no se bloquea a nadie
+  }
+}
+
+/// Compara por números (2026.11.19.10 es mayor que 2026.11.19.9; como texto daba al revés).
+int compararVersiones(String a, String b) {
+  final pa = a.split('.').map((x) => int.tryParse(x.trim()) ?? 0).toList();
+  final pb = b.split('.').map((x) => int.tryParse(x.trim()) ?? 0).toList();
+  for (var i = 0; i < (pa.length > pb.length ? pa.length : pb.length); i++) {
+    final x = i < pa.length ? pa[i] : 0;
+    final y = i < pb.length ? pb[i] : 0;
+    if (x != y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+bool versionDesactualizada(String? minima) =>
+    minima != null && minima.trim().isNotEmpty && compararVersiones(kVersionApp, minima.trim()) < 0;
 
 /// Supabase (PostgREST) entrega como máximo 1.000 filas por consulta.
 /// Este helper pide páginas sucesivas hasta traer todas las filas.
@@ -1167,8 +1233,17 @@ class _LoginScreenLudipekState extends State<LoginScreenLudipek> {
     setState(() => _isLoading = true);
 
     try {
-      // La contraseña se valida en el servidor (wms_login): el teléfono ya no descarga contraseñas.
-      final dynamic res = await supabase.rpc('wms_login', params: {'p_usuario': user, 'p_password': pass});
+      // La contraseña se valida en el servidor. Con el script 24 además se VINCULA la sesión de
+      // Supabase de este dispositivo al operador: desde ahí la base sabe quién opera (no se le cree al celular).
+      dynamic res;
+      try {
+        await asegurarSesionSupabase();
+        res = await supabase.rpc('wms_iniciar_sesion',
+            params: {'p_usuario': user, 'p_password': pass, 'p_dispositivo': 'RF $_bodegaSeleccionada · v$kVersionApp'});
+      } catch (e) {
+        debugPrint('Sesión verificada no disponible, login clásico: $e');
+        res = await supabase.rpc('wms_login', params: {'p_usuario': user, 'p_password': pass});
+      }
 
       if (res == null) {
         if (!mounted) return;
@@ -1208,6 +1283,22 @@ class _LoginScreenLudipekState extends State<LoginScreenLudipek> {
         return;
       }
 
+      final minima = await versionMinimaServidor();
+      if (versionDesactualizada(minima)) {
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Actualice la aplicación', style: TextStyle(fontWeight: FontWeight.bold)),
+            content: Text('Esta versión ($kVersionApp) ya no está permitida; se requiere $minima o superior.\n\n'
+                'Cierre esta pestaña y abra de nuevo el enlace de la app (en PC: Ctrl + F5).'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ENTENDIDO'))],
+          ),
+        );
+        return;
+      }
+
       usuarioActivo = usr;
       bodegaActiva = tieneAccesoGlobal ? _bodegaSeleccionada : bodegaAsignada;
 
@@ -1238,6 +1329,7 @@ class _LoginScreenLudipekState extends State<LoginScreenLudipek> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(Icons.pets_rounded, size: 80, color: isDark ? Colors.white : const Color(0xFF1D4ED8)),
+                Text('Versión $kVersionApp', style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
                 const SizedBox(height: 16),
                 Text(
                   'INICIAR SESIÓN',
@@ -1308,6 +1400,175 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
   int? _editandoConteoId;
 
   bool _mostrarMenuCentral = true;
+
+  // ===================================================================
+  // MIS TAREAS DE CONTEO (asignadas desde el PC: Inventario -> Tareas de conteo)
+  // ===================================================================
+  List<Map<String, dynamic>> _misTareasConteo = [];
+  DateTime? _tareasConteoLeidas;
+  bool _hayVersionNueva = false;
+
+  Future<void> _cargarMisTareasConteo() async {
+    _tareasConteoLeidas = DateTime.now();
+    final minima = await versionMinimaServidor();
+    if (mounted && versionDesactualizada(minima) != _hayVersionNueva) {
+      setState(() => _hayVersionNueva = versionDesactualizada(minima));
+    }
+    try {
+      final res = await supabase.rpc('wms_tareas_conteo', params: {
+        'p_bodega': bodegaActiva,
+        'p_usuario': _usuarioRf(),
+        'p_solo_abiertas': true,
+      });
+      final lista = List<Map<String, dynamic>>.from((res as List).map((e) => Map<String, dynamic>.from(e as Map)))
+          .where((t) => t['estado'] == 'PENDIENTE' || t['estado'] == 'EN_PROCESO')
+          .toList();
+      // Tareas con todo contado se cierran solas
+      final completas = lista.where((t) {
+        final total = (t['total'] as num?)?.toInt() ?? 0;
+        final avance = (t['avance'] as num?)?.toInt() ?? 0;
+        return total > 0 && avance >= total;
+      }).toList();
+      for (final t in completas) {
+        try {
+          await supabase.rpc('wms_actualizar_tarea_conteo', params: {'p_id': t['id'], 'p_estado': 'COMPLETADA', 'p_usuario': _usuarioRf()});
+          lista.remove(t);
+          _notificar('¡${_tituloTareaConteo(t)} completada! (${t['avance']} de ${t['total']})', color: const Color(0xFF047857));
+        } catch (_) {}
+      }
+      if (mounted) setState(() => _misTareasConteo = lista);
+    } catch (_) {
+      // Sin el script 09 en la base no hay tareas: el menú funciona igual
+    }
+  }
+
+  /// Después de contar: vuelve a leer el avance de las tareas (sin esperar el minuto del menú)
+  void _refrescarTareasConteo() {
+    _tareasConteoLeidas = DateTime.now();
+    Future.microtask(_cargarMisTareasConteo);
+  }
+
+  String _tituloTareaConteo(Map t) {
+    switch ((t['tipo'] ?? '').toString()) {
+      case 'VACIAS':
+        return 'Auditar vacías · pasillo ${t['pasillo']}';
+      case 'SKU':
+        return 'Cíclico SKU ${t['sku']}';
+      default:
+        return 'Contar pasillo ${t['pasillo']}';
+    }
+  }
+
+  Future<void> _abrirTareaConteo(Map t) async {
+    final tipo = (t['tipo'] ?? 'PASILLO').toString();
+    final int idxModulo = tipo == 'VACIAS' ? 6 : (tipo == 'SKU' ? 7 : 3);
+    if (!_tienePermisoModulo(idxModulo)) {
+      _notificar('Su usuario no tiene habilitado el módulo de esta tarea. Avise a su supervisor.', color: const Color(0xFFB91C1C));
+      return;
+    }
+    if (t['estado'] == 'PENDIENTE') {
+      try {
+        await supabase.rpc('wms_actualizar_tarea_conteo', params: {'p_id': t['id'], 'p_estado': 'EN_PROCESO', 'p_usuario': _usuarioRf()});
+      } catch (_) {}
+    }
+    final pasillo = (t['pasillo'] ?? '').toString();
+    if (tipo == 'VACIAS') {
+      setState(() {
+        _tabActual = 6;
+        _mostrarMenuCentral = false;
+      });
+      await _cargarUbicacionesVacias();
+      if (mounted) setState(() => _pasilloFiltro = pasillo);
+    } else if (tipo == 'SKU') {
+      _abrirModulo(7);
+      final sku = (t['sku'] ?? '').toString();
+      _txtSkuCiclicoDirigido.text = sku;
+      await _cargarUbicacionesSkuDirigido(skuForzado: sku);
+    } else {
+      _abrirModulo(3);
+      setState(() => _cicloUbicacionCtrl.text = '$pasillo-');
+      _notificar('Cuente cada ubicación con stock del pasillo $pasillo (${t['avance'] ?? 0} de ${t['total'] ?? 0} hechas).',
+          color: const Color(0xFF4338CA));
+    }
+  }
+
+  Future<void> _terminarTareaConteo(Map t) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Terminó la tarea?', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text('${_tituloTareaConteo(t)}\nAvance registrado: ${t['avance'] ?? 0} de ${t['total'] ?? 0}.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('NO')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('SÍ, TERMINÉ')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await supabase.rpc('wms_actualizar_tarea_conteo', params: {'p_id': t['id'], 'p_estado': 'COMPLETADA', 'p_usuario': _usuarioRf()});
+      _notificar('Tarea cerrada. ¡Gracias!', color: const Color(0xFF047857));
+    } catch (e) {
+      _notificar('No se pudo cerrar la tarea: ${_mensajeError(e)}', color: Colors.red);
+    }
+    await _cargarMisTareasConteo();
+  }
+
+  Widget _tarjetaMisTareasConteo() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEEF2FF),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF4338CA).withOpacity(0.4), width: 1.6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.assignment_ind_rounded, color: Color(0xFF4338CA)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('MIS TAREAS DE CONTEO (${_misTareasConteo.length})',
+                  style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF4338CA))),
+            ),
+            IconButton(icon: const Icon(Icons.sync, size: 20), onPressed: _cargarMisTareasConteo),
+          ]),
+          ..._misTareasConteo.map((t) {
+            final int total = (t['total'] as num?)?.toInt() ?? 0;
+            final int avance = (t['avance'] as num?)?.toInt() ?? 0;
+            return Container(
+              margin: const EdgeInsets.only(top: 8),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
+              child: ListTile(
+                onTap: () => _abrirTareaConteo(t),
+                title: Text(_tituloTareaConteo(t), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const SizedBox(height: 4),
+                  LinearProgressIndicator(
+                    value: total == 0 ? 0.0 : (avance / total).clamp(0.0, 1.0).toDouble(),
+                    minHeight: 6,
+                    color: const Color(0xFF4338CA),
+                    backgroundColor: const Color(0xFFE2E8F0),
+                  ),
+                  const SizedBox(height: 4),
+                  Text('$avance de $total ubicaciones${t['estado'] == 'EN_PROCESO' ? ' · en proceso' : ''}',
+                      style: const TextStyle(fontSize: 11.5)),
+                ]),
+                trailing: IconButton(
+                  tooltip: 'Terminé',
+                  icon: const Icon(Icons.task_alt_rounded, color: Color(0xFF047857)),
+                  onPressed: () => _terminarTareaConteo(t),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
   int _tabActual = 0;
 
   // Banderas anti doble-toque: evitan registros duplicados en Supabase
@@ -1378,7 +1639,22 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
   // Variables Módulo 3: Movimiento a Picking (FEFO)
   final TextEditingController _txtSkuPicking = TextEditingController();
   final TextEditingController _txtCajasMoverPicking = TextEditingController(text: '1');
-  final TextEditingController _txtUbiDestinoPicking = TextEditingController(text: 'ZONA-PICKING');
+  final TextEditingController _txtUbiDestinoPicking = TextEditingController();
+  // Picking = nivel 01 de los racks (ej. H-02-01). Merma = ZONA-MERMA y zona de mermas de arena (ME-..).
+  List<Map<String, dynamic>> _stockPickingSku = [];
+  String? _pickingFijoSku;   // ubicación de picking asignada al SKU buscado (wms_picking_fijo_sku)
+  bool _esUbicacionPicking(String u) => RegExp(r'^[A-Z]-\d{2}-01$').hasMatch(u.trim().toUpperCase());
+  bool _esUbicacionMerma(String u) {
+    final x = u.trim().toUpperCase();
+    return x == 'ZONA-MERMA' || RegExp(r'^ME-\d{2}-\d{2}$').hasMatch(x);
+  }
+  /// Destino sugerido: donde el SKU ya está en picking; si no, el nivel 01 de la misma columna del origen.
+  String _destinoPickingPara(Map origen) {
+    if ((_pickingFijoSku ?? '').isNotEmpty) return _pickingFijoSku!;
+    if (_stockPickingSku.isNotEmpty) return (_stockPickingSku.first['codigo_ubicacion'] ?? '').toString().toUpperCase();
+    final m = RegExp(r'^([A-Z])-(\d{2})-\d{2}$').firstMatch((origen['codigo_ubicacion'] ?? '').toString().toUpperCase());
+    return m == null ? '' : '${m.group(1)}-${m.group(2)}-01';
+  }
   List< Map<String, dynamic> > _sugerenciasSkuPicking = [];
   List< Map<String, dynamic> > _ubicacionesFefoPicking = [];
   Map<String, dynamic>? _stockFefoSeleccionado;
@@ -1418,11 +1694,205 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     _cargarAsnsActivos();
     _cargarMaestraUbicaciones();
     _cargarOVsPendientes();
-    _cargarUbicacionesVacias();
+    // Primero se recupera el trabajo en curso guardado en el teléfono y después se cargan las vacías
+    _restaurarBorradores().whenComplete(_cargarUbicacionesVacias);
+  }
+
+  // ===================================================================
+  // TRABAJO EN CURSO GUARDADO EN EL TELÉFONO
+  // Nada se pierde al salir de una pantalla, al bloquear el teléfono, si el navegador recarga la
+  // página o se vuelve a iniciar sesión. Se borra solo al terminar (enviar el reporte) o si el
+  // operador presiona "Descartar".
+  // ===================================================================
+  Timer? _timerBorradores;
+  bool _borradoresListos = false;   // no guardar nada antes de haber restaurado
+
+  String _claveBorrador(String modulo) =>
+      'wms_borrador|${(usuarioActivo?['usuario'] ?? '').toString().toUpperCase()}|$bodegaActiva|$modulo';
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    if (_borradoresListos) {
+      _timerBorradores?.cancel();
+      _timerBorradores = Timer(const Duration(milliseconds: 700), _guardarBorradores);
+    }
+  }
+
+  Map<String, dynamic>? _borradorVacias() {
+    if (_vaciasVerificadas.isEmpty && _vaciasConHallazgoRojo.isEmpty) return null;
+    return {
+      'verificadas': _vaciasVerificadas.map((e) => e.toString()).toList(),
+      'rojas': _vaciasConHallazgoRojo.map((e) => e.toString()).toList(),
+      'detalle_rojas': _vaciasOcupadasDetalle.map((k, v) => MapEntry(k.toString(), v.toString())),
+      'pasillo': _pasilloFiltro,
+      'guardado': DateTime.now().toIso8601String(),
+    };
+  }
+
+  Map<String, dynamic>? _borradorCiclicoSku() {
+    if (_skuDirigidoActivo.isEmpty && _estadoAuditoriaPorId.isEmpty && _itemsAuditadosSkuMemoria.isEmpty) return null;
+    return {
+      'sku': _skuDirigidoActivo,
+      'texto': _txtSkuCiclicoDirigido.text,
+      'estados': _estadoAuditoriaPorId.map((k, v) => MapEntry('$k', v)),
+      'items': _itemsAuditadosSkuMemoria.map((k, v) => MapEntry('$k', v)),
+      'filas': _ubicacionesSkuDirigido,
+      'guardado': DateTime.now().toIso8601String(),
+    };
+  }
+
+  Future<void> _guardarBorradores() async {
+    if (!_borradoresListos || usuarioActivo == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final borradores = {'VACIAS': _borradorVacias, 'CICLICO_SKU': _borradorCiclicoSku};
+      for (final e in borradores.entries) {
+        try {   // cada módulo por separado: si uno falla, el otro igual se guarda
+          final datos = e.value();
+          if (datos == null) {
+            await prefs.remove(_claveBorrador(e.key));
+          } else {
+            await prefs.setString(_claveBorrador(e.key), jsonEncode(datos, toEncodable: (o) => o.toString()));
+          }
+        } catch (ex) {
+          debugPrint('Trabajo en curso ${e.key}: $ex');
+        }
+      }
+    } catch (e) {
+      debugPrint('No se pudo guardar el trabajo en curso: $e');
+    }
+  }
+
+  Future<void> _restaurarBorradores() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rawV = prefs.getString(_claveBorrador('VACIAS'));
+      if (rawV != null) {
+        final v = Map<String, dynamic>.from(jsonDecode(rawV) as Map);
+        _vaciasVerificadas = {...((v['verificadas'] as List?) ?? [])};
+        _vaciasConHallazgoRojo = {...((v['rojas'] as List?) ?? [])};
+        final det = Map<String, dynamic>.from((v['detalle_rojas'] as Map?) ?? {});
+        det.forEach((k, val) => _vaciasOcupadasDetalle[k] = val);
+        _pasilloFiltro = (v['pasillo'] ?? 'TODOS').toString();
+      }
+      final rawS = prefs.getString(_claveBorrador('CICLICO_SKU'));
+      if (rawS != null) {
+        final c = Map<String, dynamic>.from(jsonDecode(rawS) as Map);
+        _skuDirigidoActivo = (c['sku'] ?? '').toString();
+        _txtSkuCiclicoDirigido.text = (c['texto'] ?? _skuDirigidoActivo).toString();
+        _estadoAuditoriaPorId
+          ..clear()
+          ..addAll(Map<String, dynamic>.from((c['estados'] as Map?) ?? {})
+              .map((k, val) => MapEntry(int.tryParse(k) ?? -1, val.toString()))
+            ..remove(-1));
+        _itemsAuditadosSkuMemoria
+          ..clear()
+          ..addAll(Map<String, dynamic>.from((c['items'] as Map?) ?? {})
+              .map((k, val) => MapEntry(int.tryParse(k) ?? -1, Map<String, dynamic>.from(val as Map)))
+            ..remove(-1));
+        _ubicacionesSkuDirigido = List<dynamic>.from((c['filas'] as List?) ?? []);
+      }
+      if (mounted && (rawV != null || rawS != null)) {
+        super.setState(() {});
+        final partes = [
+          if (rawV != null) 'Ubicaciones vacías (${_vaciasVerificadas.length + _vaciasConHallazgoRojo.length} revisadas)',
+          if (rawS != null) 'Conteo por SKU $_skuDirigidoActivo (${_estadoAuditoriaPorId.length} marcadas)',
+        ];
+        _notificar('Se recuperó su trabajo en curso: ${partes.join(' · ')}', color: const Color(0xFF1D4ED8));
+      }
+    } catch (e) {
+      debugPrint('No se pudo recuperar el trabajo en curso: $e');
+    } finally {
+      _borradoresListos = true;
+    }
+  }
+
+  Future<void> _descartarBorrador(String modulo) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_claveBorrador(modulo));
+    } catch (_) {}
+  }
+
+  Future<void> _confirmarDescartar(String nombre, VoidCallback limpiar) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Descartar el trabajo en curso?'),
+        content: Text('Se borrará lo marcado en $nombre. Lo que ya envió no se ve afectado.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('NO')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB91C1C), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true), child: const Text('DESCARTAR')),
+        ],
+      ),
+    );
+    if (ok == true && mounted) setState(limpiar);
+  }
+
+  /// Tarjeta en el menú: trabajo sin terminar, con acceso directo
+  Widget? _tarjetaTrabajoEnCurso() {
+    final items = <Widget>[];
+    if (_vaciasVerificadas.isNotEmpty || _vaciasConHallazgoRojo.isNotEmpty) {
+      items.add(ListTile(
+        dense: true, contentPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.grid_off_rounded, color: Color(0xFF0F766E)),
+        title: const Text('Ubicaciones vacías', style: TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text('${_vaciasVerificadas.length} confirmadas · ${_vaciasConHallazgoRojo.length} ocupadas'
+            '${_pasilloFiltro != 'TODOS' ? ' · pasillo $_pasilloFiltro' : ''}'),
+        trailing: IconButton(
+          tooltip: 'Descartar', icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFF94A3B8)),
+          onPressed: () => _confirmarDescartar('Ubicaciones vacías', () {
+            _vaciasVerificadas.clear();
+            _vaciasConHallazgoRojo.clear();
+            _descartarBorrador('VACIAS');
+          }),
+        ),
+        onTap: () => _abrirModulo(6),
+      ));
+    }
+    if (_skuDirigidoActivo.isNotEmpty || _estadoAuditoriaPorId.isNotEmpty) {
+      items.add(ListTile(
+        dense: true, contentPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFF6D28D9)),
+        title: Text('Conteo por SKU ${_skuDirigidoActivo.isEmpty ? '' : _skuDirigidoActivo}',
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text('${_estadoAuditoriaPorId.length} de ${_ubicacionesSkuDirigido.length} ubicaciones marcadas'),
+        trailing: IconButton(
+          tooltip: 'Descartar', icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFF94A3B8)),
+          onPressed: () => _confirmarDescartar('el conteo por SKU', () {
+            _estadoAuditoriaPorId.clear();
+            _itemsAuditadosSkuMemoria.clear();
+            _ubicacionesSkuDirigido.clear();
+            _txtSkuCiclicoDirigido.clear();
+            _skuDirigidoActivo = '';
+            _descartarBorrador('CICLICO_SKU');
+          }),
+        ),
+        onTap: () => _abrirModulo(7),
+      ));
+    }
+    if (items.isEmpty) return null;
+    return _TarjetaMovil(
+      borderColor: const Color(0xFF1D4ED8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [
+          Icon(Icons.restore_rounded, color: Color(0xFF1D4ED8)),
+          SizedBox(width: 8),
+          Expanded(child: Text('TRABAJO EN CURSO', style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF1E3A8A)))),
+        ]),
+        const Text('Quedó guardado en este teléfono. Toque para continuar.', style: TextStyle(fontSize: 11.5, color: Color(0xFF475569))),
+        ...items,
+      ]),
+    );
   }
 
   @override
   void dispose() {
+    _timerBorradores?.cancel();
+    _guardarBorradores();   // último guardado al cerrar sesión
     _debounceSku?.cancel();
     super.dispose();
   }
@@ -1441,6 +1911,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     7: ['RF_INVENTARIO'],
     8: ['RF_PICKING'],
     9: ['RF_PICKING'],
+    10: ['RF_RECEPCION', 'RF_TRASLADOS'],
   };
 
   bool _tienePermisoModulo(int idx) {
@@ -1457,9 +1928,31 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         .toSet();
     // Sin permisos configurados se mantiene el acceso completo (mismo criterio que el PC).
     if (permisos.isEmpty) return true;
+    // Permisos nuevos (uno por módulo, script 31): si el usuario ya los tiene, mandan ellos
+    if (permisos.any((p) => p.startsWith('APP_'))) {
+      final codigo = _permisoAppPorModulo[idx];
+      return codigo == null || permisos.contains(codigo);
+    }
     final requeridos = _permisosRfPorModulo[idx] ?? const <String>[];
     return requeridos.isEmpty || requeridos.any(permisos.contains);
   }
+
+  /// Un permiso por módulo de la app. Al crear un módulo nuevo: agregarlo aquí y en
+  /// la tabla wms_modulos_app (script 31) para que aparezca en los permisos del PC.
+  static const Map<int, String> _permisoAppPorModulo = {
+    0: 'APP_RECEPCION',
+    1: 'APP_ALMACENAMIENTO',
+    2: 'APP_REABASTECIMIENTO',
+    3: 'APP_STOCK_CONTEO',
+    4: 'APP_MAESTRA',
+    5: 'APP_PICKING_FARMACIA',
+    6: 'APP_VACIAS',
+    7: 'APP_CICLICO_SKU',
+    8: 'APP_PACKING',
+    9: 'APP_PICKING',
+    10: 'APP_TRASLADOS',
+    11: 'APP_CONSULTA_STOCK',
+  };
 
   bool _ovActivaEsFarmacia() {
     final ov = _ovCabeceraActiva;
@@ -1491,15 +1984,102 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       _cargarOVsPendientes();
     } else if (idx == 6) {
       _cargarUbicacionesVacias();
+    } else if (idx == 10) {
+      _cargarTrasladosCcp();
+    } else if (idx == 1) {
+      _cargarMisAlmacenamientos();
+    } else if (idx == 3) {
+      _verificarPermisoDepurar();
     }
+  }
+
+  // ===================================================================
+  // MESAS DE PACKING (MESA 1 a MESA 6, QR "Mesa N" pegado en cada mesa)
+  // ===================================================================
+  static const int _cantidadMesasPacking = 6;
+
+  /// "Mesa 3", "MESA-3", "3" -> "MESA 3" (null si no es una mesa válida)
+  String? _normalizarMesa(String raw) {
+    final m = RegExp(r'(\d{1,2})').firstMatch(raw.toUpperCase());
+    if (m == null) return null;
+    final n = int.parse(m.group(1)!);
+    if (n < 1 || n > 20) return null;
+    return 'MESA $n';
+  }
+
+  /// Pide la mesa: botones 1..6 o escanear el QR de la mesa.
+  Future<String?> _pedirMesaPacking({required String titulo, String? subtitulo}) async {
+    final eleccion = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(titulo, style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: SizedBox(width: double.maxFinite, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (subtitulo != null) Text(subtitulo, style: const TextStyle(fontSize: 12.5)),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 46,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F766E), foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, '__SCAN__'),
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('ESCANEAR QR DE LA MESA'),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text('o elija la mesa:', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: List.generate(_cantidadMesasPacking, (i) => SizedBox(
+            width: 76, height: 52,
+            child: OutlinedButton(
+              onPressed: () => Navigator.pop(ctx, 'MESA ${i + 1}'),
+              child: Text('${i + 1}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+            ),
+          ))),
+        ])),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR'))],
+      ),
+    );
+    if (eleccion == null) return null;
+    if (eleccion != '__SCAN__') return eleccion;
+    final ctrl = TextEditingController();
+    await _escanearParaCampo(ctrl, 'Escanear QR de la mesa');
+    final mesa = _normalizarMesa(ctrl.text);
+    if (mesa == null) {
+      if (ctrl.text.trim().isNotEmpty) _notificar('El código "${ctrl.text}" no es una mesa de packing.', color: Colors.red);
+      return null;
+    }
+    return mesa;
   }
 
   /// Usuario que se informa a las funciones del servidor (queda en kardex y auditoría).
   String _usuarioRf() => (usuarioActivo?['usuario'] ?? 'APP_RF').toString();
 
   /// Mensaje legible de un error de Supabase (las funciones wms_* responden "WMS: ...").
+  bool _saliendoPorSesion = false;
+
+  String _nombreModuloActual() {
+    const nombres = {0: 'RECEPCION', 1: 'ALMACENAMIENTO', 2: 'REABASTECIMIENTO', 3: 'STOCK_CONTEO', 4: 'MAESTRA',
+                     5: 'PICKING_FARMACIA', 6: 'VACIAS', 7: 'CICLICO_SKU', 8: 'PACKING', 9: 'PICKING', 10: 'TRASLADOS_CCP',
+                     11: 'CONSULTA_STOCK'};
+    return _mostrarMenuCentral ? 'MENU' : (nombres[_tabActual] ?? 'MODULO_$_tabActual');
+  }
+
   String _mensajeError(Object e) {
     final m = e is PostgrestException ? e.message : e.toString();
+    // La sesión del turno venció (o el supervisor la cerró): volver a pedir la contraseña
+    if (m.contains('SESION_EXPIRADA') && !_saliendoPorSesion) {
+      _saliendoPorSesion = true;
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        usuarioActivo = null;
+        if (mounted) {
+          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreenLudipek()));
+        }
+      });
+      return 'Su sesión venció. Vuelva a ingresar su usuario y contraseña.';
+    }
+    if (!m.startsWith('WMS:')) {
+      registrarErrorApp(_nombreModuloActual(), m);
+    }
     return m.replaceFirst(RegExp(r'^WMS:\s*'), '');
   }
 
@@ -1524,11 +2104,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
   String _pasilloFiltro = 'TODOS';
 
   Future _cargarUbicacionesVacias() async {
-    setState(() {
-      _cargandoVacias = true;
-      _vaciasVerificadas.clear();
-      _vaciasConHallazgoRojo.clear();
-    });
+    // Lo ya marcado NO se borra al recargar (solo se quita lo que dejó de estar vacío)
+    setState(() => _cargandoVacias = true);
     try {
       // 1. Traer las ubicaciones maestras de la bodega activa
       final resMaestra = await leerTodoPaginado((d, h) => supabase
@@ -1564,12 +2141,13 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       // 3. Revisar las ubicaciones marcadas como ocupadas sin inventario aún (ALERTA_VACIA_OCUPADA)
       final Map ocupadasPendientesMap = {};
       try {
-        final resAlertas = await supabase
+        // Todas las alertas (antes solo las últimas 400: las más antiguas volvían a aparecer como vacías)
+        final resAlertas = await leerTodoPaginado((d, h) => supabase
             .from('historial_movimientos')
             .select('id, ubicacion_destino, sku, lote, bodega')
             .eq('tipo_movimiento', 'ALERTA_VACIA_OCUPADA')
             .order('id', ascending: false)
-            .limit(400);
+            .range(d, h));
 
         for (final rawA in (resAlertas as List)) {
           final a = rawA as Map;
@@ -1610,7 +2188,12 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         setState(() {
           _ubicacionesVacias = vacias;
           _vaciasOcupadasDetalle = ocupadasPendientesMap;
-          _pasilloFiltro = 'TODOS';
+          final setVacias = vacias.map((e) => e.toString()).toSet();
+          _vaciasVerificadas.removeWhere((u) => !setVacias.contains(u.toString()));
+          // las marcadas "ocupada" quedan registradas como alerta: siguen en su lista
+          _vaciasConHallazgoRojo.removeWhere((u) => !ocupadasPendientesMap.containsKey(u));
+          final pasillos = vacias.map((u) => u.toString().split('-').first).toSet();
+          if (_pasilloFiltro != 'TODOS' && !pasillos.contains(_pasilloFiltro)) _pasilloFiltro = 'TODOS';
         });
       }
     } catch (e) {
@@ -1698,7 +2281,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       _vaciasOcupadasDetalle[ubicacion] = notaFinal;
     });
 
-    final String fechaIso = DateTime.now().toIso8601String();
+    final String fechaIso = DateTime.now().toUtc().toIso8601String();
     final String auditorStr = (usuarioActivo?['nombre_completo'] ?? usuarioActivo?['usuario'] ?? 'APP_RF').toString().toUpperCase();
     final String pasillo = ubicacion.contains('-') ? ubicacion.split('-').first : 'S/P';
 
@@ -1743,6 +2326,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       } catch (_) {}
     }
 
+    _refrescarTareasConteo();
     _notificar(
       'Ubicación $ubicacion registrada como ocupada ($notaFinal). No volverá a aparecer en Vacías.',
       color: const Color(0xFFDC2626),
@@ -1893,7 +2477,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
 
     final loteId = 'VAC-${DateFormat('yyyyMMdd-HHmmss').format(DateTime.now())}';
     final fechaReporte = DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now());
-    final fechaIso = DateTime.now().toIso8601String();
+    final fechaIso = DateTime.now().toUtc().toIso8601String();
     final auditorStr = (usuarioActivo?['nombre_completo'] ?? usuarioActivo?['usuario'] ?? 'APP_RF').toString().toUpperCase();
 
     final List payloadSupabase = [];
@@ -1948,6 +2532,15 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     } finally {
       if (mounted) setState(() => _enviandoReporteVacias = false);
     }
+    // Lo reportado ya quedó en Supabase: se saca del trabajo en curso
+    if (mounted) {
+      setState(() {
+        final reportadas = listaAuditar.map((e) => e.toString()).toSet();
+        _vaciasVerificadas.removeWhere((u) => reportadas.contains(u.toString()));
+        _vaciasConHallazgoRojo.removeWhere((u) => _pasilloFiltro == 'TODOS' || u.toString().startsWith('$_pasilloFiltro-'));
+      });
+    }
+    _refrescarTareasConteo();
 
     final cantVerde = payloadSupabase.where((r) => (r as Map)['resultado_auditoria'] == 'CONFIRMADA_VACIA').length;
     final cantRojo = payloadSupabase.where((r) => (r as Map)['resultado_auditoria'].toString().startsWith('OCUPADA')).length;
@@ -2290,7 +2883,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         _notificar('El SKU $skuBuscar no registra ubicaciones con stock en $bodegaActiva.', color: Colors.orange);
       }
     } catch (e) {
-      _notificar('Error buscando ubicaciones del SKU: $e', color: Colors.red);
+      _notificar('Error buscando ubicaciones del SKU: ${_mensajeError(e)}', color: Colors.red);
     } finally {
       if (mounted) setState(() => _buscandoSkuDirigido = false);
     }
@@ -2377,7 +2970,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
 
     final loteId = 'SKU-${DateFormat('yyyyMMdd-HHmmss').format(DateTime.now())}';
     final auditorStr = (usuarioActivo?['nombre_completo'] ?? usuarioActivo?['usuario'] ?? 'APP_RF').toString().toUpperCase();
-    final fechaIso = DateTime.now().toIso8601String();
+    final fechaIso = DateTime.now().toUtc().toIso8601String();
     final fechaReporte = DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now());
 
     final List< Map<String, dynamic> > payload = _ubicacionesSkuDirigido.map((item) {
@@ -2415,6 +3008,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     } finally {
       if (mounted) setState(() => _enviandoCiclicoSku = false);
     }
+    _refrescarTareasConteo();
 
     final cantOk = payload.where((v) => v['estado_auditoria'] == 'CONFORME').length;
     final cantInc = payload.where((v) => v['estado_auditoria'] == 'INCIDENCIA').length;
@@ -2820,8 +3414,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       final res = await supabase
           .from('netsuite_ordenes_venta')
           .select()
+          .or('estado_ns.eq.PENDIENTE_PICKING,estado_ns.is.null')
           .order('id', ascending: true)
-          .limit(300);
+          .limit(500);
 
       final List candidatas = (res as List).where((rawOv) {
         final ov = Map.from(rawOv as Map);
@@ -2972,7 +3567,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       _ovCabeceraActiva = elegida;
       await _seleccionarOvFarmacia(elegida['id'].toString());
     } catch (e) {
-      _notificar('Error buscando OV: $e', color: Colors.red);
+      _notificar('Error buscando OV: ${_mensajeError(e)}', color: Colors.red);
       if (mounted) setState(() => _cargandoOv = false);
     }
   }
@@ -2985,7 +3580,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       final fin = (i + 100) > buscar.length ? buscar.length : i + 100;
       final res = await supabase
           .from('maestra_sku')
-          .select('sku, descripcion, multiplo, codigo_barras, marca')
+          .select('sku, descripcion, multiplo, codigo_barras, marca, peso_kg, peso_gr')
           .inFilter('sku', buscar.sublist(i, fin));
       for (final f in (res as List)) {
         salida.add(Map<String, dynamic>.from(f as Map));
@@ -3084,6 +3679,18 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
           });
         }
 
+        // Ubicación de picking asignada a cada SKU (la lista dirige al operador ahí)
+        try {
+          final fijas = await supabase.rpc('wms_picking_fijo_skus', params: {
+            'p_bodega': bodegaActiva,
+            'p_skus': lineasCargadas.map((l) => (l as Map)['sku'].toString()).toSet().toList(),
+          });
+          final mapa = {for (final f in (fijas as List)) (f as Map)['sku'].toString(): (f['ubicacion'] ?? '').toString()};
+          for (final l in lineasCargadas) {
+            (l as Map)['ubicacion_picking'] = mapa[l['sku'].toString()] ?? '';
+          }
+        } catch (_) {}
+
         _ordenarLineasPorMarcaYSku(lineasCargadas);
 
         setState(() {
@@ -3091,7 +3698,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         });
       }
     } catch (e) {
-      _notificar('Error cargando detalle OV: $e', color: Colors.red);
+      _notificar('Error cargando detalle OV: ${_mensajeError(e)}', color: Colors.red);
     } finally {
       if (mounted) setState(() => _cargandoOv = false);
     }
@@ -3249,10 +3856,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                   final bool completo = pickVal >= solVal && solVal > 0;
                   final String grupoMarca = _etiquetaGrupoMarca(l);
                   return InkWell(
-                    onTap: () {
-                      _txtScanFarmacia.text = l['sku'].toString();
-                      _procesarEscaneoFarmacia();
-                    },
+                    // El producto se confirma SOLO escaneándolo (no tocando la tarjeta)
+                    onTap: () => _avisarSoloEscaneo((l['sku'] ?? '').toString()),
                     child: Container(
                       margin: const EdgeInsets.only(bottom: 6),
                       padding: const EdgeInsets.all(10),
@@ -3276,11 +3881,18 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                                   '${l['sku']} - ${l['descripcion']}',
                                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, decoration: completo ? TextDecoration.lineThrough : null),
                                 ),
+                                if ((l['ubicacion_picking'] ?? '').toString().isNotEmpty)
+                                  Row(children: [
+                                    const Icon(Icons.place_rounded, size: 13, color: Color(0xFFB91C1C)),
+                                    const SizedBox(width: 2),
+                                    Text('Ir a ${l['ubicacion_picking']}',
+                                        style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w900, color: Color(0xFFB91C1C))),
+                                  ]),
                                 Builder(
                                   builder: (context) {
                                     final Map lotesMap = (l['lotes_pickeados'] as Map?) ?? {};
                                     if (lotesMap.isEmpty) {
-                                      return const Text('Toque o escanee para confirmar extracción', style: TextStyle(fontSize: 10, color: Color(0xFF475569)));
+                                      return const Text('Escanee el producto para confirmar extracción', style: TextStyle(fontSize: 10, color: Color(0xFF475569)));
                                     }
                                     final strLotes = lotesMap.entries.map((e) => '${e.key} (${e.value} UN)').join(' | ');
                                     return Text('Lotes: $strLotes', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF047857)));
@@ -3348,6 +3960,16 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       if (seguir != true) return;
     }
 
+    // El pedido queda físicamente en una mesa de packing: se registra cuál
+    final String? mesaPacking = await _pedirMesaPacking(
+      titulo: '¿En qué mesa deja el pedido?',
+      subtitulo: 'Escanee el QR pegado en la mesa de packing donde dejó la OV.',
+    );
+    if (mesaPacking == null) {
+      _notificar('Indique la mesa de packing para cerrar el picking.', color: Colors.orange);
+      return;
+    }
+
     setState(() => _finalizandoPicking = true);
     try {
       final Map ovMapPrevio = _ovCabeceraActiva ?? {'numero_ov': _txtBuscarOvPicking.text.trim().toUpperCase()};
@@ -3375,20 +3997,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         }
       }
 
-      // 2) Guardar cantidades y lotes en las líneas de la OV
-      for (var rawL in _lineasOvFarmacia) {
-        final l = rawL as Map;
-        final int idLinea = (l['id_detalle'] as num).toInt();
-        final int cantPick = (l['pickeado'] as num?)?.toInt() ?? 0;
-        final Map lotesMap = (l['lotes_pickeados'] as Map?) ?? {};
-        String lotesStr = lotesMap.entries.map((e) => '${e.key} (${e.value} UN)').join(' | ');
-
-        await supabase.from('netsuite_detalle_ov').update({
-          'cantidad_pickeada': cantPick,
-          'lotes_pickeados': lotesStr,
-        }).eq('id', idLinea);
-      }
-
+      // 2) Guardar líneas + cambiar estado en UNA transacción del servidor (wms_cerrar_picking).
+      //    Antes eran escrituras sueltas con errores silenciados: el celular decía "pasó a PACKING"
+      //    aunque Supabase no cambiara el estado (caso OV 133409-FA).
       final Map ovMap = _ovCabeceraActiva ??
           {
             'id': int.tryParse(_ovSeleccionadaKey),
@@ -3396,20 +4007,43 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
             'cliente_nombre': 'CLIENTE',
           };
       final String numeroOv = (ovMap['numero_ov'] ?? 'S/OV').toString().toUpperCase();
-
-
-      // ACTUALIZA EL ESTATUS DESDE MAIN.DART A PENDIENTE_PACKING (ENCIENDE CÍRCULO VERDE DE PICKING EN EL PC)
-      if (ovMap['id'] != null) {
-        try {
-          await supabase.from('netsuite_ordenes_venta').update({'estado_ns': 'PENDIENTE_PACKING'}).eq('id', ovMap['id']);
-        } catch (_) {
-          try {
-            await supabase.from('netsuite_ordenes_venta').update({'estado': 'PENDIENTE_PACKING'}).eq('id', ovMap['id']);
-          } catch (_) {}
+      final int? ordenId = int.tryParse('${ovMap['id'] ?? ''}');
+      if (ordenId == null) {
+        _notificar('No se identificó la OV en Supabase. Vuelva a cargarla.', color: Colors.red);
+        return;
+      }
+      final lineasPayload = _lineasOvFarmacia.map((rawL) {
+        final l = rawL as Map;
+        final Map lotesMap = (l['lotes_pickeados'] as Map?) ?? {};
+        return {
+          'id': (l['id_detalle'] as num).toInt(),
+          'cantidad_pickeada': (l['pickeado'] as num?)?.toInt() ?? 0,
+          'lotes_pickeados': lotesMap.entries.map((e) => '${e.key} (${e.value} UN)').join(' | '),
+        };
+      }).toList();
+      try {
+        await supabase.rpc('wms_cerrar_picking', params: {
+          'p_orden_id': ordenId,
+          'p_lineas': lineasPayload,
+          'p_usuario': _usuarioRf(),
+          'p_mesa': mesaPacking,
+        });
+      } catch (e) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('La OV NO pasó a packing', style: TextStyle(fontWeight: FontWeight.bold)),
+              content: Text('${_mensajeError(e)}\n\nEl stock ya descontado no se vuelve a descontar. '
+                  'Revise la conexión y presione FINALIZAR otra vez.'),
+              actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('ENTENDIDO'))],
+            ),
+          );
         }
+        return;
       }
 
-      _notificar('¡Picking completado! La OV $numeroOv pasó a PACKING.', color: const Color(0xFF047857));
+      _notificar('¡Picking completado! La OV $numeroOv quedó en $mesaPacking para packing.', color: const Color(0xFF047857));
       setState(() {
         _lineasOvFarmacia = [];
         _ovCabeceraActiva = null;
@@ -3431,14 +4065,14 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       // Cargar la siguiente OV asignada al operador (o avisar que la cola terminó)
       await _cargarOvAsignadaAutomaticamente(modoFarmacia: esModoFarmacia, mostrarAlertaFin: true);
     } catch (e) {
-      _notificar('Error cerrando picking: $e', color: Colors.red);
+      _notificar('Error cerrando picking: ${_mensajeError(e)}', color: Colors.red);
     } finally {
       if (mounted) setState(() => _finalizandoPicking = false);
     }
   }
 
   /// Descuenta del inventario los picks nuevos de la OV y registra SALIDA_PICKING en el kardex.
-  /// Prioridad: misma ubicación del pick -> ZONA-PICKING -> otras ubicaciones del lote (FEFO).
+  /// Prioridad: misma ubicación del pick -> picking nivel 01 -> otras ubicaciones del lote (FEFO).
   Future<List<String>> _descontarStockPicking(String numeroOv) async {
     final List<String> avisos = [];
     for (final rawL in _lineasOvFarmacia) {
@@ -3485,6 +4119,12 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
 
   Widget _construirVistaPickingFarmacia() {
     return _construirPantallaPickingUnificada(esModoFarmacia: true);
+  }
+
+  /// Picking y packing: el producto se confirma escaneando su código, nunca tocando la tarjeta.
+  void _avisarSoloEscaneo(String sku) {
+    _notificar('Escanee el código de barras de $sku para confirmarlo. No se puede confirmar tocando la tarjeta.',
+        color: const Color(0xFFB45309));
   }
 
   Future _procesarEscaneoFarmacia() async {
@@ -3539,7 +4179,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         for (var r in (resInv as List)) {
           if (!_perteneceABodegaActiva(r as Map)) continue;
           final ubi = (r['codigo_ubicacion'] ?? 'RACK').toString().trim().toUpperCase();
-          if (ubi == 'ZONA-MERMA') continue;
+          if (_esUbicacionMerma(ubi)) continue;
           if (loteBloqueadoPorQa(r['lote'])) continue;
           final l = (r['lote'] ?? 'S/L').toString().split('|QA:').first.trim().toUpperCase();
           final v = (r['fecha_vencimiento_cl'] ?? '').toString().trim();
@@ -3568,7 +4208,21 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         }
 
         lotesDisponibles = agrupado.entries.map((e) => {'lote_venc': e.key.toString(), 'stock': e.value as int}).toList();
-        lotesDisponibles.sort((a, b) => ((b as Map)['stock'] as int).compareTo((a as Map)['stock'] as int));
+        // Primero lo que está en picking (nivel 01), después reserva; dentro de cada grupo, más stock primero
+        final ubiFija = (linea['ubicacion_picking'] ?? '').toString();
+        int prioridadUbi(String k) {
+          final u = RegExp(r'\[Rack: ([^\]]+)\]').firstMatch(k)?.group(1) ?? '';
+          if (ubiFija.isNotEmpty && u == ubiFija) return -1;   // su ubicación de picking asignada
+          if (_esUbicacionPicking(u)) return 0;
+          if (u == 'ZONA-PICKING') return 1;
+          return u.isEmpty ? 3 : 2;
+        }
+        lotesDisponibles.sort((a, b) {
+          final ka = (a as Map)['lote_venc'].toString(), kb = (b as Map)['lote_venc'].toString();
+          final pa = prioridadUbi(ka), pb = prioridadUbi(kb);
+          if (pa != pb) return pa.compareTo(pb);
+          return (b['stock'] as int).compareTo(a['stock'] as int);
+        });
       } catch (_) {}
 
       if (!mounted) return;
@@ -3741,12 +4395,99 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
   int _pasoPackingLpn = 0;
   int? _packingDraftId;
   bool _sincronizandoPacking = false;
+  // Modo de packing: OV normal/farmacia = BULTOS (cuenta bultos y peso); traslado OT = PALLETS (LPN obligatorio)
+  bool _packingEsTraslado = false;
+  bool _cajaPorCajaPack = true;
+  // Consulta de stock del operador (módulo 11)
+  final TextEditingController _txtConsultaStockOp = TextEditingController();
+  List<Map<String, dynamic>> _resConsultaStockOp = [];
+  bool _buscandoStockOp = false;
+  String _ultimaConsultaStockOp = '';   // traslados: cada caja escaneada se agrega de a 1 con su lote/fecha
+  // Cierre con faltante (requiere motivo; el PC lo muestra como alerta)
+  String? _motivoFaltantePack;
+  bool _dialogoLotePackAbierto = false;
+  // BULTOS: unidades verificadas por línea (id_detalle -> UN)
+  final Map<int, int> _verificadoBultos = {};
+  // BULTOS: lote y vencimiento confirmados por línea (id_detalle -> {"LOTE|DD-MM-AAAA": UN})
+  final Map<int, Map<String, int>> _lotesVerificadosBultos = {};
+  // Lotes del sistema por SKU (sin ubicaciones), para la lista desplegable
+  final Map<String, List<Map<String, dynamic>>> _cacheLotesSistemaPacking = {};
+  final TextEditingController _txtPesoRealPack = TextEditingController();
+
+  int _esperadoPacking(Map l) => (l['esperado'] as num?)?.toInt() ?? 0;
+
+  double _pesoEsperadoPackingKg() {
+    double total = 0;
+    for (final raw in _lineasAuditoriaPacking) {
+      final l = raw as Map;
+      total += _esperadoPacking(l) * ((l['peso_unit_kg'] as num?)?.toDouble() ?? 0);
+    }
+    return total;
+  }
+
+  bool _lineasSinPeso() => _lineasAuditoriaPacking.any((raw) {
+        final l = raw as Map;
+        return _esperadoPacking(l) > 0 && ((l['peso_unit_kg'] as num?)?.toDouble() ?? 0) <= 0;
+      });
+
+  /// "L1 / 22-05-2028 [Rack: B-01] (5 UN) | L2 / S/F (3 UN)" -> [{lote, venc, unidades}]
+  List<Map<String, dynamic>> _parsearLotesPickeados(String raw) {
+    final salida = <Map<String, dynamic>>[];
+    for (final bloque in raw.split('|')) {
+      final b = bloque.replaceAll(RegExp(r'^\s*\[[^\]]*\]\s*'), '').trim();
+      if (b.isEmpty) continue;
+      final mUn = RegExp(r'\((\d+)\s*UN\)').allMatches(b).toList();
+      final unidades = mUn.isEmpty ? 0 : int.parse(mUn.last.group(1)!);
+      final cabeza = b.split('(').first.split('[Rack:').first.trim();
+      // El separador es " / " (hay lotes con barra: EBA2362/24 / 31/10/2027)
+      final partes = cabeza.contains(' / ') ? cabeza.split(' / ') : cabeza.split('/');
+      final lote = partes.first.trim().isEmpty ? 'S/L' : partes.first.trim().toUpperCase();
+      String venc = partes.length > 1 ? partes.sublist(1).join(' / ').trim() : '';
+      venc = (venc.isEmpty || venc.toUpperCase() == 'S/F') ? 'S/F' : (normalizarFechaSql(venc) ?? venc);
+      salida.add({'lote': lote, 'venc': venc, 'unidades': unidades});
+    }
+    return salida;
+  }
 
   void _generarLpnConsolidadoAuto() {
     final sufijo = DateFormat('yyMMdd-HHmmss').format(DateTime.now());
     setState(() {
       _txtLpnConsolidadoPack.text = 'LPN-PK-$sufijo';
     });
+  }
+
+  List<Map<String, dynamic>> _ordenesEnMesa = [];
+  String? _mesaPackingActiva;
+  bool _cargandoMesa = false;
+
+  Future<void> _cargarOrdenesDeMesa(String mesa) async {
+    setState(() {
+      _cargandoMesa = true;
+      _mesaPackingActiva = mesa;
+      _ordenesEnMesa = [];
+    });
+    try {
+      final res = await supabase.rpc('wms_ordenes_en_mesa', params: {'p_bodega': bodegaActiva, 'p_mesa': mesa});
+      final lista = List<Map<String, dynamic>>.from((res as List).map((e) => Map<String, dynamic>.from(e as Map)));
+      if (!mounted) return;
+      setState(() => _ordenesEnMesa = lista);
+      if (lista.isEmpty) {
+        _notificar('No hay pedidos esperando en $mesa.', color: Colors.orange);
+      } else if (lista.length == 1) {
+        // Un solo pedido en la mesa: se abre directo
+        _txtBuscarOvPacking.text = (lista.first['numero_ov'] ?? '').toString();
+        await _buscarOrdenParaPackingPorTexto();
+      }
+    } catch (e) {
+      _notificar('No se pudo leer la mesa: ${_mensajeError(e)}', color: Colors.red);
+    } finally {
+      if (mounted) setState(() => _cargandoMesa = false);
+    }
+  }
+
+  Future<void> _escanearMesaParaPacking() async {
+    final mesa = await _pedirMesaPacking(titulo: '¿Qué mesa va a procesar?');
+    if (mesa != null) await _cargarOrdenesDeMesa(mesa);
   }
 
   Future _buscarOrdenParaPackingPorTexto() async {
@@ -3781,15 +4522,87 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         setState(() => _cargandoAuditoriaPack = false);
         return;
       }
-      _ovPackingCabeceraActiva = lista.first as Map;
-      final cli = (_ovPackingCabeceraActiva!['cliente_nombre'] ?? '').toString().toUpperCase();
-      _txtComunaDespachoPack.text = cli.contains('CONCEPCION') ? 'CONCEPCIÓN' : 'SANTIAGO';
-      await _cargarOrdenParaAuditoriaPacking(_ovPackingCabeceraActiva!['id'].toString());
+      // Preferir coincidencia exacta (133409 no debe abrir 1133409-FA)
+      lista.sort((a, b) {
+        final ea = ((a as Map)['numero_ov'] ?? '').toString().toUpperCase().replaceAll('-FA', '') == sinFa ? 0 : 1;
+        final eb = ((b as Map)['numero_ov'] ?? '').toString().toUpperCase().replaceAll('-FA', '') == sinFa ? 0 : 1;
+        return ea.compareTo(eb);
+      });
+      final ov = Map.from(lista.first as Map);
+      final numOv = (ov['numero_ov'] ?? '').toString().toUpperCase();
+      final estado = (ov['estado_ns'] ?? ov['estado'] ?? '').toString().toUpperCase();
+      const yaEmpacada = {'PENDIENTE_FACTURACION', 'FACTURADO', 'DESPACHADO', 'EN_TRANSITO_CCP',
+        'RECEPCION_CCP_EN_PROCESO', 'RECIBIDO_CCP', 'RECIBIDO_CCP_CON_DIFERENCIAS', 'ANULADO', 'CERRADO'};
+      if (yaEmpacada.contains(estado)) {
+        _notificar('La orden $numOv ya está en $estado: no requiere packing.', color: Colors.orange);
+        setState(() => _cargandoAuditoriaPack = false);
+        return;
+      }
+      if (estado != 'PENDIENTE_PACKING' && estado != 'PACKING_EN_PROCESO') {
+        // Picking hecho en el celular pero el estado no cambió en Supabase (versión anterior de la app)
+        final det = await supabase.from('netsuite_detalle_ov')
+            .select('id, cantidad_pickeada, lotes_pickeados').eq('orden_id', ov['id']);
+        final pickeadas = (det as List).fold<int>(0, (a, d) => a + (((d as Map)['cantidad_pickeada'] as num?)?.toInt() ?? 0));
+        if (pickeadas == 0) {
+          _notificar('La orden $numOv aún no tiene unidades pickeadas ($estado).', color: Colors.red);
+          setState(() => _cargandoAuditoriaPack = false);
+          return;
+        }
+        if (!mounted) return;
+        final cerrar = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Picking sin cerrar en el sistema', style: TextStyle(fontWeight: FontWeight.bold)),
+            content: Text('$numOv tiene $pickeadas UN pickeadas pero sigue en ${estado.isEmpty ? 'PENDIENTE' : estado}.\n\n'
+                '¿Cerrar el picking con lo registrado y continuar al packing?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCELAR')),
+              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('CERRAR PICKING Y SEGUIR')),
+            ],
+          ),
+        );
+        if (cerrar != true) {
+          setState(() => _cargandoAuditoriaPack = false);
+          return;
+        }
+        try {
+          await supabase.rpc('wms_cerrar_picking', params: {
+            'p_orden_id': ov['id'],
+            'p_lineas': det.map((d) => {
+                  'id': (d as Map)['id'],
+                  'cantidad_pickeada': d['cantidad_pickeada'] ?? 0,
+                  'lotes_pickeados': d['lotes_pickeados'] ?? '',
+                }).toList(),
+            'p_usuario': _usuarioRf(),
+          });
+          ov['estado_ns'] = 'PENDIENTE_PACKING';
+        } catch (e) {
+          _notificar('No se pudo cerrar el picking: ${_mensajeError(e)}', color: Colors.red);
+          setState(() => _cargandoAuditoriaPack = false);
+          return;
+        }
+      }
+      _ovPackingCabeceraActiva = ov;
+      final mesaOv = (ov['mesa_packing'] ?? '').toString();
+      if (_mesaPackingActiva != null && mesaOv.isNotEmpty && mesaOv != _mesaPackingActiva) {
+        _notificar('Ojo: $numOv figura en $mesaOv, no en $_mesaPackingActiva.', color: Colors.orange);
+      }
+      _packingEsTraslado = numOv.startsWith('OT-');
+      _verificadoBultos.clear();
+      _lotesVerificadosBultos.clear();
+      _cacheLotesSistemaPacking.clear();
+      _motivoFaltantePack = null;
+      _txtPesoRealPack.clear();
+      _txtCantidadBultosPack.clear();
+      _tipoEmpaquePack = _packingEsTraslado ? 'PALLET' : 'CAJA';
+      final cli = (ov['cliente_nombre'] ?? '').toString().toUpperCase();
+      _txtComunaDespachoPack.text = (cli.contains('CONCEPCION') || _packingEsTraslado) ? 'CONCEPCIÓN' : 'SANTIAGO';
+      await _cargarOrdenParaAuditoriaPacking(ov['id'].toString());
       if (mounted && _lineasAuditoriaPacking.isNotEmpty) {
-        setState(() { _pasoPackingLpn = 1; _txtLpnConsolidadoPack.clear(); });
+        setState(() { _pasoPackingLpn = _packingEsTraslado ? 1 : 3; _txtLpnConsolidadoPack.clear(); });
       }
     } catch (e) {
-      _notificar('Error buscando orden: $e', color: Colors.red);
+      _notificar('Error buscando orden: ${_mensajeError(e)}', color: Colors.red);
       setState(() => _cargandoAuditoriaPack = false);
     }
   }
@@ -3829,7 +4642,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       'cliente_nombre': (ov['cliente_nombre'] ?? 'CLIENTE').toString(),
       'usuario_picking': (usuarioActivo?['nombre_completo'] ?? usuarioActivo?['usuario'] ?? 'PACKING_RF').toString().toUpperCase(),
       'detalle_json': detalle,
-      'fecha_emision': DateTime.now().toIso8601String(),
+      'fecha_emision': DateTime.now().toUtc().toIso8601String(),
       'bodega': bodegaActiva,
     };
     try {
@@ -3844,7 +4657,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       if (id != null) _packingDraftId = id;
       return _packingDraftId != null;
     } catch (e) {
-      _notificar('No se pudo guardar el pallet en Supabase: $e', color: Colors.red);
+      _notificar('No se pudo guardar el pallet en Supabase: ${_mensajeError(e)}', color: Colors.red);
       return false;
     } finally {
       if (mounted) setState(() => _sincronizandoPacking = false);
@@ -3889,7 +4702,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         }
         if (filaAporta && idBorrador == null) idBorrador = (fila['id'] as num?)?.toInt();
       }
-      if (porLpn.isEmpty || !mounted) return;
+      // Solo los traslados (PALLETS) retoman pallets guardados; una OV por bultos parte limpia
+      if (porLpn.isEmpty || !mounted || !_packingEsTraslado) return;
       setState(() {
         _packingDraftId = idBorrador;
         _palletsPackingCerrados
@@ -3901,7 +4715,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       });
       _notificar('Packing recuperado: ${porLpn.length} LPN cargados desde Supabase.', color: const Color(0xFF047857));
     } catch (e) {
-      _notificar('No se pudieron recuperar los LPN guardados: $e', color: Colors.orange);
+      _notificar('No se pudieron recuperar los LPN guardados: ${_mensajeError(e)}', color: Colors.orange);
     }
   }
 
@@ -3964,6 +4778,21 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
 
         final int solicitado = (det['cantidad_pedida'] as num?)?.toInt() ?? 0;
         final int pickeadoPrevio = (det['cantidad_pickeada'] as num?)?.toInt() ?? 0;
+        // Peso por unidad: fila de unidad de la maestra o peso de la caja / múltiplo
+        double pesoUnitKg = 0;
+        final filasPeso = matchesM.map((e) => Map.from(e as Map)).toList()
+          ..sort((a, b) => ((a['multiplo'] as num?)?.toInt() ?? 1).compareTo((b['multiplo'] as num?)?.toInt() ?? 1));
+        // En la maestra, peso_gr corresponde a la unidad de medida de la fila (unidad o caja master);
+        // peso_kg muchas veces trae el peso de la caja aunque la fila sea UNIDAD, por eso se usa solo si falta peso_gr.
+        for (final m in filasPeso) {
+          final gr = (m['peso_gr'] as num?)?.toDouble() ?? 0;
+          final kg = gr > 0 ? gr / 1000 : ((m['peso_kg'] as num?)?.toDouble() ?? 0);
+          if (kg > 0) {
+            final mm = (m['multiplo'] as num?)?.toInt() ?? 1;
+            pesoUnitKg = kg / (mm < 1 ? 1 : mm);
+            break;
+          }
+        }
         final String rawLotes = (det['lotes_pickeados'] ?? '').toString().trim();
 
         String loteInicial = 'S/L';
@@ -3971,7 +4800,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         if (rawLotes.isNotEmpty) {
           final primerBloque = rawLotes.split('|').first.split('(').first.split('[Rack:').first.trim();
           if (primerBloque.contains('/')) {
-            final partes = primerBloque.split('/');
+            final partes = primerBloque.contains(' / ') ? primerBloque.split(' / ') : primerBloque.split('/');
             loteInicial = partes.first.trim().toUpperCase();
             vencInicial = normalizarFechaSql(partes.last.trim()) ?? partes.last.trim();
           } else {
@@ -3988,6 +4817,10 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
           'barcodes': barcodes,
           'solicitado': solicitado,
           'pickeado_rf': pickeadoPrevio,
+          // Packing revisa lo PICKEADO (antes exigía lo pedido y con quiebre nunca se podía cerrar)
+          'esperado': pickeadoPrevio,
+          'peso_unit_kg': pesoUnitKg,
+          'lotes_pick': _parsearLotesPickeados(rawLotes),
           'auditado_unid': pickeadoPrevio > 0 ? pickeadoPrevio : solicitado,
           'lote_auditado': loteInicial,
           'venc_auditado': vencInicial,
@@ -4003,7 +4836,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       final numeroOvCarga = (_ovPackingCabeceraActiva?['numero_ov'] ?? _txtBuscarOvPacking.text).toString().toUpperCase();
       await _restaurarPalletsPackingDesdeSupabase(idNum, numeroOvCarga);
     } catch (e) {
-      _notificar('Error cargando orden para Packing: $e', color: Colors.red);
+      _notificar('Error cargando orden para Packing: ${_mensajeError(e)}', color: Colors.red);
     } finally {
       if (mounted) setState(() => _cargandoAuditoriaPack = false);
     }
@@ -4034,8 +4867,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     for (final raw in _lineasAuditoriaPacking) {
       final l = raw as Map;
       final id = (l['id_detalle'] as num?)?.toInt() ?? 0;
-      final solicitado = (l['solicitado'] as num?)?.toInt() ?? 0;
-      total += (solicitado - _cantidadSkuYaDistribuidaEnPallets(id)).clamp(0, solicitado);
+      final esperado = _esperadoPacking(l);
+      final hecho = _packingEsTraslado ? _cantidadSkuYaDistribuidaEnPallets(id) : (_verificadoBultos[id] ?? 0);
+      total += (esperado - hecho).clamp(0, esperado);
     }
     return total;
   }
@@ -4043,8 +4877,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
   int _skusPendientesPacking() => _lineasAuditoriaPacking.where((raw) {
     final l = raw as Map;
     final id = (l['id_detalle'] as num?)?.toInt() ?? 0;
-    final solicitado = (l['solicitado'] as num?)?.toInt() ?? 0;
-    return _cantidadSkuYaDistribuidaEnPallets(id) < solicitado;
+    final hecho = _packingEsTraslado ? _cantidadSkuYaDistribuidaEnPallets(id) : (_verificadoBultos[id] ?? 0);
+    return hecho < _esperadoPacking(l);
   }).length;
 
   void _iniciarPalletPacking() {
@@ -4064,6 +4898,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     setState(() {
       _pasoPackingLpn = 0; _ovPackingAuditKey = 'SIN_OV'; _ovPackingCabeceraActiva = null;
       _lineasAuditoriaPacking.clear(); _lpnConsolidadoMapa.clear(); _palletsPackingCerrados.clear();
+      _verificadoBultos.clear(); _lotesVerificadosBultos.clear(); _motivoFaltantePack = null; _txtPesoRealPack.clear(); _txtCantidadBultosPack.clear(); _packingDraftId = null;
       _txtBuscarOvPacking.clear(); _txtLpnConsolidadoPack.clear(); _txtScanAuditoriaPack.clear();
     });
   }
@@ -4153,14 +4988,131 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     return opciones;
   }
 
-  Future _abrirModalAuditarLineaPacking(Map linea) async {
+  /// Foto de la fecha impresa en la caja -> lote y vencimiento (misma Visión IA de recepción).
+  Future<Map<String, String>?> _leerLoteVencConFoto() async {
+    try {
+      final foto = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85, maxWidth: 1600);
+      if (foto == null) return null;
+      _notificar('Leyendo la fecha de la foto...', color: const Color(0xFF1D4ED8));
+      final b64 = base64Encode(await foto.readAsBytes());
+      final sesion = await asegurarSesionSupabase();
+      final resp = await supabase.functions.invoke(
+        kGeminiEdgeFunction,
+        headers: {if (sesion != null) 'Authorization': 'Bearer ${sesion.accessToken}'},
+        body: {'image_base64': b64, 'mime_type': 'image/jpeg'},
+      );
+      final Map<String, dynamic> body = resp.data is Map
+          ? Map<String, dynamic>.from(resp.data as Map)
+          : Map<String, dynamic>.from(jsonDecode(resp.data.toString()) as Map);
+      if (body['ok'] != true || body['data'] is! Map) throw Exception(body['error'] ?? 'respuesta inválida');
+      final d = Map<String, dynamic>.from(body['data'] as Map);
+      final lote = (d['lote'] ?? '').toString().trim().toUpperCase();
+      final venc = normalizarFechaSql((d['vencimiento_yyyy_mm_dd'] ?? d['vencimiento'] ?? '').toString().trim()) ?? '';
+      if (lote.isEmpty && venc.isEmpty) {
+        _notificar('No se leyó ninguna fecha. Acerque la cámara a la fecha impresa y vuelva a intentar.', color: Colors.orange);
+        return null;
+      }
+      return {'lote': lote, 'venc': venc};
+    } catch (e) {
+      _notificar('No se pudo leer la foto: ${_mensajeError(e)}', color: Colors.red);
+      return null;
+    }
+  }
+
+  /// Busca entre los lotes ofrecidos el que corresponde a lo leído: primero por lote y si no por fecha.
+  Map? _buscarOpcionLote(List opciones, String lote, String venc, String campoVenc) {
+    final l = lote.trim().toUpperCase();
+    if (l.isNotEmpty) {
+      for (final o in opciones) {
+        if ((o as Map)['lote'].toString().trim().toUpperCase() == l) return o;
+      }
+    }
+    if (venc.isNotEmpty) {
+      for (final o in opciones) {
+        final v = normalizarFechaSql((o as Map)[campoVenc].toString().replaceAll('/', '-'));
+        if (v == venc) return o;
+      }
+    }
+    return null;
+  }
+
+  /// Fecha impresa en la caja en formato EE.UU. (MES/DÍA/AÑO) -> fechas posibles en DD-MM-AAAA.
+  /// Primero la lectura EE.UU.; si el día también puede ser un mes, la invertida queda como segunda opción.
+  List<String> _fechasCajaUS(String texto) {
+    final partes = texto.split(RegExp(r'[^0-9]+')).where((x) => x.isNotEmpty).toList();
+    final d = texto.replaceAll(RegExp(r'[^0-9]'), '');
+    int? mes, dia, anio;
+    if (partes.length == 3) {
+      mes = int.tryParse(partes[0]);
+      dia = int.tryParse(partes[1]);
+      anio = int.tryParse(partes[2]);
+    } else if (d.length == 8) {
+      mes = int.tryParse(d.substring(0, 2));
+      dia = int.tryParse(d.substring(2, 4));
+      anio = int.tryParse(d.substring(4));
+    } else if (d.length == 6) {
+      mes = int.tryParse(d.substring(0, 2));
+      dia = int.tryParse(d.substring(2, 4));
+      anio = int.tryParse(d.substring(4));
+    }
+    if (mes == null || dia == null || anio == null) return [];
+    if (anio < 100) anio += 2000;
+    final salida = <String>[];
+    void agregar(int m, int dd) {
+      if (m < 1 || m > 12 || dd < 1 || dd > 31) return;
+      final f = DateTime(anio!, m, dd);
+      if (f.month != m || f.day != dd) return;
+      final t = DateFormat('dd-MM-yyyy').format(f);
+      if (!salida.contains(t)) salida.add(t);
+    }
+    agregar(mes, dia);   // EE.UU.: mes/día/año
+    agregar(dia, mes);   // por si la foto o el operador la leyó al revés
+    return salida;
+  }
+
+  /// Solo INABA (Churu) imprime la fecha en formato EE.UU. (MES/DÍA/AÑO); el resto viene DÍA/MES/AÑO.
+  bool _fechaCajaEnFormatoUS(Map linea) => _obtenerPrioridadMarcaPicking(linea) == 1;
+
+  /// Fechas posibles (DD-MM-AAAA) de lo escrito por el operador, según el formato de la marca.
+  /// La lectura de la marca va primero; la invertida queda solo como respaldo.
+  List<String> _fechasCaja(String texto, {required bool formatoUS}) {
+    if (formatoUS) return _fechasCajaUS(texto);
+    final p = texto.split(RegExp(r'[^0-9]+')).where((x) => x.isNotEmpty).toList();
+    final d = texto.replaceAll(RegExp(r'[^0-9]'), '');
+    if (p.length == 3) return _fechasCajaUS('${p[1]}/${p[0]}/${p[2]}');
+    if (d.length == 8 || d.length == 6) return _fechasCajaUS('${d.substring(2, 4)}/${d.substring(0, 2)}/${d.substring(4)}');
+    return [];
+  }
+
+  /// Fecha ya normalizada (DD-MM-AAAA, ej. leída por la foto) + su versión con día y mes invertidos.
+  List<String> _fechasConAlternativa(String ddmmaaaa) {
+    final p = ddmmaaaa.split('-');
+    if (p.length != 3) return ddmmaaaa.isEmpty ? [] : [ddmmaaaa];
+    // DD-MM-AAAA leída -> probar también como si fuera MM-DD
+    final alt = _fechasCajaUS('${p[1]}/${p[0]}/${p[2]}');
+    return [ddmmaaaa, ...alt.where((x) => x != ddmmaaaa)];
+  }
+
+  /// Lotes ofrecidos cuyo vencimiento coincide con la primera fecha posible que tenga coincidencias.
+  List<Map> _opcionesPorFechas(List opciones, List<String> fechas, String campoVenc) {
+    for (final f in fechas) {
+      final m = opciones
+          .where((o) => normalizarFechaSql((o as Map)[campoVenc].toString().replaceAll('/', '-')) == f)
+          .map((o) => o as Map)
+          .toList();
+      if (m.isNotEmpty) return m;
+    }
+    return [];
+  }
+
+  Future _abrirModalAuditarLineaPacking(Map linea, {int? cajasIni, Map<String, String>? leido}) async {
     if (_txtLpnConsolidadoPack.text.trim().isEmpty) {
       _generarLpnConsolidadoAuto();
     }
 
     final sku = linea['sku'].toString();
     final int idDetalle = (linea['id_detalle'] as num?)?.toInt() ?? 0;
-    final int solicitado = (linea['solicitado'] as num?)?.toInt() ?? 0;
+    final int solicitado = _esperadoPacking(linea);
     final int mult = (linea['multiplo'] as num?)?.toInt() ?? 1;
     final int yaDistribuido = _cantidadSkuYaDistribuidaEnPallets(idDetalle);
     final int saldoPendiente = (solicitado - yaDistribuido).clamp(0, solicitado);
@@ -4170,12 +5122,28 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       return;
     }
 
-    final opcionesLote = await _cargarLotesDisponiblesPacking(sku);
+    // Lotes: los que se PICKEARON (el inventario ya fue descontado en el picking)
+    final lotesPick = ((linea['lotes_pick'] as List?) ?? []).whereType<Map>().toList();
+    final opcionesLote = lotesPick.isNotEmpty
+        ? lotesPick.map((o) => <String, dynamic>{
+              'key': '${o['lote']}|${(o['venc'] ?? 'S/F').toString().replaceAll('-', '/')}',
+              'lote': o['lote'],
+              'vencimiento': (o['venc'] ?? 'S/F').toString().replaceAll('-', '/'),
+              'stock': o['unidades'],
+              'origen': 'PICKING',
+            }).fold<Map<String, Map<String, dynamic>>>({}, (acc, o) {
+              acc.putIfAbsent(o['key'] as String, () => o);
+              return acc;
+            }).values.toList()
+        : await _cargarLotesDisponiblesPacking(sku);
     final int multiploCaja = mult < 1 ? 1 : mult;
     final int cajasSugeridas = saldoPendiente ~/ multiploCaja;
     final int displaysSugeridos = saldoPendiente % multiploCaja;
-    final txtCajas = TextEditingController(text: cajasSugeridas.toString());
-    final txtDisplays = TextEditingController(text: displaysSugeridos.toString());
+    final unaCaja = cajasIni != null;   // caja por caja: 1 caja (o el saldo si es menor a una caja)
+    final txtCajas = TextEditingController(
+        text: unaCaja ? (saldoPendiente >= multiploCaja ? '$cajasIni' : '0') : cajasSugeridas.toString());
+    final txtDisplays = TextEditingController(
+        text: unaCaja ? (saldoPendiente >= multiploCaja ? '0' : '$saldoPendiente') : displaysSugeridos.toString());
     final txtLote = TextEditingController(text: (linea['lote_auditado'] ?? 'S/L').toString());
     final txtVenc = TextEditingController(text: (linea['venc_auditado'] ?? '').toString());
     String loteSeleccionado = 'MANUAL';
@@ -4188,6 +5156,60 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       loteSeleccionado = inicial['key'].toString();
       txtLote.text = inicial['lote'].toString();
       txtVenc.text = inicial['vencimiento'] == 'S/F' ? '' : inicial['vencimiento'].toString();
+    }
+    void aplicarLeido(Map<String, String> r) {
+      final o = _buscarOpcionLote(opcionesLote, r['lote'] ?? '', r['venc'] ?? '', 'vencimiento');
+      if (o != null) {
+        loteSeleccionado = o['key'].toString();
+        txtLote.text = o['lote'].toString();
+        txtVenc.text = o['vencimiento'] == 'S/F' ? '' : o['vencimiento'].toString();
+      } else {
+        loteSeleccionado = 'MANUAL';
+        txtLote.text = (r['lote'] ?? '').isEmpty ? '' : r['lote']!;
+        txtVenc.text = (r['venc'] ?? '').replaceAll('-', '/');
+      }
+    }
+    if (leido != null) aplicarLeido(leido);
+
+    // Cajas sin etiqueta: solo traen la fecha (MES/DÍA/AÑO). Con la fecha se busca el lote:
+    // primero entre lo pickeado; si no está, en el stock del SKU (avisando que no fue lo pickeado).
+    final txtFechaCaja = TextEditingController();
+    String avisoFecha = '';
+    Color colorAviso = const Color(0xFF047857);
+    Future<void> resolverFechas(List<String> fechas, {String lote = ''}) async {
+      if (fechas.isEmpty) {
+        avisoFecha = 'Fecha no válida. Escríbala como aparece en la caja: MES/DÍA/AÑO.';
+        colorAviso = Colors.red;
+        return;
+      }
+      final porLote = lote.isNotEmpty ? _buscarOpcionLote(opcionesLote, lote, '', 'vencimiento') : null;
+      final m = porLote != null ? [porLote] : _opcionesPorFechas(opcionesLote, fechas, 'vencimiento');
+      if (m.isNotEmpty) {
+        final o = m.first;
+        loteSeleccionado = o['key'].toString();
+        txtLote.text = o['lote'].toString();
+        txtVenc.text = o['vencimiento'] == 'S/F' ? '' : o['vencimiento'].toString();
+        avisoFecha = 'Vence ${o['vencimiento']} → lote ${o['lote']}'
+            '${m.length > 1 ? ' (hay ${m.length} lotes con esa fecha: confirme cuál es)' : ''}';
+        colorAviso = m.length > 1 ? Colors.orange : const Color(0xFF047857);
+        return;
+      }
+      List<Map<String, dynamic>> stock = [];
+      try {
+        stock = await _cargarLotesDisponiblesPacking(sku);
+      } catch (_) {}
+      final s = _opcionesPorFechas(stock, fechas, 'vencimiento');
+      loteSeleccionado = 'MANUAL';
+      if (s.isNotEmpty) {
+        txtLote.text = s.first['lote'].toString();
+        txtVenc.text = s.first['vencimiento'].toString();
+        avisoFecha = 'ATENCIÓN: esa fecha es del lote ${s.first['lote']} del stock, pero NO es el que se pickeó. Revise la caja.';
+      } else {
+        txtLote.clear();
+        txtVenc.text = fechas.first.replaceAll('-', '/');
+        avisoFecha = 'No hay ningún lote de $sku que venza el ${fechas.first}. Revise la fecha o escriba el lote.';
+      }
+      colorAviso = Colors.red;
     }
 
     if (!mounted) return;
@@ -4213,7 +5235,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Solicitado: $solicitado UN', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      Text('Pickeado: $solicitado UN', style: const TextStyle(fontWeight: FontWeight.bold)),
                       Text('Ya distribuido: $yaDistribuido UN'),
                       Text('Saldo pendiente: $saldoPendiente UN',
                           style: const TextStyle(color: Color(0xFF1D4ED8), fontWeight: FontWeight.w900)),
@@ -4235,10 +5257,10 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                       Text(
                         multiploCaja > 1
                             ? 'Conversión de empaque: 1 caja = $multiploCaja UN'
-                            : 'SIN MÚLTIPLO DE CAJA: revise MAESTRA SKU ($sku)',
+                            : 'Producto por unidad (sin caja en MAESTRA SKU): ingrese UN en "Display / UN sueltas"',
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
-                          color: multiploCaja > 1 ? const Color(0xFF0F766E) : const Color(0xFFDC2626),
+                          color: multiploCaja > 1 ? const Color(0xFF0F766E) : const Color(0xFFB45309),
                         ),
                       ),
                       const SizedBox(height: 3),
@@ -4271,13 +5293,52 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                           labelText: 'Display / UN sueltas',
-                          helperText: multiploCaja > 1 ? 'Máximo ${multiploCaja - 1}' : 'Configure múltiplo',
+                          helperText: multiploCaja > 1 ? 'Máximo ${multiploCaja - 1}' : 'Unidades',
                           prefixIcon: const Icon(Icons.view_module_outlined),
                         ),
                       ),
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.photo_camera_outlined),
+                    label: const Text('FOTO A LA FECHA DE LA CAJA'),
+                    onPressed: () async {
+                      final r = await _leerLoteVencConFoto();
+                      if (r == null) return;
+                      await resolverFechas(_fechasConAlternativa(r['venc'] ?? ''), lote: r['lote'] ?? '');
+                      setStateDialog(() {});
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: txtFechaCaja,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FechaInputFormatter()],
+                  decoration: InputDecoration(
+                    labelText: _fechaCajaEnFormatoUS(linea)
+                        ? 'O escriba la fecha de la caja (MES/DÍA/AÑO · INABA)'
+                        : 'O escriba la fecha de la caja (DÍA/MES/AÑO)',
+                    helperText: _fechaCajaEnFormatoUS(linea)
+                        ? 'INABA/Churu viene en formato EE.UU.: 06.10.2028 = 10 de junio de 2028'
+                        : 'Como viene impresa: 27/05/2028 = 27 de mayo de 2028',
+                    prefixIcon: const Icon(Icons.edit_calendar_outlined),
+                  ),
+                  onChanged: (v) async {
+                    if (v.replaceAll(RegExp(r'[^0-9]'), '').length < 8) return;
+                    await resolverFechas(_fechasCaja(v, formatoUS: _fechaCajaEnFormatoUS(linea)));
+                    setStateDialog(() {});
+                  },
+                ),
+                if (avisoFecha.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(avisoFecha, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: colorAviso)),
+                  ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String>(
                   value: loteSeleccionado,
@@ -4374,15 +5435,6 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
               icon: const Icon(Icons.check),
               label: const Text('CONFIRMAR EN PACKING'),
               onPressed: () {
-                if (multiploCaja <= 1) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('El SKU $sku no tiene un múltiplo de caja válido en MAESTRA SKU. Configure el empaque antes de continuar.'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                  return;
-                }
                 final cajas = int.tryParse(txtCajas.text.trim()) ?? 0;
                 final displays = int.tryParse(txtDisplays.text.trim()) ?? 0;
                 final u = (cajas * multiploCaja) + displays;
@@ -4430,6 +5482,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     );
 
     if (conf == null) return;
+    if (cajasIni != null) _notificar('+${(conf as Map)['unid']} UN de $sku · lote ${conf['lote']}', color: const Color(0xFF047857));
 
     final Map confMap = conf as Map;
     final int unidAudit = (confMap['unid'] as num).toInt();
@@ -4441,6 +5494,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     final String lpnActual = _txtLpnConsolidadoPack.text.trim().toUpperCase();
     final String claveConsolidacion = '$lpnActual|$idDetalle|$loteAudit';
     final int nuevoTotalDistribuido = yaDistribuido + unidAudit;
+    // Caja por caja: el mismo lote en el mismo pallet se suma (antes se reemplazaba)
+    final previo = _lpnConsolidadoMapa[claveConsolidacion] as Map?;
+    final int unidLote = ((previo?['unidades_totales'] as num?)?.toInt() ?? 0) + unidAudit;
 
     setState(() {
       linea['auditado_unid'] = nuevoTotalDistribuido;
@@ -4456,10 +5512,10 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         'sku': sku,
         'descripcion': linea['descripcion'],
         'solicitado': solicitado,
-        'pickeado': unidAudit,
-        'unidades_totales': unidAudit,
-        'cajas': cajasAudit,
-        'displays': displaysAudit,
+        'pickeado': unidLote,
+        'unidades_totales': unidLote,
+        'cajas': previo == null ? cajasAudit : unidLote ~/ multiploCaja,
+        'displays': previo == null ? displaysAudit : unidLote % multiploCaja,
         'multiplo_aplicado': multiploCaja,
         'lote': loteAudit,
         'fecha_vencimiento_cl': vencAudit == 'S/F' ? null : vencAudit,
@@ -4477,15 +5533,35 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       return;
     }
 
-    int idx = _lineasAuditoriaPacking.indexWhere((el) {
-      final m = el as Map;
-      if (m['sku'] == scan) return true;
+    // GS1-128 de la caja: trae GTIN + lote + vencimiento
+    String codigo = scan;
+    Map<String, String>? leido;
+    final gs1 = parsearCodigoGs1128(scan);
+    if (gs1.isNotEmpty && gs1['gtin'] != null) {
+      codigo = gs1['gtin'].toString().toUpperCase();
+      final l = (gs1['lote'] ?? '').toString().toUpperCase();
+      final v = gs1['vencimiento'] == null ? '' : (normalizarFechaSql(gs1['vencimiento'].toString()) ?? '');
+      if (l.isNotEmpty || v.isNotEmpty) leido = {'lote': l, 'venc': v};
+    }
+    final sinCeros = codigo.replaceFirst(RegExp(r'^0+'), '');
+    final candidatas = <int>[];
+    for (var i = 0; i < _lineasAuditoriaPacking.length; i++) {
+      final m = _lineasAuditoriaPacking[i] as Map;
       final List bList = m['barcodes'] ?? [];
-      return bList.contains(scan);
-    });
+      if (m['sku'] == codigo || bList.map((c) => c.toString().replaceFirst(RegExp(r'^0+'), '')).contains(sinCeros)) {
+        candidatas.add(i);
+      }
+    }
+    // Si el SKU está en varias líneas, la primera con saldo
+    int idx = candidatas.isEmpty ? -1 : candidatas.firstWhere((i) {
+      final m = _lineasAuditoriaPacking[i] as Map;
+      final id = (m['id_detalle'] as num?)?.toInt() ?? 0;
+      return _cantidadSkuYaDistribuidaEnPallets(id) < _esperadoPacking(m);
+    }, orElse: () => candidatas.first);
 
     if (idx != -1) {
-      await _abrirModalAuditarLineaPacking(_lineasAuditoriaPacking[idx] as Map);
+      await _abrirModalAuditarLineaPacking(_lineasAuditoriaPacking[idx] as Map,
+          cajasIni: _cajaPorCajaPack ? 1 : null, leido: leido);
     } else {
       _notificar('El código $scan no pertenece a esta orden.', color: Colors.red);
     }
@@ -4532,220 +5608,784 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     );
   }
 
-  Future _cerrarPackingYConsolidarLpn({required bool soloEtiquetaLpn}) async {
-    if (!soloEtiquetaLpn) {
-      final pendientes = _lineasAuditoriaPacking.where((raw) {
-        final linea = raw as Map;
-        final int idDetalle = (linea['id_detalle'] as num?)?.toInt() ?? 0;
-        final int solicitado = (linea['solicitado'] as num?)?.toInt() ?? 0;
-        return _cantidadSkuYaDistribuidaEnPallets(idDetalle) != solicitado;
-      }).toList();
-      if (pendientes.isNotEmpty) {
-        _notificar(
-          'No se puede cerrar el Packing. Quedan ${pendientes.length} líneas con saldo sin asignar a pallets.',
-          color: Colors.red,
-        );
+  /// Verificación de una línea en modo BULTOS (OV): confirma las unidades revisadas.
+  String _claveLote(String lote, String venc) =>
+      '${lote.trim().toUpperCase().isEmpty ? 'S/L' : lote.trim().toUpperCase()}|${venc.trim().isEmpty ? 'S/F' : venc.trim()}';
+
+  /// Lotes pickeados de la línea con lo que falta por verificar de cada uno.
+  List<Map<String, dynamic>> _lotesPickeadosPendientes(Map linea) {
+    final id = (linea['id_detalle'] as num?)?.toInt() ?? 0;
+    final hechos = _lotesVerificadosBultos[id] ?? {};
+    final agrupado = <String, int>{};
+    for (final o in ((linea['lotes_pick'] as List?) ?? []).whereType<Map>()) {
+      final k = _claveLote((o['lote'] ?? '').toString(), (o['venc'] ?? '').toString());
+      agrupado[k] = (agrupado[k] ?? 0) + ((o['unidades'] as num?)?.toInt() ?? 0);
+    }
+    return agrupado.entries.map((e) {
+      final p = e.key.split('|');
+      return <String, dynamic>{'clave': e.key, 'lote': p[0], 'venc': p[1], 'pickeado': e.value,
+        'pendiente': (e.value - (hechos[e.key] ?? 0)).clamp(0, e.value)};
+    }).toList();
+  }
+
+  /// Lotes con stock del SKU en la bodega (solo lote y vencimiento, sin ubicaciones).
+  Future<List<Map<String, dynamic>>> _lotesSistemaSku(String sku) async {
+    if (_cacheLotesSistemaPacking.containsKey(sku)) return _cacheLotesSistemaPacking[sku]!;
+    final agrupado = <String, int>{};
+    try {
+      final res = await supabase
+          .from('bodega_inventario_ubicacion')
+          .select('lote, fecha_vencimiento_cl, cantidad_unidades, bodega')
+          .inFilter('sku', [sku, '$sku-FA']);
+      for (final f in (res as List)) {
+        final m = f as Map;
+        if (!_perteneceABodegaActiva(m)) continue;
+        final venc = normalizarFechaSql((m['fecha_vencimiento_cl'] ?? '').toString()) ?? 'S/F';
+        final k = _claveLote((m['lote'] ?? '').toString(), venc);
+        agrupado[k] = (agrupado[k] ?? 0) + ((m['cantidad_unidades'] as num?)?.toInt() ?? 0);
+      }
+    } catch (_) {}
+    final lista = agrupado.entries.map((e) {
+      final p = e.key.split('|');
+      return <String, dynamic>{'clave': e.key, 'lote': p[0], 'venc': p[1], 'stock': e.value};
+    }).toList()
+      ..sort((x, y) => x['clave'].toString().compareTo(y['clave'].toString()));
+    _cacheLotesSistemaPacking[sku] = lista;
+    return lista;
+  }
+
+  /// Suma unidades a un lote sin pasar nunca lo pickeado de la línea (evita "2 / 1 UN").
+  bool _registrarLoteVerificado(int id, String clave, int cant, int esperado) {
+    final actual = _verificadoBultos[id] ?? 0;
+    if (actual + cant > esperado) {
+      _notificar('Esa línea ya tiene $actual de $esperado UN verificadas.', color: Colors.orange);
+      return false;
+    }
+    setState(() {
+      final mapa = _lotesVerificadosBultos.putIfAbsent(id, () => {});
+      mapa[clave] = (mapa[clave] ?? 0) + cant;
+      _verificadoBultos[id] = mapa.values.fold<int>(0, (a, v) => a + v);
+    });
+    return true;
+  }
+
+  /// Verificación de una línea en modo BULTOS: unidades + lote + vencimiento.
+  /// Si se escaneó un GS1-128 con lote y vencimiento que coinciden con lo pickeado, suma 1 sin preguntar.
+  Future<void> _verificarLineaBultos(Map linea, {int? sugerido, String? loteEscaneado, String? vencEscaneado}) async {
+    final id = (linea['id_detalle'] as num?)?.toInt() ?? 0;
+    final sku = (linea['sku'] ?? '').toString().toUpperCase();
+    final esperado = _esperadoPacking(linea);
+    final hecho = _verificadoBultos[id] ?? 0;
+    final pendiente = (esperado - hecho).clamp(0, esperado);
+    if (esperado == 0) {
+      _notificar('$sku no fue pickeado (quiebre): no va en este despacho.', color: Colors.orange);
+      return;
+    }
+    if (pendiente == 0) {
+      _notificar('$sku ya está verificado ($esperado UN).', color: Colors.orange);
+      return;
+    }
+
+    final pickeados = _lotesPickeadosPendientes(linea);
+    if (loteEscaneado != null && loteEscaneado.isNotEmpty) {
+      final clave = _claveLote(loteEscaneado, vencEscaneado ?? '');
+      final coincide = pickeados.where((o) => o['clave'] == clave && (o['pendiente'] as int) > 0).toList();
+      if (coincide.isNotEmpty) {
+        if (!_registrarLoteVerificado(id, clave, 1, esperado)) return;
+        _notificar('$sku · lote ${coincide.first['lote']} · vence ${coincide.first['venc']}: correcto (+1)',
+            color: const Color(0xFF047857));
         return;
       }
     }
-    if (_lpnConsolidadoMapa.isEmpty && _palletsPackingCerrados.isEmpty) {
-      _notificar('Aún no ha validado artículos ni cerrado pallets en Packing.', color: Colors.orange);
+
+    if (_dialogoLotePackAbierto) return;
+    _dialogoLotePackAbierto = true;
+    try {
+      await _dialogoLoteBultos(linea, id, sku, esperado, hecho, pendiente, pickeados, sugerido, loteEscaneado, vencEscaneado);
+    } finally {
+      _dialogoLotePackAbierto = false;
+    }
+  }
+
+  Future<void> _dialogoLoteBultos(Map linea, int id, String sku, int esperado, int hecho, int pendiente,
+      List<Map<String, dynamic>> pickeados, int? sugerido, String? loteEscaneado, String? vencEscaneado) async {
+    final sistema = await _lotesSistemaSku(sku);
+    if (!mounted) return;
+    final clavesPick = pickeados.map((o) => o['clave'] as String).toSet();
+    final opciones = <Map<String, dynamic>>[
+      ...pickeados.where((o) => (o['pendiente'] as int) > 0).map((o) => {...o, 'origen': 'PICKING'}),
+      ...sistema.where((o) => !clavesPick.contains(o['clave'])).map((o) => {...o, 'origen': 'SISTEMA'}),
+    ];
+    const otro = '__OTRO__';
+    String? seleccion;
+    if (loteEscaneado != null && loteEscaneado.isNotEmpty) {
+      final c = _claveLote(loteEscaneado, vencEscaneado ?? '');
+      seleccion = opciones.any((o) => o['clave'] == c) ? c : otro;
+    } else if (opciones.where((o) => o['origen'] == 'PICKING').length == 1) {
+      seleccion = opciones.first['clave'] as String;
+    }
+    final txtLote = TextEditingController(text: seleccion == otro ? (loteEscaneado ?? '') : '');
+    final txtVenc = TextEditingController(text: seleccion == otro ? (vencEscaneado ?? '') : '');
+    int sugeridaPara(String? clave) {
+      final o = opciones.where((x) => x['clave'] == clave && x['origen'] == 'PICKING').toList();
+      final maxLote = o.isEmpty ? pendiente : (o.first['pendiente'] as int);
+      return sugerido == 1 ? 1 : (maxLote < pendiente ? maxLote : pendiente);
+    }
+    final txtCant = TextEditingController(text: '${sugeridaPara(seleccion)}');
+    // Cajas sin etiqueta: con la fecha impresa (MES/DÍA/AÑO) se elige el lote
+    final txtFechaCaja = TextEditingController();
+    String avisoFecha = '';
+    Color colorAviso = const Color(0xFF047857);
+    void aplicarFechas(List<String> fechas, {String lote = ''}) {
+      if (fechas.isEmpty) {
+        avisoFecha = 'Fecha no válida. Escríbala como aparece en la caja: MES/DÍA/AÑO.';
+        colorAviso = Colors.red;
+        return;
+      }
+      final porLote = lote.isNotEmpty ? _buscarOpcionLote(opciones, lote, '', 'venc') : null;
+      final m = porLote != null ? [porLote] : _opcionesPorFechas(opciones, fechas, 'venc');
+      if (m.isNotEmpty) {
+        final pick = m.where((o) => o['origen'] == 'PICKING').toList();
+        final o = pick.isNotEmpty ? pick.first : m.first;
+        seleccion = o['clave'] as String;
+        avisoFecha = 'Vence ${o['venc']} → lote ${o['lote']}'
+            '${o['origen'] != 'PICKING' ? ' (ATENCIÓN: no es el lote pickeado)' : ''}'
+            '${m.length > 1 ? ' · hay ${m.length} lotes con esa fecha: confirme' : ''}';
+        colorAviso = (o['origen'] != 'PICKING' || m.length > 1) ? Colors.orange : const Color(0xFF047857);
+      } else {
+        seleccion = otro;
+        txtLote.clear();
+        txtVenc.text = fechas.first;
+        avisoFecha = 'Ningún lote de $sku vence el ${fechas.first}. Revise la fecha o escriba el lote.';
+        colorAviso = Colors.red;
+      }
+      txtCant.text = '${sugeridaPara(seleccion)}';
+    }
+
+    final resultado = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        final opcionSel = opciones.where((o) => o['clave'] == seleccion).toList();
+        final esDistinto = seleccion == otro || (opcionSel.isNotEmpty && opcionSel.first['origen'] != 'PICKING');
+        return AlertDialog(
+          title: Text(sku, style: const TextStyle(fontWeight: FontWeight.w900)),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${linea['descripcion']}', style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 6),
+              Text('Pickeado: $esperado UN · verificado: $hecho UN', style: const TextStyle(fontWeight: FontWeight.bold)),
+              if (pickeados.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text('Se pickeó: ${pickeados.map((o) => '${o['lote']} (${o['venc']}) x${o['pickeado']}').join(', ')}',
+                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF475569))),
+              ],
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.photo_camera_outlined),
+                  label: const Text('FOTO A LA FECHA'),
+                  onPressed: () async {
+                    final r = await _leerLoteVencConFoto();
+                    if (r == null) return;
+                    setD(() => aplicarFechas(_fechasConAlternativa(r['venc'] ?? ''), lote: r['lote'] ?? ''));
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: txtFechaCaja,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FechaInputFormatter()],
+                decoration: InputDecoration(
+                  labelText: _fechaCajaEnFormatoUS(linea)
+                      ? 'O escriba la fecha de la caja (MES/DÍA/AÑO · INABA)'
+                      : 'O escriba la fecha de la caja (DÍA/MES/AÑO)',
+                  helperText: _fechaCajaEnFormatoUS(linea)
+                      ? 'INABA/Churu viene en formato EE.UU.: 06.10.2028 = 10 de junio de 2028'
+                      : 'Como viene impresa: 27/05/2028 = 27 de mayo de 2028',
+                  prefixIcon: const Icon(Icons.edit_calendar_outlined),
+                ),
+                onChanged: (v) {
+                  if (v.replaceAll(RegExp(r'[^0-9]'), '').length < 8) return;
+                  setD(() => aplicarFechas(_fechasCaja(v, formatoUS: _fechaCajaEnFormatoUS(linea))));
+                },
+              ),
+              if (avisoFecha.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(avisoFecha, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: colorAviso)),
+                ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: seleccion,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Lote y vencimiento del producto *'),
+                items: [
+                  ...opciones.map((o) => DropdownMenuItem<String>(
+                        value: o['clave'] as String,
+                        child: Text(
+                          o['origen'] == 'PICKING'
+                              ? '${o['lote']} · vence ${o['venc']}  (pickeado, faltan ${o['pendiente']})'
+                              : '${o['lote']} · vence ${o['venc']}  (en sistema)',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontWeight: o['origen'] == 'PICKING' ? FontWeight.bold : FontWeight.normal),
+                        ),
+                      )),
+                  const DropdownMenuItem<String>(value: otro, child: Text('Otro lote (escribir)')),
+                ],
+                onChanged: (v) => setD(() {
+                  seleccion = v;
+                  txtCant.text = '${sugeridaPara(v)}';
+                }),
+              ),
+              if (seleccion == otro) ...[
+                const SizedBox(height: 8),
+                TextField(controller: txtLote, textCapitalization: TextCapitalization.characters,
+                    inputFormatters: [UpperCaseTextFormatter()],
+                    decoration: const InputDecoration(labelText: 'Lote impreso en el producto')),
+                const SizedBox(height: 8),
+                TextField(controller: txtVenc, keyboardType: TextInputType.datetime,
+                    decoration: const InputDecoration(labelText: 'Vencimiento (DD-MM-AAAA)')),
+              ],
+              if (esDistinto) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(8)),
+                  child: const Text('Este lote NO es el que se pickeó. Revise el producto: si confirma, quedará marcado como diferencia de lote.',
+                      style: TextStyle(fontSize: 11.5, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+                ),
+              ],
+              const SizedBox(height: 10),
+              TextField(controller: txtCant, keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Unidades de este lote')),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
+            ElevatedButton(
+              style: esDistinto ? ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB45309), foregroundColor: Colors.white) : null,
+              onPressed: seleccion == null
+                  ? null
+                  : () {
+                      String lote, venc;
+                      if (seleccion == otro) {
+                        lote = txtLote.text.trim().toUpperCase();
+                        venc = normalizarFechaSql(txtVenc.text.trim()) ?? '';
+                        if (lote.isEmpty || venc.isEmpty) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                              content: Text('Escriba el lote y un vencimiento válido (DD-MM-AAAA).'), backgroundColor: Colors.red));
+                          return;
+                        }
+                      } else {
+                        final p = seleccion!.split('|');
+                        lote = p[0];
+                        venc = p[1];
+                      }
+                      Navigator.pop(ctx, {'clave': _claveLote(lote, venc), 'cant': int.tryParse(txtCant.text.trim()) ?? 0});
+                    },
+              child: Text(esDistinto ? 'CONFIRMAR LOTE DISTINTO' : 'CONFIRMAR'),
+            ),
+          ],
+        );
+      }),
+    );
+    if (resultado == null) return;
+    final int cant = resultado['cant'] as int;
+    final String clave = resultado['clave'] as String;
+    if (cant <= 0) return;
+    if (cant > pendiente) {
+      _notificar('No puede empacar $cant UN de $sku: solo quedan $pendiente UN pickeadas.', color: Colors.red);
       return;
     }
-
-    var lpnMaster = _txtLpnConsolidadoPack.text.trim().toUpperCase();
-    if (lpnMaster.isEmpty) {
-      _generarLpnConsolidadoAuto();
-      lpnMaster = _txtLpnConsolidadoPack.text.trim().toUpperCase();
+    final lotePick = pickeados.where((o) => o['clave'] == clave).toList();
+    if (lotePick.isNotEmpty && cant > (lotePick.first['pendiente'] as int)) {
+      _notificar('Del lote ${lotePick.first['lote']} solo se pickearon ${lotePick.first['pendiente']} UN más. '
+          'Si hay unidades de otro lote, regístrelas por separado.', color: Colors.red);
+      return;
     }
+    _registrarLoteVerificado(id, clave, cant, esperado);
+  }
 
-    final Map ovMap = _ovPackingCabeceraActiva ??
-        {
-          'id': int.tryParse(_ovPackingAuditKey),
-          'numero_ov': _txtBuscarOvPacking.text.trim().toUpperCase(),
-          'cliente_nombre': 'CLIENTE',
-        };
+  Future<void> _procesarEscaneoBultos() async {
+    final raw = _txtScanAuditoriaPack.text.trim().toUpperCase();
+    _txtScanAuditoriaPack.clear();
+    if (raw.isEmpty) return;
+    // GS1-128: trae GTIN + lote + vencimiento -> se valida el lote automáticamente
+    String scan = raw;
+    String? loteGs1;
+    String? vencGs1;
+    final gs1 = parsearCodigoGs1128(raw);
+    if (gs1.isNotEmpty && gs1['gtin'] != null) {
+      scan = gs1['gtin'].toString().toUpperCase();
+      loteGs1 = gs1['lote']?.toString().toUpperCase();
+      vencGs1 = gs1['vencimiento'] == null ? null : normalizarFechaSql(gs1['vencimiento'].toString());
+    }
+    final sinCeros = scan.replaceFirst(RegExp(r'^0+'), '');
+    final candidatas = _lineasAuditoriaPacking.where((el) {
+      final m = el as Map;
+      final codigos = ((m['barcodes'] as List?) ?? []).map((c) => c.toString().replaceFirst(RegExp(r'^0+'), '')).toList();
+      return m['sku'] == scan || codigos.contains(sinCeros);
+    }).toList();
+    if (candidatas.isEmpty) {
+      _notificar('El código $raw NO pertenece a esta orden.', color: Colors.red);
+      return;
+    }
+    // Si el SKU aparece en varias líneas, usar la primera con saldo
+    final linea = candidatas.firstWhere((raw) {
+      final l = raw as Map;
+      return (_verificadoBultos[(l['id_detalle'] as num?)?.toInt() ?? 0] ?? 0) < _esperadoPacking(l);
+    }, orElse: () => candidatas.first) as Map;
+    await _verificarLineaBultos(linea, sugerido: 1, loteEscaneado: loteGs1, vencEscaneado: vencGs1);
+  }
+
+  /// Ítems del packing en modo BULTOS: un ítem por cada lote confirmado de cada línea.
+  List<Map<String, dynamic>> _detallePackingBultos() {
+    final salida = <Map<String, dynamic>>[];
+    for (final raw in _lineasAuditoriaPacking) {
+      final l = raw as Map;
+      final id = (l['id_detalle'] as num?)?.toInt() ?? 0;
+      final clavesPick = _lotesPickeadosPendientes(l).map((o) => o['clave']).toSet();
+      final base = <String, dynamic>{
+        'id_detalle': id, 'sku': l['sku'], 'descripcion': l['descripcion'],
+        'solicitado': l['solicitado'], 'multiplo_aplicado': l['multiplo'],
+        'peso_unit_kg': l['peso_unit_kg'], '_estado_packing': 'PACKING_COMPLETO',
+      };
+      (_lotesVerificadosBultos[id] ?? {}).forEach((clave, un) {
+        if (un <= 0) return;
+        final p = clave.split('|');
+        final venc = p[1];
+        salida.add({...base, 'unidades_totales': un, 'pickeado': un, 'lote': p[0],
+          'fecha_vencimiento_cl': venc == 'S/F' ? null : venc,
+          'lote_distinto_al_picking': clavesPick.isNotEmpty && !clavesPick.contains(clave),
+          'lotes': '${p[0]} / $venc ($un UN)'});
+      });
+    }
+    return salida;
+  }
+
+  /// Líneas cuyo lote confirmado no coincide con el pickeado.
+  List<String> _diferenciasLotePacking() => _detallePackingBultos()
+      .where((i) => i['lote_distinto_al_picking'] == true)
+      .map((i) => '${i['sku']}: lote ${i['lote']} (${i['fecha_vencimiento_cl'] ?? 'S/F'})')
+      .toList();
+
+  /// Cierre del packing en UNA transacción del servidor (wms_cerrar_packing).
+  /// BULTOS (OV): exige N° de bultos y todo lo pickeado verificado.
+  /// PALLETS (OT a Concepción): cada producto en un pallet con LPN.
+  Future _cerrarPackingYConsolidarLpn({required bool soloEtiquetaLpn}) async {
+    final Map ovMap = _ovPackingCabeceraActiva ?? {};
+    final int? ordenId = int.tryParse('${ovMap['id'] ?? ''}');
+    if (ordenId == null) {
+      _notificar('Cargue primero la orden.', color: Colors.orange);
+      return;
+    }
     final String numOvStr = (ovMap['numero_ov'] ?? 'S/OV').toString().toUpperCase();
     final String clienteStr = (ovMap['cliente_nombre'] ?? 'CLIENTE').toString().toUpperCase();
-    final String comunaStr = _txtComunaDespachoPack.text.trim().isEmpty
-        ? 'SANTIAGO'
-        : _txtComunaDespachoPack.text.trim().toUpperCase();
-    final int cantBultos = (int.tryParse(_txtCantidadBultosPack.text.trim()) ?? 1).clamp(1, 200);
+    final String comunaStr = _txtComunaDespachoPack.text.trim().isEmpty ? 'SANTIAGO' : _txtComunaDespachoPack.text.trim().toUpperCase();
 
-    if (soloEtiquetaLpn) {
-      await generarPdfEtiquetaPackingBultos15x10(
-        lpn: lpnMaster,
-        numeroOv: numOvStr,
-        cliente: clienteStr,
-        comuna: comunaStr,
-        tipoEmpaque: _tipoEmpaquePack,
-        totalBultos: cantBultos,
-      );
+    final pendientes = _skusPendientesPacking();
+    if (pendientes > 0 && _motivoFaltantePack == null) {
+      _notificar(_packingEsTraslado
+          ? 'Quedan $pendientes SKU sin asignar a un pallet. Si no hay más producto use "Cerrar con faltante".'
+          : 'Quedan $pendientes SKU sin verificar. Escanee todos los productos pickeados.', color: Colors.red);
       return;
+    }
+
+    List<Map<String, dynamic>> detalle;
+    int bultos;
+    String lpnMaster = '';
+    if (_packingEsTraslado) {
+      if (_lpnConsolidadoMapa.isNotEmpty) {
+        _notificar('Cierre primero el pallet actual (${_txtLpnConsolidadoPack.text}).', color: Colors.orange);
+        return;
+      }
+      detalle = [];
+      for (final entry in _palletsPackingCerrados.entries) {
+        for (final item in entry.value) {
+          detalle.add({...item, 'lpn_pallet': entry.key, 'lpn_consolidado': entry.key, '_estado_packing': 'PACKING_COMPLETO',
+            'lotes': '[${entry.key}] ${item['lote'] ?? 'S/L'} / ${item['fecha_vencimiento_cl'] ?? 'S/F'} (${item['unidades_totales']} UN)'});
+        }
+      }
+      bultos = _palletsPackingCerrados.length;
+      lpnMaster = _palletsPackingCerrados.keys.isNotEmpty ? _palletsPackingCerrados.keys.first : '';
+    } else {
+      bultos = int.tryParse(_txtCantidadBultosPack.text.trim()) ?? 0;
+      if (bultos < 1 || bultos > 200) {
+        _notificar('Indique cuántos bultos salen (1 a 200).', color: Colors.red);
+        return;
+      }
+      detalle = _detallePackingBultos();
+      final difs = _diferenciasLotePacking();
+      if (difs.isNotEmpty && mounted) {
+        final seguir = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Lotes distintos al picking', style: TextStyle(fontWeight: FontWeight.bold)),
+            content: Text('Estos productos se empacaron con un lote distinto al pickeado:\n\n${difs.join('\n')}\n\n'
+                'Quedará registrado en el packing list. Avise a inventario para revisar el stock.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('REVISAR')),
+              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('CERRAR IGUAL')),
+            ],
+          ),
+        );
+        if (seguir != true) return;
+      }
+    }
+    if (detalle.isEmpty) {
+      _notificar('No hay productos empacados.', color: Colors.orange);
+      return;
+    }
+    final pesoEsperado = _pesoEsperadoPackingKg();
+    final pesoReal = double.tryParse(_txtPesoRealPack.text.trim().replaceAll(',', '.'));
+
+    // Diferencia de peso relevante: pedir confirmación (posible producto de más / de menos)
+    if (!_packingEsTraslado && pesoReal != null && pesoEsperado > 0) {
+      final dif = (pesoReal - pesoEsperado).abs() / pesoEsperado;
+      if (dif > 0.25 && mounted) {
+        final seguir = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Diferencia de peso', style: TextStyle(fontWeight: FontWeight.bold)),
+            content: Text('Aproximado ${pesoEsperado.toStringAsFixed(2)} kg · pesado ${pesoReal.toStringAsFixed(2)} kg '
+                '(${(dif * 100).toStringAsFixed(0)}%).\n\nRevise los bultos antes de cerrar.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('REVISAR')),
+              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('CERRAR IGUAL')),
+            ],
+          ),
+        );
+        if (seguir != true) return;
+      }
     }
 
     setState(() => _guardandoPackingLpn = true);
-
     try {
-      final List<Map<String, dynamic>> listaConsolidada = [];
-      for (final entry in _palletsPackingCerrados.entries) {
-        for (final item in entry.value) {
-          listaConsolidada.add({...item, 'lpn_pallet': entry.key});
-        }
+      await supabase.rpc('wms_cerrar_packing', params: {
+        'p_orden_id': ordenId,
+        'p_modo': _packingEsTraslado ? 'PALLETS' : 'BULTOS',
+        'p_detalle': detalle,
+        'p_bultos': bultos,
+        'p_tipo_empaque': _tipoEmpaquePack,
+        'p_comuna': comunaStr,
+        'p_lpn': lpnMaster.isEmpty ? null : lpnMaster,
+        'p_peso_esperado_kg': pesoEsperado > 0 ? double.parse(pesoEsperado.toStringAsFixed(3)) : null,
+        'p_peso_real_kg': pesoReal,
+        'p_borrador_id': _packingDraftId,
+        'p_usuario': _usuarioRf(),
+        if (_motivoFaltantePack != null) 'p_motivo_faltante': _motivoFaltantePack,
+      });
+    } catch (e) {
+      if (mounted) setState(() {
+        _guardandoPackingLpn = false;
+        // En traslado el faltante se confirma justo antes de cerrar: si falla, se vuelve a pedir
+        if (_packingEsTraslado) _motivoFaltantePack = null;
+      });
+      if (mounted) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('El packing NO se cerró', style: TextStyle(fontWeight: FontWeight.bold)),
+            content: Text('${_mensajeError(e)}\n\nNo se perdió nada: revise y vuelva a presionar CERRAR PACKING.'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ENTENDIDO'))],
+          ),
+        );
       }
-      for (final raw in _lpnConsolidadoMapa.values) {
-        listaConsolidada.add({...Map<String, dynamic>.from(raw as Map), 'lpn_pallet': lpnMaster});
-      }
-      final String fechaIso = DateTime.now().toIso8601String();
-      final String auditorStr = (usuarioActivo?['nombre_completo'] ?? usuarioActivo?['usuario'] ?? 'PACKING_RF').toString().toUpperCase();
-      final String lpnRangoTexto = cantBultos > 1 ? '$lpnMaster-B1..B$cantBultos' : lpnMaster;
+      return;
+    }
 
-      for (final rawItem in listaConsolidada) {
-        final item = rawItem as Map;
-        final idDet = item['id_detalle'];
-        final int cantAudit = (item['unidades_totales'] as num?)?.toInt() ?? 0;
-        final String loteStr = item['lote'].toString();
-        final String vencStr = (item['fecha_vencimiento_cl'] ?? 'S/F').toString();
-        final String lpnItem = (item['lpn_pallet'] ?? lpnMaster).toString().toUpperCase();
-        final String trazabilidadCompleta =
-            '[$lpnItem|BULTOS:$cantBultos|TIPO:$_tipoEmpaquePack|COMUNA:$comunaStr] $loteStr / $vencStr ($cantAudit UN)';
-
-        if (idDet != null) {
-          try {
-            await supabase.from('netsuite_detalle_ov').update({
-              'cantidad_pickeada': cantAudit,
-              'lotes_pickeados': trazabilidadCompleta,
-              'estado_linea': 'CONSOLIDADO_LPN',
-            }).eq('id', idDet);
-          } catch (_) {}
-        }
-      }
-
-      // Traslados OT-CCP pasan a recepción en Concepción; ventas normales pasan a facturación.
-      final String estadoDestinoPacking = numOvStr.startsWith('OT-CCP-')
-          ? 'EN_TRANSITO_CCP'
-          : 'PENDIENTE_FACTURACION';
-      if (ovMap['id'] != null) {
-        final String canalPrevio = (ovMap['canal_venta'] ?? '').toString().trim();
-        final List partesBase = canalPrevio
-            .split('|')
-            .where((p) {
-              final u = p.trim().toUpperCase();
-              return u.isNotEmpty &&
-                  !u.startsWith('LPN:') &&
-                  !u.startsWith('BULTOS:') &&
-                  !u.startsWith('TIPO:') &&
-                  !u.startsWith('COMUNA:');
-            })
-            .toList();
-        if (partesBase.isEmpty) {
-          partesBase.add(numOvStr.endsWith('-FA') || numOvStr.startsWith('OT-') ? 'FARMACIA (-FA)' : 'ESTANDAR');
-        }
-        partesBase.addAll([
-          'LPN:$lpnMaster',
-          'BULTOS:$cantBultos',
-          'TIPO:$_tipoEmpaquePack',
-          'COMUNA:$comunaStr',
-        ]);
-        final String canalActualizado = partesBase.join('|');
-
-        try {
-          await supabase.from('netsuite_ordenes_venta').update({
-            'estado_ns': estadoDestinoPacking,
-            'canal_venta': canalActualizado,
-          }).eq('id', ovMap['id']);
-        } catch (_) {
-          try {
-            await supabase.from('netsuite_ordenes_venta').update({'estado_ns': estadoDestinoPacking}).eq('id', ovMap['id']);
-          } catch (_) {}
-        }
-      }
-
-      final detalleJsonTorre = listaConsolidada.map((rawItem) {
-        final item = rawItem as Map;
-        return {
-          'lpn_consolidado': lpnMaster,
-          // LPN físico de cada pallet: Recepción Concepción (PC m8) lo usa para recibir pallet por pallet
-          'lpn_pallet': (item['lpn_pallet'] ?? lpnMaster).toString().toUpperCase(),
-          'lpn_rango': lpnRangoTexto,
-          'comuna': comunaStr,
-          'tipo_empaque': _tipoEmpaquePack,
-          'bultos': cantBultos,
-          'id_detalle': item['id_detalle'],
-          'sku': item['sku'],
-          'descripcion': item['descripcion'],
-          'solicitado': item['solicitado'],
-          'pickeado': item['unidades_totales'],
-          'unidades_totales': item['unidades_totales'],
-          'cajas': item['cajas'],
-          'displays': item['displays'],
-          'multiplo_aplicado': item['multiplo_aplicado'],
-          'lote': item['lote'],
-          'fecha_vencimiento_cl': item['fecha_vencimiento_cl'],
-          '_estado_packing': 'PACKING_COMPLETO',
-          'lotes': '${item['lote']} / ${item['fecha_vencimiento_cl'] ?? 'S/F'} (${item['unidades_totales']} UN)',
-        };
-      }).toList();
-
-      final payloadPl = {
-        'bodega': bodegaActiva,
-        'orden_id': ovMap['id'],
-        'numero_ov': numOvStr,
-        'cliente_nombre': clienteStr,
-        'usuario_picking': auditorStr,
-        'detalle_json': detalleJsonTorre,
-        'fecha_emision': fechaIso,
-      };
-      // Si existe el borrador de pallets se ACTUALIZA (antes se insertaba otra fila y la OT
-      // quedaba con el detalle duplicado: pallets del borrador + LPN maestro).
-      final int? idBorradorPl = _packingDraftId;
-      try {
-        if (idBorradorPl != null) {
-          await supabase.from('wms_packing_lists_fa').update(payloadPl).eq('id', idBorradorPl);
-        } else {
-          await supabase.from('wms_packing_lists_fa').insert(payloadPl);
-        }
-      } catch (_) {
-        try {
-          final copiaSinBod = Map<String, dynamic>.from(payloadPl)..remove('bodega');
-          if (idBorradorPl != null) {
-            await supabase.from('wms_packing_lists_fa').update(copiaSinBod).eq('id', idBorradorPl);
-          } else {
-            await supabase.from('wms_packing_lists_fa').insert(copiaSinBod);
-          }
-        } catch (_) {}
-      }
-
+    // Etiquetas 15x10: una por bulto (el error de impresión ya no deshace el cierre)
+    try {
       await generarPdfEtiquetaPackingBultos15x10(
-        lpn: lpnMaster,
+        lpn: lpnMaster.isNotEmpty ? lpnMaster : 'PK-${numOvStr.replaceAll(' ', '')}',
         numeroOv: numOvStr,
         cliente: clienteStr,
         comuna: comunaStr,
         tipoEmpaque: _tipoEmpaquePack,
-        totalBultos: cantBultos,
+        totalBultos: bultos,
       );
-
-      _notificar(
-        numOvStr.startsWith('OT-CCP-')
-            ? '¡Packing finalizado! $numOvStr quedó EN TRÁNSITO A CONCEPCIÓN para recepción.'
-            : '¡Packing finalizado! OV $numOvStr enviada a FACTURACIÓN.' ,
-        color: const Color(0xFF047857),
-      );
-      setState(() {
-        _lineasAuditoriaPacking = [];
-        _lpnConsolidadoMapa.clear();
-        _palletsPackingCerrados.clear();
-        _ovPackingCabeceraActiva = null;
-        _txtBuscarOvPacking.clear();
-        _txtLpnConsolidadoPack.clear();
-        _pasoPackingLpn = 0;
-        _packingDraftId = null;
-      });
     } catch (e) {
-      _notificar('Error cerrando Packing: $e', color: Colors.red);
-    } finally {
-      if (mounted) setState(() => _guardandoPackingLpn = false);
+      _notificar('Packing cerrado, pero no se pudieron imprimir las etiquetas: ${_mensajeError(e)}', color: Colors.orange);
     }
+
+    _notificar(
+      _packingEsTraslado
+          ? (_motivoFaltantePack != null
+              ? 'Packing cerrado CON FALTANTE. $numOvStr quedó EN TRÁNSITO A CONCEPCIÓN ($bultos pallets); el PC verá la alerta.'
+              : '¡Packing cerrado! $numOvStr quedó EN TRÁNSITO A CONCEPCIÓN ($bultos pallets).')
+          : (_motivoFaltantePack != null
+              ? 'Packing cerrado CON FALTANTE. OV $numOvStr: $bultos bultos a facturación; el PC verá la alerta.'
+              : '¡Packing cerrado! OV $numOvStr: $bultos bultos enviados a FACTURACIÓN.'),
+      color: const Color(0xFF047857),
+    );
+    if (mounted) {
+      setState(() => _guardandoPackingLpn = false);
+      _cambiarOrdenPacking();
+    }
+  }
+
+  /// Pide el motivo para cerrar con faltante y pasa a los datos del despacho.
+  Future<void> _pedirCierreConFaltante() async {
+    final faltantes = _lineasAuditoriaPacking.map((raw) {
+      final l = raw as Map;
+      final id = (l['id_detalle'] as num?)?.toInt() ?? 0;
+      final hecho = _packingEsTraslado ? _cantidadSkuYaDistribuidaEnPallets(id) : (_verificadoBultos[id] ?? 0);
+      final f = _esperadoPacking(l) - hecho;
+      return f > 0 ? '${l['sku']}: faltan $f de ${_esperadoPacking(l)} UN' : null;
+    }).whereType<String>().toList();
+    if (_packingEsTraslado && _lpnConsolidadoMapa.isNotEmpty) {
+      _notificar('Cierre primero el pallet actual (${_txtLpnConsolidadoPack.text}).', color: Colors.orange);
+      return;
+    }
+    if (_packingEsTraslado && _palletsPackingCerrados.isEmpty) {
+      _notificar('No hay pallets cerrados: arme al menos un pallet antes de cerrar.', color: Colors.orange);
+      return;
+    }
+    final totalFaltante = _saldoUnidadesPacking();
+    const motivos = ['No estaba en lo pickeado', 'Producto dañado', 'Producto vencido o lote incorrecto', 'Otro'];
+    String? motivo;
+    final txtOtro = TextEditingController();
+    final res = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: const Text('Cerrar con faltante', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Faltan $totalFaltante UN en ${faltantes.length} SKU'
+              '${_packingEsTraslado ? ' · salen ${_palletsPackingCerrados.length} pallet(s)' : ''}:',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          ...faltantes.map((f) => Text('• $f', style: const TextStyle(fontSize: 12.5))),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: motivo, isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Motivo *'),
+            items: motivos.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
+            onChanged: (v) => setD(() => motivo = v),
+          ),
+          if (motivo == 'Otro') TextField(controller: txtOtro, decoration: const InputDecoration(labelText: 'Detalle del motivo')),
+          const SizedBox(height: 10),
+          const Text('La orden saldrá incompleta y el PC lo mostrará como alerta para revisar el stock.',
+              style: TextStyle(fontSize: 11.5, color: Color(0xFF92400E))),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
+          ElevatedButton(
+            onPressed: motivo == null ? null : () {
+              final m = motivo == 'Otro' ? txtOtro.text.trim() : motivo!;
+              if (m.isEmpty) return;
+              Navigator.pop(ctx, m);
+            },
+            child: const Text('CONTINUAR CON FALTANTE'),
+          ),
+        ],
+      )),
+    );
+    if (res == null) return;
+    if (_packingEsTraslado) {
+      // Traslado: no hay paso de datos de despacho; se cierra con los pallets armados
+      setState(() => _motivoFaltantePack = res);
+      await _cerrarPackingYConsolidarLpn(soloEtiquetaLpn: false);
+      return;
+    }
+    setState(() {
+      _motivoFaltantePack = res;
+      _pasoPackingLpn = 4;
+    });
+  }
+
+  /// Packing por BULTOS en dos pasos: 1) verificar productos  2) datos del despacho y cierre.
+  Widget _construirVistaPackingBultos(Widget cabecera) {
+    final saldo = _saldoUnidadesPacking();
+    final pendientes = _skusPendientesPacking();
+    final totalEsperado = _lineasAuditoriaPacking.fold<int>(0, (a, r) => a + _esperadoPacking(r as Map));
+    final verificadas = totalEsperado - saldo;
+
+    if (_pasoPackingLpn == 3) {
+      final completo = pendientes == 0 && totalEsperado > 0;
+      return Column(children: [
+        Expanded(child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 12), children: [
+          cabecera, const SizedBox(height: 10),
+          _TarjetaMovil(borderColor: const Color(0xFF14B8A6), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('PASO 1 DE 2 · VERIFICAR PRODUCTOS  ($verificadas/$totalEsperado UN)',
+                style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF0F766E))),
+            const SizedBox(height: 6),
+            LinearProgressIndicator(value: totalEsperado == 0 ? 0.0 : verificadas / totalEsperado, minHeight: 6,
+                color: const Color(0xFF0F766E), backgroundColor: const Color(0xFFE2E8F0)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: TextField(controller: _txtScanAuditoriaPack, autofocus: true,
+                textCapitalization: TextCapitalization.characters, inputFormatters: [UpperCaseTextFormatter()],
+                onSubmitted: (_) => _procesarEscaneoBultos(),
+                decoration: const InputDecoration(labelText: 'Escanear SKU / EAN / GS1', prefixIcon: Icon(Icons.barcode_reader)))),
+              const SizedBox(width: 8),
+              ElevatedButton(onPressed: () async {
+                await _escanearParaCampo(_txtScanAuditoriaPack, 'Escanear producto');
+                if (_txtScanAuditoriaPack.text.isNotEmpty) await _procesarEscaneoBultos();
+              }, child: const Icon(Icons.qr_code_scanner)),
+            ]),
+            const SizedBox(height: 8),
+        ..._lineasAuditoriaPacking.map((raw) {
+          final l = raw as Map;
+          final id = (l['id_detalle'] as num?)?.toInt() ?? 0;
+          final esp = _esperadoPacking(l);
+          final ver = _verificadoBultos[id] ?? 0;
+          final ok = esp > 0 && ver >= esp;
+          final quiebre = esp == 0;
+          final color = quiebre ? const Color(0xFF94A3B8) : ok ? const Color(0xFF047857) : const Color(0xFFB45309);
+          return InkWell(
+            onTap: quiebre ? null : () => _avisarSoloEscaneo((l['sku'] ?? '').toString()),
+            onLongPress: ver > 0 ? () => setState(() { _verificadoBultos.remove(id); _lotesVerificadosBultos.remove(id); }) : null,
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 6), padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(color: ok ? const Color(0xFFF0FDF4) : const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(8), border: Border.all(color: color.withOpacity(.5))),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Icon(quiebre ? Icons.remove_circle_outline : ok ? Icons.check_circle : Icons.radio_button_unchecked, color: color, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text('${l['sku']} · ${l['descripcion']}', maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold))),
+                  Text(quiebre ? 'QUIEBRE' : '$ver / $esp UN', style: TextStyle(fontWeight: FontWeight.w900, color: color, fontSize: 11.5)),
+                ]),
+                // Lotes confirmados (en ámbar si no coinciden con lo pickeado)
+                if ((_lotesVerificadosBultos[id] ?? {}).isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 4, children: (_lotesVerificadosBultos[id] ?? {}).entries.map((e) {
+                    final p = e.key.split('|');
+                    final distinto = !_lotesPickeadosPendientes(l).any((o) => o['clave'] == e.key);
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: distinto ? const Color(0xFFFEF3C7) : const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text('${distinto ? '⚠ ' : ''}Lote ${p[0]} · vence ${p[1]} · ${e.value} UN',
+                          style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold,
+                              color: distinto ? const Color(0xFF92400E) : const Color(0xFF166534))),
+                    );
+                  }).toList()),
+                ],
+              ]),
+            ),
+          );
+        }),
+            const Text('Toque una línea para confirmar lote, vencimiento y cantidad · mantenga presionado para reiniciarla.',
+                style: TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+          ])),
+        ])),
+        // Barra fija de acciones del paso 1
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 80),
+          decoration: const BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)]),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            SizedBox(width: double.infinity, height: 50, child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F766E), foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFFCBD5E1)),
+              onPressed: completo ? () => setState(() { _motivoFaltantePack = null; _pasoPackingLpn = 4; }) : null,
+              icon: const Icon(Icons.arrow_forward_rounded),
+              label: Text(completo ? 'CONTINUAR A DATOS DEL DESPACHO' : 'FALTAN $saldo UN POR VERIFICAR'),
+            )),
+            if (!completo && verificadas > 0)
+              TextButton.icon(
+                onPressed: _pedirCierreConFaltante,
+                icon: const Icon(Icons.report_problem_outlined, color: Color(0xFFB45309)),
+                label: const Text('Cerrar con faltante…', style: TextStyle(color: Color(0xFFB45309), fontWeight: FontWeight.bold)),
+              ),
+          ]),
+        ),
+      ]);
+    }
+
+    // ---------- PASO 2: datos del despacho ----------
+    final pesoEsperado = _pesoEsperadoPackingKg();
+    final sinPeso = _lineasSinPeso();
+    final pesoReal = double.tryParse(_txtPesoRealPack.text.trim().replaceAll(',', '.'));
+    final bultos = int.tryParse(_txtCantidadBultosPack.text.trim()) ?? 0;
+    final listo = bultos >= 1 && !_guardandoPackingLpn;
+    final skuVerificados = _lineasAuditoriaPacking.where((r) => (_verificadoBultos[((r as Map)['id_detalle'] as num?)?.toInt() ?? 0] ?? 0) > 0).length;
+    String? avisoPeso;
+    if (pesoReal != null && pesoEsperado > 0) {
+      final dif = (pesoReal - pesoEsperado) / pesoEsperado * 100;
+      if (dif.abs() > 25) avisoPeso = 'Diferencia de ${dif.toStringAsFixed(0)}% con el peso aproximado';
+    }
+    return ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 86), children: [
+      cabecera, const SizedBox(height: 10),
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: _motivoFaltantePack != null ? const Color(0xFFFEF3C7) : const Color(0xFFF0FDF4),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _motivoFaltantePack != null ? const Color(0xFFF59E0B) : const Color(0xFF22C55E)),
+        ),
+        child: Row(children: [
+          Icon(_motivoFaltantePack != null ? Icons.report_problem_outlined : Icons.verified_rounded,
+              color: _motivoFaltantePack != null ? const Color(0xFFB45309) : const Color(0xFF15803D)),
+          const SizedBox(width: 10),
+          Expanded(child: Text(
+            _motivoFaltantePack != null
+                ? 'PASO 2 DE 2 · $verificadas de $totalEsperado UN ($skuVerificados SKU). Sale CON FALTANTE: $_motivoFaltantePack'
+                : 'PASO 2 DE 2 · $verificadas UN verificadas ($skuVerificados SKU)',
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5))),
+          TextButton(onPressed: () => setState(() => _pasoPackingLpn = 3), child: const Text('VOLVER')),
+        ]),
+      ),
+      const SizedBox(height: 10),
+      // 2. Datos del despacho
+      _TarjetaMovil(borderColor: const Color(0xFF0284C7), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('DATOS DEL DESPACHO', style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF0369A1))),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: TextField(controller: _txtCantidadBultosPack, keyboardType: TextInputType.number,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'N° de bultos *', prefixIcon: Icon(Icons.all_inbox_rounded)))),
+          const SizedBox(width: 8),
+          Expanded(child: DropdownButtonFormField<String>(
+            value: const ['CAJA', 'BOLSA', 'SOBRE', 'BULTO', 'PALLET'].contains(_tipoEmpaquePack) ? _tipoEmpaquePack : 'CAJA',
+            decoration: const InputDecoration(labelText: 'Tipo de empaque'),
+            items: const ['CAJA', 'BOLSA', 'SOBRE', 'BULTO', 'PALLET']
+                .map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+            onChanged: (v) => setState(() => _tipoEmpaquePack = v ?? 'CAJA'),
+          )),
+        ]),
+        const SizedBox(height: 8),
+        TextField(controller: _txtComunaDespachoPack, textCapitalization: TextCapitalization.characters,
+            inputFormatters: [UpperCaseTextFormatter()],
+            decoration: const InputDecoration(labelText: 'Comuna de destino', prefixIcon: Icon(Icons.place_outlined))),
+        const SizedBox(height: 10),
+        Container(
+          width: double.infinity, padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(8)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(pesoEsperado > 0 ? 'Peso esperado aprox.: ${pesoEsperado.toStringAsFixed(2)} kg' : 'Peso esperado: sin datos',
+                style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF1D4ED8))),
+            const Text('Referencial: se calcula con el peso de la Maestra SKU.',
+                style: TextStyle(fontSize: 10.5, color: Color(0xFF64748B))),
+            if (sinPeso) const Text('Hay SKU sin peso en la Maestra; el esperado puede quedar bajo.',
+                style: TextStyle(fontSize: 10.5, color: Color(0xFFB45309))),
+          ]),
+        ),
+        const SizedBox(height: 8),
+        TextField(controller: _txtPesoRealPack, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(labelText: 'Peso en balanza (kg, opcional)', prefixIcon: const Icon(Icons.scale_outlined),
+            helperText: avisoPeso, helperStyle: const TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.bold))),
+      ])),
+      const SizedBox(height: 12),
+      SizedBox(width: double.infinity, height: 52, child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+            backgroundColor: _motivoFaltantePack != null ? const Color(0xFFB45309) : const Color(0xFF047857),
+            foregroundColor: Colors.white, disabledBackgroundColor: const Color(0xFFCBD5E1)),
+        onPressed: listo ? () => _cerrarPackingYConsolidarLpn(soloEtiquetaLpn: false) : null,
+        icon: _guardandoPackingLpn
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+            : const Icon(Icons.verified),
+        label: Text(bultos < 1
+            ? 'INDIQUE N° DE BULTOS'
+            : (_motivoFaltantePack != null ? 'CERRAR CON FALTANTE E IMPRIMIR $bultos ETIQ.' : 'CERRAR PACKING E IMPRIMIR $bultos ETIQUETA(S)')),
+      )),
+    ]);
   }
 
   Widget _construirVistaAuditoriaPackingLpn() {
@@ -4761,22 +6401,61 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         const Icon(Icons.inventory_2_rounded, color: Color(0xFF5EEAD4)), const SizedBox(width: 9),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(ov, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
-          Text(cliente, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 10)),
-          Text('$pendientes SKU | $saldo UN pendientes', style: const TextStyle(color: Color(0xFF5EEAD4), fontSize: 10, fontWeight: FontWeight.bold)),
+          Text('${(_ovPackingCabeceraActiva?['mesa_packing'] ?? '').toString().isNotEmpty ? '${_ovPackingCabeceraActiva?['mesa_packing']} · ' : ''}$cliente',
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 10)),
+          Text('${_packingEsTraslado ? 'TRASLADO · PALLETS CON LPN' : 'DESPACHO · BULTOS'}  |  $pendientes SKU · $saldo UN pendientes',
+              style: const TextStyle(color: Color(0xFF5EEAD4), fontSize: 10, fontWeight: FontWeight.bold)),
         ])),
         TextButton.icon(onPressed: _cambiarOrdenPacking, icon: const Icon(Icons.swap_horiz, color: Colors.white),
           label: const Text('CAMBIAR OV', style: TextStyle(color: Colors.white, fontSize: 10))),
       ]),
     );
 
+    if (_pasoPackingLpn == 3 || _pasoPackingLpn == 4) return _construirVistaPackingBultos(cabecera());
+
     if (_pasoPackingLpn == 0) {
       return ListView(padding: const EdgeInsets.fromLTRB(12,12,12,86), children: [
+        // 1. Por mesa: el picker deja cada pedido en una mesa (QR "Mesa N")
+        _TarjetaMovil(borderColor: const Color(0xFF0F766E), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('MESA DE PACKING', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Color(0xFF0F766E))),
+          const SizedBox(height: 4),
+          const Text('Escanee el QR de su mesa para ver los pedidos que esperan ahí.', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+          const SizedBox(height: 10),
+          SizedBox(width: double.infinity, height: 50, child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F766E), foregroundColor: Colors.white),
+            onPressed: _cargandoMesa ? null : _escanearMesaParaPacking,
+            icon: _cargandoMesa
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.table_restaurant_rounded),
+            label: Text(_mesaPackingActiva == null ? 'ESCANEAR MESA' : 'CAMBIAR MESA ($_mesaPackingActiva)'),
+          )),
+          if (_mesaPackingActiva != null && _ordenesEnMesa.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text('${_ordenesEnMesa.length} pedido(s) en $_mesaPackingActiva:', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
+            ..._ordenesEnMesa.map((o) => Card(
+              margin: const EdgeInsets.only(top: 6),
+              child: ListTile(
+                dense: true,
+                title: Text((o['numero_ov'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.w900)),
+                subtitle: Text('${o['cliente_nombre'] ?? ''}\n${o['lineas'] ?? 0} SKU · ${o['unidades'] ?? 0} UN',
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
+                isThreeLine: true,
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                onTap: () async {
+                  _txtBuscarOvPacking.text = (o['numero_ov'] ?? '').toString();
+                  await _buscarOrdenParaPackingPorTexto();
+                },
+              ),
+            )),
+          ],
+        ])),
+        const SizedBox(height: 10),
         _TarjetaMovil(borderColor: const Color(0xFF0D9488), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('BUSCAR ORDEN PARA PACKING', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Color(0xFF0F766E))),
+          const Text('O BUSCAR POR N° DE ORDEN', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Color(0xFF0F766E))),
           const SizedBox(height: 6),
-          const Text('Al cargar la OV/OT, esta pantalla se cerrará y pasará directamente al LPN.', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+          const Text('OV: se verifican los productos y se indican bultos y peso.  OT a Concepción: cada pallet con su LPN.', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
           const SizedBox(height: 12),
-          TextField(controller: _txtBuscarOvPacking, autofocus: true, textCapitalization: TextCapitalization.characters,
+          TextField(controller: _txtBuscarOvPacking, textCapitalization: TextCapitalization.characters,
             inputFormatters: [UpperCaseTextFormatter()], onSubmitted: (_) => _buscarOrdenParaPackingPorTexto(),
             decoration: InputDecoration(labelText: 'N° OV / OT', prefixIcon: const Icon(Icons.local_shipping_outlined),
               suffixIcon: IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: () async {
@@ -4812,13 +6491,25 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
               Expanded(child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F766E), foregroundColor: Colors.white),
                 onPressed: _iniciarPalletPacking, icon: const Icon(Icons.inventory_2), label: const Text('INICIAR PALLET'))),
             ]),
+            if (_palletsPackingCerrados.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              SizedBox(width: double.infinity, height: 46, child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(side: const BorderSide(color: Color(0xFFB45309), width: 1.4)),
+                onPressed: _guardandoPackingLpn ? null : _pedirCierreConFaltante,
+                icon: _guardandoPackingLpn
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.report_problem_outlined, color: Color(0xFFB45309)),
+                label: Text('NO HAY MÁS PRODUCTO · CERRAR CON FALTANTE ($saldo UN)',
+                    style: const TextStyle(color: Color(0xFFB45309), fontWeight: FontWeight.bold, fontSize: 12)),
+              )),
+            ],
           ] else ...[
-            const Text('Todos los productos fueron asignados. Finalice el Packing para enviar la orden a Facturación.'),
+            Text('Todos los productos están en ${_palletsPackingCerrados.length} pallet(s). Cierre el packing para dejar la OT en tránsito a Concepción.'),
             const SizedBox(height: 10),
             SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF047857), foregroundColor: Colors.white),
               onPressed: _guardandoPackingLpn ? null : () => _cerrarPackingYConsolidarLpn(soloEtiquetaLpn: false),
-              icon: const Icon(Icons.verified), label: const Text('FINALIZAR PACKING'))),
+              icon: const Icon(Icons.verified), label: const Text('CERRAR PACKING (EN TRÁNSITO A CONCEPCIÓN)'))),
           ],
           if (_palletsPackingCerrados.isNotEmpty) ...[
             const Divider(height: 24),
@@ -4849,17 +6540,26 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
             await _escanearParaCampo(_txtScanAuditoriaPack, 'Escanear producto');
             if (_txtScanAuditoriaPack.text.isNotEmpty) await _procesarEscaneoAuditoriaPacking();
           }, child: const Icon(Icons.qr_code_scanner))]),
+        SwitchListTile(
+          dense: true, contentPadding: EdgeInsets.zero,
+          value: _cajaPorCajaPack,
+          onChanged: (v) => setState(() => _cajaPorCajaPack = v),
+          title: const Text('Caja por caja', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+          subtitle: Text(_cajaPorCajaPack
+              ? 'Cada caja escaneada suma 1 caja. Confirme su fecha (o sáquele una foto) y el lote se toma solo.'
+              : 'Al escanear se propone todo el saldo del SKU de una vez.', style: const TextStyle(fontSize: 11)),
+        ),
       ])),
       const SizedBox(height: 10),
       _TarjetaMovil(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('PRODUCTOS PENDIENTES', style: TextStyle(fontWeight: FontWeight.bold)), const SizedBox(height: 8),
         ..._lineasAuditoriaPacking.map((raw) {
-          final l = raw as Map; final id=(l['id_detalle'] as num?)?.toInt()??0; final sol=(l['solicitado'] as num?)?.toInt()??0;
+          final l = raw as Map; final id=(l['id_detalle'] as num?)?.toInt()??0; final sol=_esperadoPacking(l);
           final dist=_cantidadSkuYaDistribuidaEnPallets(id); final pend=(sol-dist).clamp(0,sol);
           if (pend<=0) return const SizedBox.shrink();
-          return InkWell(onTap: ()=>_abrirModalAuditarLineaPacking(l), child: Container(margin: const EdgeInsets.only(bottom: 7), padding: const EdgeInsets.all(10),
+          return InkWell(onTap: () => _avisarSoloEscaneo((l['sku'] ?? '').toString()), child: Container(margin: const EdgeInsets.only(bottom: 7), padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFCBD5E1))),
-            child: Row(children: [const Icon(Icons.add_circle_outline, color: Color(0xFF0F766E)), const SizedBox(width: 8),
+            child: Row(children: [const Icon(Icons.qr_code_scanner, color: Color(0xFF0F766E)), const SizedBox(width: 8),
               Expanded(child: Text('${l['sku']} - ${l['descripcion']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
               Text('SALDO $pend UN', style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFB45309), fontSize: 11))])));
         }),
@@ -4913,7 +6613,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
   }
 
   void _validarUbicacionPutaway(String val) {
-    final ubi = val.trim().toUpperCase();
+    final ubi = _normalizarRackOCodigo(val);
     if (ubi.isEmpty) {
       setState(() {
         _colorBordeUbiPutaway = const Color(0xFFCBD5E1);
@@ -4996,6 +6696,18 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       final rack = matchSeparado.group(2)!.padLeft(2, '0');
       final nivel = matchSeparado.group(3)!.padLeft(2, '0');
       return '$zona-$rack-$nivel';
+    }
+
+    // Mezclas: "B25-01", "B-2501", "B 2501" -> "B-25-01"
+    final matchMixto = RegExp(r'^([A-Z])[\s\-_\.]*(\d{2})[\s\-_\.]*N?(\d{2})$').firstMatch(s);
+    if (matchMixto != null) {
+      return '${matchMixto.group(1)}-${matchMixto.group(2)}-${matchMixto.group(3)}';
+    }
+
+    // Arena: "BE0312", "BE 03 12" -> "BE-03-12"
+    final matchArena = RegExp(r'^(MK|ME|BE)[\s\-_\.]*(\d{2})[\s\-_\.]*(\d{2})$').firstMatch(s);
+    if (matchArena != null) {
+      return '${matchArena.group(1)}-${matchArena.group(2)}-${matchArena.group(3)}';
     }
 
     // Ej: búsqueda por rack completo "A01" o "A 01" -> "A-01"
@@ -5590,7 +7302,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       _recalcularUnidadesEnVivo();
       _notificar('Etiqueta procesada con Visión IA.', color: const Color(0xFF047857));
     } catch (ex) {
-      _notificar('Error en Visión IA: $ex', color: const Color(0xFFDC2626));
+      _notificar('Error en Visión IA: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
     }
   }
 
@@ -5667,7 +7379,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         }
       });
     } catch (ex) {
-      _notificar('Error cargando ASNs: $ex', color: const Color(0xFFDC2626));
+      _notificar('Error cargando ASNs: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
     }
   }
 
@@ -5712,7 +7424,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         _resumenAsn = 'Embarque activo: ${_lineasAsnActual.length} SKUs registrados.';
       });
     } catch (ex) {
-      _notificar('Error leyendo ASN: $ex', color: const Color(0xFFDC2626));
+      _notificar('Error leyendo ASN: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
     }
   }
 
@@ -6003,6 +7715,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         'p_usuario': _usuarioRf(),
       });
       final r = Map<String, dynamic>.from(res as Map);
+      _refrescarTareasConteo();
 
       if (r['sin_cambios'] == true) {
         _notificar((r['mensaje'] ?? 'No se creó registro porque la cantidad es 0.').toString(), color: Colors.orange);
@@ -6099,7 +7812,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         _lineasLpnAlmacenamiento = lineas;
         _origenLpnAlmacenamiento = origen;
         _pasoAlmacenamiento = 2;
+        _sugerenciasPutaway = [];
       });
+      _cargarSugerenciasPutaway(lpn);
       _notificar(
         estado == 'EN_RACK'
             ? 'LPN $lpn validado (Origen: $origen). Ahora escanee la Ubicación.'
@@ -6111,6 +7826,661 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     } finally {
       if (mounted) setState(() => _validandoLpnAlmacenamiento = false);
     }
+  }
+
+  // ===================================================================
+  // ALMACENAMIENTO: historial del operador y reportes / correcciones
+  // ===================================================================
+  List<Map<String, dynamic>> _misAlmacenamientos = [];
+  List<Map<String, dynamic>> _sugerenciasPutaway = [];
+
+  /// Almacenamiento dirigido: dónde dejar el pallet según la ubicación de picking de su SKU.
+  Future<void> _cargarSugerenciasPutaway(String lpn) async {
+    try {
+      final res = await supabase.rpc('wms_sugerir_ubicacion_lpn', params: {'p_bodega': bodegaActiva, 'p_lpn': lpn});
+      final lista = List<Map<String, dynamic>>.from((res as List).map((e) => Map<String, dynamic>.from(e as Map)));
+      if (!mounted) return;
+      setState(() => _sugerenciasPutaway = lista);
+      if (lista.isNotEmpty && _txtPutUbi.text.trim().isEmpty) {
+        _txtPutUbi.text = (lista.first['ubicacion'] ?? '').toString();
+        _validarUbicacionPutaway(_txtPutUbi.text);
+      }
+    } catch (e) {
+      debugPrint('Sugerencia de almacenamiento: $e');
+    }
+  }
+  bool _cargandoMisAlm = false;
+
+  Future<void> _cargarMisAlmacenamientos() async {
+    setState(() => _cargandoMisAlm = true);
+    try {
+      final res = await supabase.rpc('wms_mis_almacenamientos',
+          params: {'p_bodega': bodegaActiva, 'p_usuario': _usuarioRf(), 'p_horas': 24});
+      final lista = List<Map<String, dynamic>>.from((res as List).map((e) => Map<String, dynamic>.from(e as Map)));
+      if (mounted) setState(() => _misAlmacenamientos = lista);
+    } catch (e) {
+      debugPrint('Historial de almacenamiento: $e');
+    } finally {
+      if (mounted) setState(() => _cargandoMisAlm = false);
+    }
+  }
+
+  /// Reporte de una incongruencia al supervisor (recepción, almacenamiento y reabastecimiento).
+  Future<void> _dialogoReporteOperador() async {
+    final modulo = _tabActual == 0 ? 'RECEPCION' : (_tabActual == 1 ? 'ALMACENAMIENTO' : 'REABASTECIMIENTO');
+    const tiposPorModulo = {
+      'RECEPCION': ['Cantidad no coincide con la OC', 'Producto no viene en la OC', 'Lote o vencimiento distinto',
+                    'Producto dañado', 'Código no lee / sin etiqueta'],
+      'ALMACENAMIENTO': ['Ubicación ocupada', 'Ubicación no existe o sin etiqueta', 'Pallet no está donde dice el sistema',
+                         'Cantidad no coincide', 'Producto dañado'],
+      'REABASTECIMIENTO': ['Picking lleno', 'No hay stock en reserva', 'Pallet no está en la ubicación', 'Lote distinto al sugerido',
+                           'Cantidad no coincide'],
+    };
+    final tipos = <String>[...tiposPorModulo[modulo]!, 'Otro'];
+    final txtLpn = TextEditingController();
+    final txtUbic = TextEditingController();
+    final txtSku = TextEditingController();
+    final txtDetalle = TextEditingController();
+    String? tipo;
+    Widget campo(TextEditingController c, String label, IconData icono, StateSetter setD, {bool ubic = false}) => TextField(
+          controller: c,
+          textCapitalization: TextCapitalization.characters,
+          inputFormatters: [UpperCaseTextFormatter()],
+          decoration: InputDecoration(
+            labelText: label, prefixIcon: Icon(icono), isDense: true,
+            suffixIcon: IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: () async {
+              final cod = await showDialog<String>(context: context, builder: (_) => _DialogoEscanerVivo(titulo: label));
+              if (cod != null && cod.trim().isNotEmpty) {
+                setD(() => c.text = ubic ? _normalizarRackOCodigo(cod) : cod.trim().toUpperCase());
+              }
+            }),
+          ),
+        );
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: Row(children: [
+          const Icon(Icons.report_problem_rounded, color: Color(0xFFB45309)),
+          const SizedBox(width: 8),
+          Expanded(child: Text('REPORTAR · $modulo', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15))),
+        ]),
+        content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('El supervisor lo verá en el PC (Requiere atención) para ir a revisar.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF475569))),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            value: tipo, isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Qué pasó *'),
+            items: tipos.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+            onChanged: (v) => setD(() => tipo = v),
+          ),
+          const SizedBox(height: 8),
+          campo(txtLpn, 'LPN', Icons.qr_code_2_rounded, setD),
+          const SizedBox(height: 8),
+          campo(txtUbic, 'Ubicación', Icons.place_outlined, setD, ubic: true),
+          const SizedBox(height: 8),
+          campo(txtSku, 'SKU / EAN', Icons.inventory_2_outlined, setD),
+          const SizedBox(height: 8),
+          TextField(controller: txtDetalle, maxLines: 3,
+              decoration: const InputDecoration(labelText: 'Detalle (qué vio, cuánto hay, OC…)')),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCELAR')),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB45309), foregroundColor: Colors.white),
+            icon: const Icon(Icons.send_rounded),
+            label: const Text('ENVIAR REPORTE'),
+            onPressed: tipo == null ? null : () {
+              if (tipo == 'Otro' && txtDetalle.text.trim().length < 4) {
+                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Escriba el detalle.'), backgroundColor: Colors.orange));
+                return;
+              }
+              Navigator.pop(ctx, true);
+            },
+          ),
+        ],
+      )),
+    );
+    if (ok != true) return;
+    try {
+      await supabase.rpc('wms_crear_reporte_operacion', params: {
+        'p_bodega': bodegaActiva, 'p_modulo': modulo, 'p_tipo': tipo,
+        'p_lpn': txtLpn.text.trim().isEmpty ? null : txtLpn.text.trim(),
+        'p_ubicacion': txtUbic.text.trim().isEmpty ? null : _normalizarRackOCodigo(txtUbic.text),
+        'p_sku': txtSku.text.trim().isEmpty ? null : txtSku.text.trim(),
+        'p_detalle': txtDetalle.text.trim(),
+        'p_usuario': _usuarioRf(),
+      });
+      _notificar('Reporte enviado. El supervisor lo verá en el PC.', color: const Color(0xFF047857));
+    } catch (e) {
+      _notificar('No se pudo enviar el reporte: ${_mensajeError(e)}', color: Colors.red);
+    }
+  }
+
+  // ---------------- REPORTAR UN PROBLEMA DE LA APP (llega al módulo Desarrollador del PC) ----------------
+  Future<void> _dialogoReportarProblemaApp() async {
+    const tipos = {
+      'PROBLEMA': 'Algo no funciona',
+      'ERROR': 'Apareció un mensaje de error',
+      'MEJORA': 'Sugerencia de mejora',
+      'CONSULTA': 'Consulta / duda',
+    };
+    final modulo = _nombreModuloActual();
+    final txtTitulo = TextEditingController();
+    final txtDetalle = TextEditingController();
+    String tipo = 'PROBLEMA';
+    bool bloquea = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: const Row(children: [
+          Icon(Icons.bug_report_outlined, color: Color(0xFFB91C1C)),
+          SizedBox(width: 8),
+          Expanded(child: Text('Reportar un problema', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16))),
+        ]),
+        content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Pantalla: $modulo · versión $kVersionApp', style: const TextStyle(fontSize: 11.5, color: Color(0xFF64748B))),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            value: tipo, isExpanded: true,
+            decoration: const InputDecoration(labelText: '¿Qué quiere reportar?'),
+            items: tipos.entries.map((t) => DropdownMenuItem(value: t.key, child: Text(t.value))).toList(),
+            onChanged: (v) => setD(() => tipo = v ?? 'PROBLEMA'),
+          ),
+          const SizedBox(height: 8),
+          TextField(controller: txtTitulo, maxLength: 120,
+              decoration: const InputDecoration(labelText: 'En pocas palabras, ¿qué pasó? *', isDense: true)),
+          TextField(controller: txtDetalle, maxLines: 4,
+              decoration: const InputDecoration(labelText: 'Detalle: qué hacía, qué esperaba, LPN / OV / OC',
+                  isDense: true)),
+          const SizedBox(height: 4),
+          CheckboxListTile(
+            value: bloquea, contentPadding: EdgeInsets.zero, dense: true,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('Me impide seguir trabajando', style: TextStyle(fontSize: 13)),
+            onChanged: (v) => setD(() => bloquea = v ?? false),
+          ),
+          const Text('Si apareció un mensaje de error, ya quedó registrado solo; cuente lo que estaba haciendo.',
+              style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCELAR')),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB91C1C), foregroundColor: Colors.white),
+            icon: const Icon(Icons.send_rounded),
+            label: const Text('ENVIAR'),
+            onPressed: () {
+              if (txtTitulo.text.trim().length < 4) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('Escriba en pocas palabras qué pasó.'), backgroundColor: Colors.orange));
+                return;
+              }
+              Navigator.pop(ctx, true);
+            },
+          ),
+        ],
+      )),
+    );
+    if (ok != true) return;
+    try {
+      final r = await supabase.rpc('wms_reportar_problema', params: {
+        'p_origen': 'RF', 'p_modulo': modulo, 'p_tipo': tipo,
+        'p_titulo': txtTitulo.text.trim(), 'p_descripcion': txtDetalle.text.trim(),
+        'p_usuario': _usuarioRf(), 'p_bodega': bodegaActiva, 'p_version': kVersionApp,
+        'p_dispositivo': 'RF $bodegaActiva', 'p_prioridad': bloquea ? 'ALTA' : 'MEDIA',
+      });
+      final id = (r is Map) ? r['id'] : null;
+      _notificar('Reporte${id != null ? ' #$id' : ''} enviado. Vea su estado en Menú › Mis reportes.',
+          color: const Color(0xFF047857));
+    } catch (e) {
+      _notificar('No se pudo enviar el reporte: ${_mensajeError(e)}', color: Colors.red);
+    }
+  }
+
+  Future<void> _verMisReportes() async {
+    List lista = [];
+    try {
+      final r = await supabase.rpc('wms_mis_tickets', params: {'p_usuario': _usuarioRf()});
+      if (r is List) lista = r;
+    } catch (e) {
+      _notificar('No se pudieron leer sus reportes: ${_mensajeError(e)}', color: Colors.red);
+      return;
+    }
+    if (!mounted) return;
+    const estados = {
+      'NUEVO': ['Recibido', Color(0xFFB45309)],
+      'EN_REVISION': ['En revisión', Color(0xFFB45309)],
+      'EN_DESARROLLO': ['En desarrollo', Color(0xFF1D4ED8)],
+      'RESUELTO': ['Resuelto', Color(0xFF047857)],
+      'DESCARTADO': ['Cerrado', Color(0xFF64748B)],
+    };
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(child: SizedBox(
+        height: MediaQuery.of(ctx).size.height * 0.75,
+        child: Column(children: [
+          ListTile(
+            leading: const Icon(Icons.list_alt_rounded),
+            title: const Text('Mis reportes', style: TextStyle(fontWeight: FontWeight.w900)),
+            trailing: TextButton.icon(
+              icon: const Icon(Icons.add_rounded), label: const Text('NUEVO'),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _dialogoReportarProblemaApp();
+              },
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(child: lista.isEmpty
+              ? const Center(child: Text('Aún no ha enviado reportes.', style: TextStyle(color: Colors.grey)))
+              : ListView.separated(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: lista.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) {
+                    final t = Map<String, dynamic>.from(lista[i] as Map);
+                    final est = estados[t['estado']] ?? [t['estado'].toString(), Colors.grey];
+                    final coms = (t['comentarios'] is List) ? t['comentarios'] as List : const [];
+                    return Card(child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Expanded(child: Text('#${t['id']} · ${t['titulo']}',
+                              style: const TextStyle(fontWeight: FontWeight.bold))),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                                color: (est[1] as Color).withOpacity(0.12), borderRadius: BorderRadius.circular(6)),
+                            child: Text(est[0] as String,
+                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: est[1] as Color)),
+                          ),
+                        ]),
+                        const SizedBox(height: 4),
+                        Text('${t['modulo'] ?? '-'} · ${t['creado'] ?? ''}',
+                            style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+                        if ((t['respuesta'] ?? '').toString().isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text('Respuesta: ${t['respuesta']}', style: const TextStyle(fontSize: 13)),
+                        ],
+                        ...coms.map((c) => Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text('${(c as Map)['fecha'] ?? ''} · ${c['usuario'] ?? ''}: ${c['texto'] ?? ''}',
+                                  style: const TextStyle(fontSize: 12, color: Color(0xFF475569))),
+                            )),
+                      ]),
+                    ));
+                  },
+                )),
+        ]),
+      )),
+    );
+  }
+
+  // ---------------- MÓDULO 11 · CONSULTA DE STOCK (solo lectura) ----------------
+  Future<void> _buscarStockOperador([String? texto]) async {
+    final t = (texto ?? _txtConsultaStockOp.text).trim().toUpperCase();
+    if (t.isEmpty) return;
+    String q = t;
+    final gs1 = parsearCodigoGs1128(t);
+    if (gs1.isNotEmpty && gs1['gtin'] != null) q = gs1['gtin'].toString().toUpperCase();
+    setState(() { _buscandoStockOp = true; _ultimaConsultaStockOp = q; });
+    try {
+      final res = await supabase.rpc('wms_consulta_stock_operador', params: {'p_bodega': bodegaActiva, 'p_texto': q});
+      final m = Map<String, dynamic>.from(res as Map);
+      final lista = ((m['skus'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      if (mounted) setState(() => _resConsultaStockOp = lista);
+      if (lista.isEmpty) _notificar('No se encontró ningún producto con "$q".', color: Colors.orange);
+    } catch (e) {
+      _notificar('No se pudo consultar: ${_mensajeError(e)}', color: Colors.red);
+    } finally {
+      if (mounted) setState(() => _buscandoStockOp = false);
+    }
+  }
+
+  String _fmtMiles(num n) {
+    final t = n.round().abs().toString();
+    final b = StringBuffer(n < 0 ? '-' : '');
+    for (var i = 0; i < t.length; i++) {
+      if (i > 0 && (t.length - i) % 3 == 0) b.write('.');
+      b.write(t[i]);
+    }
+    return b.toString();
+  }
+
+  Widget _construirVistaConsultaStock() {
+    Widget chipDato(String titulo, String valor, Color color) => Expanded(child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+          decoration: BoxDecoration(color: color.withOpacity(0.08), borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: color.withOpacity(0.35))),
+          child: Column(children: [
+            Text(valor, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: color)),
+            Text(titulo, style: const TextStyle(fontSize: 10.5, color: Color(0xFF475569)), textAlign: TextAlign.center),
+          ]),
+        ));
+    return ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 90), children: [
+      _TarjetaMovil(borderColor: const Color(0xFF7C3AED), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('CONSULTA DE STOCK', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Color(0xFF5B21B6))),
+        const Text('Escanee el EAN o escriba el SKU o parte del nombre.', style: TextStyle(fontSize: 12, color: Color(0xFF475569))),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: TextField(
+            controller: _txtConsultaStockOp, autofocus: true,
+            textCapitalization: TextCapitalization.characters, inputFormatters: [UpperCaseTextFormatter()],
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => _buscarStockOperador(),
+            decoration: const InputDecoration(labelText: 'EAN / SKU / descripción', prefixIcon: Icon(Icons.search_rounded)),
+          )),
+          const SizedBox(width: 8),
+          ElevatedButton(
+            onPressed: () async {
+              await _escanearParaCampo(_txtConsultaStockOp, 'Escanear producto');
+              if (_txtConsultaStockOp.text.isNotEmpty) await _buscarStockOperador();
+            },
+            child: const Icon(Icons.qr_code_scanner),
+          ),
+        ]),
+        if (_buscandoStockOp) const Padding(padding: EdgeInsets.only(top: 10), child: LinearProgressIndicator()),
+      ])),
+      if (!_buscandoStockOp && _resConsultaStockOp.isEmpty && _ultimaConsultaStockOp.isNotEmpty)
+        const Padding(padding: EdgeInsets.all(16),
+            child: Text('Sin resultados.', textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B)))),
+      if (_resConsultaStockOp.length > 1)
+        Padding(padding: const EdgeInsets.fromLTRB(4, 10, 4, 0),
+            child: Text('${_resConsultaStockOp.length} productos coinciden con "$_ultimaConsultaStockOp"',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF475569)))),
+      ..._resConsultaStockOp.map((p) {
+        final total = (p['total'] as num?)?.toInt() ?? 0;
+        final mult = (p['multiplo'] as num?)?.toInt() ?? 1;
+        final ubics = ((p['ubicaciones'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        final pickFijo = (p['picking_fijo'] ?? '').toString();
+        final sinStock = total <= 0;
+        return Padding(padding: const EdgeInsets.only(top: 10), child: _TarjetaMovil(
+          borderColor: sinStock ? const Color(0xFFDC2626) : const Color(0xFF16A34A),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(child: Text('${p['sku']}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16))),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(color: sinStock ? const Color(0xFFFEE2E2) : const Color(0xFFDCFCE7), borderRadius: BorderRadius.circular(6)),
+                child: Text(sinStock ? 'SIN STOCK' : 'HAY STOCK',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: sinStock ? const Color(0xFFB91C1C) : const Color(0xFF15803D))),
+              ),
+            ]),
+            Text('${p['descripcion'] ?? ''}', style: const TextStyle(fontSize: 12, color: Color(0xFF334155))),
+            const SizedBox(height: 8),
+            Row(children: [
+              chipDato('TOTAL UN', _fmtMiles(total), const Color(0xFF1D4ED8)),
+              const SizedBox(width: 6),
+              chipDato(mult > 1 ? 'CAJAS (x$mult)' : 'CAJAS', mult > 1 ? _fmtMiles(total ~/ mult) : '—', const Color(0xFF7C3AED)),
+              const SizedBox(width: 6),
+              chipDato('EN PICKING', _fmtMiles((p['en_picking'] as num?) ?? 0), const Color(0xFF047857)),
+              const SizedBox(width: 6),
+              chipDato('EN RESERVA', _fmtMiles((p['en_reserva'] as num?) ?? 0), const Color(0xFF475569)),
+            ]),
+            const SizedBox(height: 8),
+            Text(pickFijo.isNotEmpty ? 'Picking fijo: $pickFijo' : 'Sin ubicación de picking fija',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold,
+                    color: pickFijo.isNotEmpty ? const Color(0xFF047857) : const Color(0xFF64748B))),
+            if ((p['proximo_vencimiento'] ?? '').toString().isNotEmpty)
+              Text('Próximo vencimiento: ${p['proximo_vencimiento']}', style: const TextStyle(fontSize: 12)),
+            if (((p['en_merma'] as num?) ?? 0) > 0)
+              Text('En merma (no disponible): ${_fmtMiles((p['en_merma'] as num?) ?? 0)} UN',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFFB91C1C))),
+            if (ubics.isNotEmpty) ...[
+              const Divider(height: 18),
+              ...ubics.map((u) {
+                final zona = (u['zona'] ?? '').toString();
+                final color = zona == 'PICKING' ? const Color(0xFF047857) : (zona == 'MERMA' ? const Color(0xFFB91C1C) : const Color(0xFF334155));
+                return Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [
+                  Container(width: 4, height: 34, color: color),
+                  const SizedBox(width: 8),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${u['ubicacion']}  ·  $zona', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: color)),
+                    Text('${(u['lpn'] ?? '').toString().isEmpty ? 'sin LPN' : u['lpn']} · lote ${u['lote']} · vence ${u['vencimiento'] ?? 'S/F'}',
+                        style: const TextStyle(fontSize: 11.5, color: Color(0xFF475569))),
+                  ])),
+                  Text('${_fmtMiles((u['unidades'] as num?) ?? 0)} UN', style: const TextStyle(fontWeight: FontWeight.w900)),
+                ]));
+              }),
+            ],
+          ]),
+        ));
+      }),
+    ]);
+  }
+
+  Future<void> _dialogoReporteAlmacenamiento(Map fila) async {
+    final lpn = (fila['lpn'] ?? '').toString();
+    final actual = (fila['ubicacion_actual'] ?? fila['destino'] ?? '').toString();
+    final txtNueva = TextEditingController();
+    final txtDetalle = TextEditingController();
+    const tipos = ['Ubicación equivocada', 'Cantidad no coincide', 'Producto dañado', 'Etiqueta LPN dañada o repetida', 'Otro'];
+    String? tipo;
+    final accion = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: Text('LPN $lpn', style: const TextStyle(fontWeight: FontWeight.w900)),
+        content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Guardado en ${fila['destino']}${actual.isNotEmpty && actual != fila['destino'] ? ' · hoy está en $actual' : ''}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF475569))),
+          const SizedBox(height: 12),
+          const Text('CORREGIR UBICACIÓN AHORA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: Color(0xFF047857))),
+          const Text('Si el pallet quedó en otra posición, escanee dónde está realmente.', style: TextStyle(fontSize: 11)),
+          TextField(controller: txtNueva, textCapitalization: TextCapitalization.characters,
+            inputFormatters: [UpperCaseTextFormatter()],
+            decoration: InputDecoration(labelText: 'Ubicación correcta (ej. C-22-03)', prefixIcon: const Icon(Icons.place_outlined),
+              suffixIcon: IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: () async {
+                final cod = await showDialog<String>(context: ctx, builder: (_) => const _DialogoEscanerVivo(titulo: 'Escanear ubicación correcta'));
+                if (cod != null && cod.trim().isNotEmpty) setD(() => txtNueva.text = _normalizarRackOCodigo(cod));
+              }))),
+          const SizedBox(height: 16),
+          const Text('O AVISAR AL SUPERVISOR', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: Color(0xFFB45309))),
+          DropdownButtonFormField<String>(
+            value: tipo, isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Qué pasó'),
+            items: tipos.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+            onChanged: (v) => setD(() => tipo = v),
+          ),
+          TextField(controller: txtDetalle, maxLines: 2, decoration: const InputDecoration(labelText: 'Detalle (opcional)')),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CERRAR')),
+          OutlinedButton(onPressed: tipo == null ? null : () => Navigator.pop(ctx, 'REPORTAR'), child: const Text('ENVIAR REPORTE')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF047857), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, 'MOVER'), child: const Text('CORREGIR UBICACIÓN')),
+        ],
+      )),
+    );
+    if (accion == null) return;
+    try {
+      if (accion == 'MOVER') {
+        final nueva = _normalizarRackOCodigo(txtNueva.text);
+        if (nueva.isEmpty) {
+          _notificar('Escanee la ubicación correcta.', color: Colors.orange);
+          return;
+        }
+        final res = await supabase.rpc('wms_almacenar_lpn', params: {
+          'p_bodega': bodegaActiva, 'p_lpn': lpn, 'p_ubicacion_destino': nueva, 'p_usuario': _usuarioRf(),
+        });
+        final r = Map<String, dynamic>.from(res as Map);
+        _notificar('LPN $lpn corregido: ${r['origen']} → ${r['destino']}.', color: const Color(0xFF047857));
+      } else {
+        await supabase.rpc('wms_crear_reporte_operacion', params: {
+          'p_bodega': bodegaActiva, 'p_modulo': 'ALMACENAMIENTO', 'p_tipo': tipo, 'p_lpn': lpn,
+          'p_ubicacion': actual.isNotEmpty ? actual.split(',').first.trim() : fila['destino'], 'p_sku': null,
+          'p_detalle': [if (txtNueva.text.trim().isNotEmpty) 'Ubicación indicada: ${_normalizarRackOCodigo(txtNueva.text)}',
+                        if (txtDetalle.text.trim().isNotEmpty) txtDetalle.text.trim()].join(' · '),
+          'p_usuario': _usuarioRf(),
+        });
+        _notificar('Reporte enviado. El supervisor lo verá en el PC.', color: const Color(0xFF047857));
+      }
+    } catch (e) {
+      _notificar('No se pudo: ${_mensajeError(e)}', color: Colors.red);
+    }
+    await _cargarMisAlmacenamientos();
+  }
+
+  Widget _tarjetaHistorialAlmacenamiento() {
+    return _TarjetaMovil(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.history_rounded, color: Color(0xFF1D4ED8)),
+          const SizedBox(width: 8),
+          Expanded(child: Text('MIS ALMACENAMIENTOS · ÚLTIMAS 24 H (${_misAlmacenamientos.length})',
+              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Color(0xFF1E3A8A)))),
+          IconButton(
+            onPressed: _cargandoMisAlm ? null : _cargarMisAlmacenamientos,
+            icon: _cargandoMisAlm
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.sync, size: 20),
+          ),
+        ]),
+        if (_misAlmacenamientos.isEmpty && !_cargandoMisAlm)
+          const Padding(padding: EdgeInsets.only(top: 4),
+              child: Text('Todavía no ha almacenado pallets hoy.', style: TextStyle(fontSize: 12, color: Color(0xFF64748B)))),
+        ..._misAlmacenamientos.map((f) {
+          final esMerma = (f['tipo'] ?? '') == 'ENVIO_MERMA';
+          final destino = (f['destino'] ?? '').toString();
+          final actual = (f['ubicacion_actual'] ?? '').toString();
+          final movido = actual.isNotEmpty && actual != destino;
+          final hora = DateTime.tryParse('${f['fecha'] ?? ''}');
+          return Container(
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+            decoration: BoxDecoration(
+              color: esMerma ? const Color(0xFFFEF2F2) : const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: esMerma ? const Color(0xFFFCA5A5) : const Color(0xFFE2E8F0)),
+            ),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${f['lpn']}  →  $destino', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                Text('${hora == null ? '' : DateFormat('HH:mm').format(hora.toLocal())} · ${f['skus']} SKU · ${f['unidades']} UN'
+                    '${esMerma ? ' · MERMA' : ''}', style: const TextStyle(fontSize: 11, color: Color(0xFF475569))),
+                if (movido)
+                  Text('Hoy está en: $actual', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFB45309))),
+              ])),
+              TextButton.icon(
+                onPressed: () => _dialogoReporteAlmacenamiento(f),
+                icon: const Icon(Icons.flag_outlined, size: 18, color: Color(0xFFB45309)),
+                label: const Text('REPORTAR', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFB45309))),
+              ),
+            ]),
+          );
+        }),
+      ]),
+    );
+  }
+
+  // ===================================================================
+  // CONTROL DE STOCK: filas duplicadas (eliminar solo usuarios autorizados)
+  // ===================================================================
+  bool _puedeDepurarStock = false;
+
+  Future<void> _verificarPermisoDepurar() async {
+    try {
+      final res = await supabase.rpc('wms_puede_depurar_stock', params: {'p_usuario': _usuarioRf()});
+      if (mounted) setState(() => _puedeDepurarStock = res == true);
+    } catch (_) {
+      if (mounted) setState(() => _puedeDepurarStock = false);
+    }
+  }
+
+  String _claveDuplicado(Map r) => [
+        (r['codigo_ubicacion'] ?? '').toString().toUpperCase(),
+        (r['lpn'] ?? '').toString().toUpperCase(),   // otro LPN = otro pallet, no es duplicado
+        (r['sku'] ?? '').toString().toUpperCase(),
+        (r['lote'] ?? 'S/L').toString().toUpperCase(),
+        (r['fecha_vencimiento_cl'] ?? '').toString(),
+        '${r['cantidad_unidades'] ?? 0}',
+      ].join('|');
+
+  Future<void> _eliminarDuplicado(Map r) async {
+    final txtMotivo = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar fila duplicada', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${r['codigo_ubicacion']} · LPN ${r['lpn'] ?? '-'}\nSKU ${r['sku']} · lote ${r['lote'] ?? 'S/L'} · ${r['cantidad_unidades']} UN'),
+          const SizedBox(height: 8),
+          const Text('Se borra esta fila y se conserva la otra igual. Queda registrado en el kardex con su usuario.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF92400E))),
+          TextField(controller: txtMotivo, decoration: const InputDecoration(labelText: 'Motivo (opcional)')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCELAR')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true), child: const Text('ELIMINAR DUPLICADO')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final res = await supabase.rpc('wms_eliminar_stock_duplicado', params: {
+        'p_inventario_id': r['id'], 'p_usuario': _usuarioRf(), 'p_motivo': txtMotivo.text.trim(),
+      });
+      final x = Map<String, dynamic>.from(res as Map);
+      _notificar('Duplicado eliminado en ${x['ubicacion']} (${x['unidades']} UN).', color: const Color(0xFF047857));
+    } catch (e) {
+      _notificar('No se eliminó: ${_mensajeError(e)}', color: Colors.red);
+    }
+    await _ejecutarBusquedaStockConCruceMaestra(_txtScanConsulta.text);
+  }
+
+  // ===================================================================
+  // MOVIMIENTO A PICKING: stock antiguo en ZONA-PICKING -> su ubicación real de nivel 01
+  // ===================================================================
+  List<Map<String, dynamic>> _stockZonaPickingSku = [];
+
+  Future<void> _asignarZonaPickingANivel1(Map fila) async {
+    final txt = TextEditingController(text: _pickingFijoSku ??
+        (_stockPickingSku.isNotEmpty ? (_stockPickingSku.first['codigo_ubicacion'] ?? '').toString() : ''));
+    final destino = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: const Text('Asignar a nivel 01', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${fila['sku']} · lote ${fila['lote'] ?? 'S/L'} · ${fila['cajas'] ?? 0} Cj (${fila['cantidad_unidades'] ?? 0} UN)'
+              '${(fila['lpn'] ?? '').toString().isNotEmpty ? '\nLPN ${fila['lpn']}' : ''}'),
+          const SizedBox(height: 8),
+          const Text('Escanee la ubicación de picking donde está físicamente este producto.', style: TextStyle(fontSize: 12)),
+          TextField(controller: txt, textCapitalization: TextCapitalization.characters, inputFormatters: [UpperCaseTextFormatter()],
+            decoration: InputDecoration(labelText: 'Ubicación nivel 01 (ej. B-25-01)',
+              suffixIcon: IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: () async {
+                final cod = await showDialog<String>(context: ctx, builder: (_) => const _DialogoEscanerVivo(titulo: 'Escanear ubicación de picking'));
+                if (cod != null && cod.trim().isNotEmpty) setD(() => txt.text = _normalizarRackOCodigo(cod));
+              }))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, _normalizarRackOCodigo(txt.text)), child: const Text('ASIGNAR')),
+        ],
+      )),
+    );
+    if (destino == null || destino.isEmpty) return;
+    if (!_esUbicacionPicking(destino)) {
+      _notificar('$destino no es picking. Use una ubicación de nivel 01 (ej. B-25-01).', color: Colors.orange);
+      return;
+    }
+    try {
+      final tieneLpn = (fila['lpn'] ?? '').toString().trim().isNotEmpty;
+      final dynamic res = tieneLpn
+          ? await supabase.rpc('wms_mover_lpn_a_picking', params: {
+              'p_inventario_id': fila['id'], 'p_destino': destino, 'p_usuario': _usuarioRf()})
+          : await supabase.rpc('wms_mover_a_picking', params: {
+              'p_inventario_id': fila['id'],
+              'p_cajas': ((fila['cajas'] as num?)?.toInt() ?? 0) > 0 ? (fila['cajas'] as num).toInt() : ((fila['cantidad_unidades'] as num?)?.toInt() ?? 1),
+              'p_destino': destino, 'p_usuario': _usuarioRf()});
+      final r = Map<String, dynamic>.from(res as Map);
+      _notificar('Asignado a ${r['destino']}: ${r['cajas']} Cj (${r['unidades']} UN).', color: const Color(0xFF047857));
+    } catch (e) {
+      _notificar('No se asignó: ${_mensajeError(e)}', color: Colors.red);
+    }
+    await _buscarUbicacionesFefoPorSku(skuForzado: (fila['sku'] ?? '').toString());
   }
 
   void _reiniciarPasoAlmacenamiento({bool mantenerUbicacion = false}) {
@@ -6236,24 +8606,41 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
           .select()
           .eq('sku', skuBuscar);
 
-      final disponibles = (res as List)
+      try {
+        final fija = await supabase.rpc('wms_picking_fijo_sku', params: {'p_bodega': bodegaActiva, 'p_sku': skuBuscar});
+        _pickingFijoSku = (fija == null || fija.toString().trim().isEmpty) ? null : fija.toString().trim().toUpperCase();
+      } catch (_) {
+        _pickingFijoSku = null;
+      }
+      final conStock = (res as List)
           .map((e) => Map<String, dynamic>.from(e as Map))
           .where((r) {
         if (!_perteneceABodegaActiva(r)) return false;
-        final ubi = (r['codigo_ubicacion'] ?? '').toString().toUpperCase();
         final unid = (r['cantidad_unidades'] as num?)?.toInt() ?? 0;
         final cajas = (r['cajas'] as num?)?.toInt() ?? 0;
-        // Lotes en CUARENTENA / RECHAZADO (|QA:) no pueden ir a picking
-        return ubi != 'ZONA-MERMA' && ubi != 'ZONA-PICKING' && !loteBloqueadoPorQa(r['lote']) && (unid > 0 || cajas > 0);
+        return unid > 0 || cajas > 0;
+      }).toList();
+      // Lo que ya está en picking (nivel 01) no se vuelve a bajar: solo se informa
+      _stockPickingSku = conStock.where((r) => _esUbicacionPicking((r['codigo_ubicacion'] ?? '').toString())).toList()
+        ..sort((a, b) => ((b['cantidad_unidades'] as num?) ?? 0).compareTo((a['cantidad_unidades'] as num?) ?? 0));
+      final enPickingTxt = (_pickingFijoSku != null ? 'Picking asignado: $_pickingFijoSku. ' : 'Sin picking asignado. ') +
+          (_stockPickingSku.isEmpty
+          ? 'Sin stock en picking.'
+          : 'En picking: ${_stockPickingSku.map((r) => '${r['codigo_ubicacion']} (${r['cantidad_unidades'] ?? 0} UN)').join(', ')}.');
+      _stockZonaPickingSku = conStock.where((r) => (r['codigo_ubicacion'] ?? '').toString().toUpperCase() == 'ZONA-PICKING').toList();
+      final disponibles = conStock.where((r) {
+        final ubi = (r['codigo_ubicacion'] ?? '').toString().toUpperCase();
+        // Origen = reserva: nunca picking (nivel 01), merma ni la antigua ZONA-PICKING; lotes QA bloqueados tampoco
+        return !_esUbicacionPicking(ubi) && !_esUbicacionMerma(ubi) && ubi != 'ZONA-PICKING' && !loteBloqueadoPorQa(r['lote']);
       }).toList();
 
       if (disponibles.isEmpty) {
         setState(() {
           _ubicacionesFefoPicking = [];
           _stockFefoSeleccionado = null;
-          _mensajeEstadoFefo = 'No se encontró stock disponible en Racks ($bodegaActiva) para el SKU $skuBuscar.';
+          _mensajeEstadoFefo = 'No hay reserva para bajar del SKU $skuBuscar en $bodegaActiva. $enPickingTxt';
         });
-        _notificar('Sin stock en racks ($bodegaActiva) para SKU $skuBuscar.', color: const Color(0xFFDC2626));
+        _notificar('Sin reserva para bajar ($skuBuscar). $enPickingTxt', color: const Color(0xFFDC2626));
         return;
       }
 
@@ -6276,10 +8663,11 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         _ubicacionesFefoPicking = disponibles;
         _stockFefoSeleccionado = sugerido;
         _txtCajasMoverPicking.text = cajasDisp > 0 ? cajasDisp.toString() : '1';
-        _mensajeEstadoFefo = 'FEFO calculado ($bodegaActiva): ${disponibles.length} ubicación(es) encontrada(s) para $skuBuscar.';
+        _txtUbiDestinoPicking.text = _destinoPickingPara(sugerido);
+        _mensajeEstadoFefo = 'FEFO ($bodegaActiva): ${disponibles.length} ubicación(es) de reserva para $skuBuscar. $enPickingTxt';
       });
     } catch (ex) {
-      _notificar('Error consultando FEFO: $ex', color: const Color(0xFFDC2626));
+      _notificar('Error consultando FEFO: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
     } finally {
       if (mounted) setState(() => _buscandoFefo = false);
     }
@@ -6308,12 +8696,45 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       return;
     }
 
-    String ubiDestino = _txtUbiDestinoPicking.text.trim().toUpperCase()
-        .replaceAll('RACK ', '')
-        .replaceAll('RACK', '')
-        .replaceAll(' ', '-');
-    ubiDestino = ubiDestino.replaceAll(RegExp(r'-+'), '-');
-    if (ubiDestino.isEmpty) ubiDestino = 'ZONA-PICKING';
+    // B2501 / B25-01 / B 25 01 -> B-25-01
+    final String ubiDestino = _normalizarRackOCodigo(_txtUbiDestinoPicking.text);
+    if (ubiDestino != _txtUbiDestinoPicking.text.trim().toUpperCase()) setState(() => _txtUbiDestinoPicking.text = ubiDestino);
+    if (_pickingFijoSku != null && _esUbicacionPicking(ubiDestino) && ubiDestino != _pickingFijoSku) {
+      final seguir = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Ubicación distinta', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Text('El picking de este producto es $_pickingFijoSku. ¿Bajarlo igual a $ubiDestino?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('USAR $_pickingFijoSku')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: Text('SÍ, A $ubiDestino')),
+          ],
+        ),
+      );
+      if (seguir != true) {
+        setState(() => _txtUbiDestinoPicking.text = _pickingFijoSku!);
+        return;
+      }
+    }
+    if (!_esUbicacionPicking(ubiDestino)) {
+      _notificar(ubiDestino.isEmpty
+          ? 'Escanee la ubicación de picking de destino (nivel 01, ej. H-02-01).'
+          : '$ubiDestino no es picking. El picking es el nivel 01 de los racks (ej. H-02-01).',
+          color: const Color(0xFFD97706));
+      return;
+    }
+
+    // Pallet con varios lotes/vencimientos: si se baja completo, se baja TODO el LPN (no solo un lote)
+    final lotesLpn = _lotesDelLpn(origenItem);
+    final cajasFila = (origenItem['cajas'] as num?)?.toInt() ?? 0;
+    if (lotesLpn.length > 1 && cajasMover >= cajasFila) {
+      final opcion = await _preguntarLpnCompleto(origenItem, lotesLpn);
+      if (opcion == null) return;
+      if (opcion == 'LPN') {
+        await _moverLpnCompletoAPicking(origenItem, ubiDestino);
+        return;
+      }
+    }
 
     try {
       // El servidor relee y bloquea la fila de origen, valida QA/destino/cantidades y escribe el kardex
@@ -6330,6 +8751,59 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       );
     } catch (ex) {
       _notificar('No se movió a picking: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
+    }
+    await _buscarUbicacionesFefoPorSku(skuForzado: (origenItem['sku'] ?? '').toString());
+  }
+
+  /// Filas (lotes/vencimientos) del mismo LPN en la misma ubicación de origen.
+  List<Map<String, dynamic>> _lotesDelLpn(Map item) {
+    final lpn = (item['lpn'] ?? '').toString().trim().toUpperCase();
+    if (lpn.isEmpty || lpn == 'S/LPN') return [Map<String, dynamic>.from(item)];
+    return _ubicacionesFefoPicking
+        .where((r) => (r['lpn'] ?? '').toString().trim().toUpperCase() == lpn && r['codigo_ubicacion'] == item['codigo_ubicacion'])
+        .toList();
+  }
+
+  String _resumenLotesLpn(List<Map<String, dynamic>> lotes) => lotes
+      .map((r) => '${r['lote'] ?? 'S/L'} · ${normalizarFechaSql(r['fecha_vencimiento_cl']?.toString()) ?? 'S/F'} · ${r['cajas'] ?? 0} Cj (${r['cantidad_unidades'] ?? 0} UN)')
+      .join('\n');
+
+  Future<String?> _preguntarLpnCompleto(Map origen, List<Map<String, dynamic>> lotes) {
+    final totalCj = lotes.fold<int>(0, (a, r) => a + ((r['cajas'] as num?)?.toInt() ?? 0));
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('LPN ${origen['lpn']} con ${lotes.length} lotes', style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: Text('Este pallet tiene más de un lote/vencimiento:\n\n${_resumenLotesLpn(lotes)}\n\n'
+            'Si está bajando el pallet completo, se mueve TODO el LPN ($totalCj Cj) a picking.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'LOTE'), child: Text('SOLO LOTE ${origen['lote'] ?? 'S/L'}')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0D9488), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, 'LPN'),
+            child: const Text('BAJAR LPN COMPLETO'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Baja a picking el LPN completo (todos sus lotes) en una sola transacción del servidor.
+  Future<void> _moverLpnCompletoAPicking(Map origenItem, String ubiDestino) async {
+    try {
+      final dynamic res = await supabase.rpc('wms_mover_lpn_a_picking', params: {
+        'p_inventario_id': origenItem['id'],
+        'p_destino': ubiDestino,
+        'p_usuario': _usuarioRf(),
+      });
+      final r = Map<String, dynamic>.from(res as Map);
+      _notificar(
+        'LPN ${r['lpn']} completo a picking: ${r['lineas']} lote(s), ${r['cajas']} Cj (${r['unidades']} UN) de ${r['origen']} a ${r['destino']}.',
+        color: const Color(0xFF047857),
+      );
+    } catch (ex) {
+      _notificar('No se movió el LPN: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
     }
     await _buscarUbicacionesFefoPorSku(skuForzado: (origenItem['sku'] ?? '').toString());
   }
@@ -6397,11 +8871,692 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     );
   }
 
+  // ===================================================================
+  // MÓDULO 10: RECEPCIÓN DE TRASLADOS EN CONCEPCIÓN (OT-CCP en pallets)
+  // Paso 0: OT en camino · Paso 1: pallets de la OT · Paso 2: revisar un pallet
+  // ===================================================================
+  bool get _esBodegaConcepcion => bodegaActiva.toUpperCase().replaceAll('Ó', 'O').contains('CONCEPCION');
+
+  List<Map<String, dynamic>> _trasladosCcp = [];
+  bool _cargandoTraslados = false;
+  bool _guardandoTraslado = false;
+  int _pasoTraslado = 0;
+  Map<String, dynamic>? _trasladoActivo;
+  Map<String, dynamic>? _palletTraslado;
+  final Map<String, int> _recibidoTraslado = {}; // clave -> UN contadas (línea revisada)
+  final Map<String, String> _loteRecibidoTraslado = {};
+  final Map<String, String> _vencRecibidoTraslado = {};
+  final TextEditingController _txtLpnTraslado = TextEditingController();
+  final TextEditingController _txtScanTraslado = TextEditingController();
+
+  int _aEntero(dynamic v) => v is num ? v.toInt() : (int.tryParse('${v ?? ''}') ?? 0);
+
+  String _textoCajasTraslado(int unidades, int multiplo) {
+    if (multiplo <= 1) return '$unidades UN';
+    final cajas = unidades ~/ multiplo;
+    final sueltas = unidades % multiplo;
+    return '$cajas cj${sueltas > 0 ? ' + $sueltas un' : ''} ($unidades UN)';
+  }
+
+  String _fechaCortaTraslado(dynamic iso) {
+    final d = DateTime.tryParse('${iso ?? ''}');
+    return d == null ? '' : DateFormat('dd-MM HH:mm').format(d.toLocal());
+  }
+
+  List<Map<String, dynamic>> get _palletsTraslado => List<Map<String, dynamic>>.from(
+      ((_trasladoActivo?['pallets'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)));
+
+  List<Map<String, dynamic>> _lineasPalletTraslado(Map p) => List<Map<String, dynamic>>.from(
+      ((p['lineas'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)));
+
+  Future<void> _cargarTrasladosCcp() async {
+    if (!_esBodegaConcepcion) return;
+    setState(() => _cargandoTraslados = true);
+    try {
+      final res = await supabase.rpc('wms_traslados_ccp', params: {'p_solo_abiertos': true});
+      final lista = List<Map<String, dynamic>>.from((res as List).map((e) => Map<String, dynamic>.from(e as Map)));
+      if (mounted) setState(() => _trasladosCcp = lista);
+    } catch (e) {
+      _notificar('No se pudieron leer los traslados: ${_mensajeError(e)}', color: Colors.red);
+    } finally {
+      if (mounted) setState(() => _cargandoTraslados = false);
+    }
+  }
+
+  Future<void> _abrirTrasladoCcp(int ordenId) async {
+    setState(() => _cargandoTraslados = true);
+    try {
+      final res = await supabase.rpc('wms_traslado_ccp_detalle', params: {'p_orden_id': ordenId});
+      if (!mounted) return;
+      setState(() {
+        _trasladoActivo = Map<String, dynamic>.from(res as Map);
+        _palletTraslado = null;
+        _pasoTraslado = 1;
+      });
+    } catch (e) {
+      _notificar('No se pudo abrir la OT: ${_mensajeError(e)}', color: Colors.red);
+    } finally {
+      if (mounted) setState(() => _cargandoTraslados = false);
+    }
+  }
+
+  void _volverBandejaTraslados() {
+    setState(() {
+      _pasoTraslado = 0;
+      _trasladoActivo = null;
+      _palletTraslado = null;
+    });
+    _cargarTrasladosCcp();
+  }
+
+  void _seleccionarPalletTraslado(String leido) {
+    var lpn = leido.trim().toUpperCase();
+    if (RegExp(r'^\d{18}$').hasMatch(lpn)) lpn = 'SSCC-$lpn';
+    if (lpn.isEmpty) {
+      _notificar('Escanee o escriba el LPN del pallet.', color: Colors.orange);
+      return;
+    }
+    final encontrados = _palletsTraslado.where((x) => (x['lpn'] ?? '').toString().toUpperCase() == lpn).toList();
+    if (encontrados.isEmpty) {
+      _notificar('El LPN $lpn no viene en esta OT. Revise la etiqueta.', color: Colors.red);
+      return;
+    }
+    final pallet = encontrados.first;
+    if (pallet['pendiente'] != true) {
+      _notificar('El pallet $lpn ya está registrado (${pallet['estado']}).', color: Colors.orange);
+      return;
+    }
+    setState(() {
+      _palletTraslado = pallet;
+      _recibidoTraslado.clear();
+      _loteRecibidoTraslado.clear();
+      _vencRecibidoTraslado.clear();
+      _txtLpnTraslado.clear();
+      _pasoTraslado = 2;
+    });
+  }
+
+  /// Diferencia de una línea revisada (null = conforme o sin revisar).
+  String? _diferenciaLineaTraslado(Map l) {
+    final clave = l['clave'].toString();
+    if (!_recibidoTraslado.containsKey(clave)) return null;
+    final esp = _aEntero(l['unidades']);
+    final rec = _recibidoTraslado[clave]!;
+    if (rec == 0) return '${l['sku']}: no vino (0 de $esp UN)';
+    if (rec != esp) return '${l['sku']}: ${rec < esp ? 'faltan' : 'sobran'} ${(esp - rec).abs()} UN ($rec de $esp)';
+    if (_loteRecibidoTraslado.containsKey(clave) || _vencRecibidoTraslado.containsKey(clave)) {
+      return '${l['sku']}: lote/venc. distinto (${_loteRecibidoTraslado[clave] ?? l['lote']} · ${_vencRecibidoTraslado[clave] ?? l['vencimiento'] ?? 'S/F'})';
+    }
+    return null;
+  }
+
+  Future<void> _editarLineaTraslado(Map l) async {
+    final clave = l['clave'].toString();
+    final mult = _aEntero(l['multiplo']) < 1 ? 1 : _aEntero(l['multiplo']);
+    final esperado = _aEntero(l['unidades']);
+    final actual = _recibidoTraslado[clave] ?? esperado;
+    final txtCajas = TextEditingController(text: '${actual ~/ mult}');
+    final txtSueltas = TextEditingController(text: '${actual % mult}');
+    final txtLote = TextEditingController(text: _loteRecibidoTraslado[clave] ?? (l['lote'] ?? '').toString());
+    final txtVenc = TextEditingController(text: _vencRecibidoTraslado[clave] ?? (l['vencimiento'] ?? '').toString());
+    final guardar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        final total = (int.tryParse(txtCajas.text) ?? 0) * mult + (int.tryParse(txtSueltas.text) ?? 0);
+        final cuadra = total == esperado;
+        return AlertDialog(
+          title: Text('${l['sku']}', style: const TextStyle(fontWeight: FontWeight.w900)),
+          content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${l['descripcion'] ?? ''}', style: const TextStyle(fontSize: 12, color: Color(0xFF475569))),
+            const SizedBox(height: 8),
+            Text('Despachado: ${_textoCajasTraslado(esperado, mult)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('Lote ${l['lote']} · Venc. ${l['vencimiento'] ?? 'S/F'}${mult > 1 ? ' · caja de $mult' : ''}',
+                style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 12),
+            Row(children: [
+              if (mult > 1) ...[
+                Expanded(child: TextField(controller: txtCajas, keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Cajas'), onChanged: (_) => setD(() {}))),
+                const SizedBox(width: 8),
+              ],
+              Expanded(child: TextField(controller: txtSueltas, keyboardType: TextInputType.number,
+                  decoration: InputDecoration(labelText: mult > 1 ? 'Unidades sueltas' : 'Unidades'), onChanged: (_) => setD(() {}))),
+            ]),
+            const SizedBox(height: 8),
+            Text('Contado: $total UN${cuadra ? ' ✓' : ' (despachado $esperado)'}',
+                style: TextStyle(fontWeight: FontWeight.w900, color: cuadra ? const Color(0xFF047857) : const Color(0xFFB45309))),
+            const SizedBox(height: 10),
+            TextField(controller: txtLote, textCapitalization: TextCapitalization.characters,
+                inputFormatters: [UpperCaseTextFormatter()], decoration: const InputDecoration(labelText: 'Lote en la caja')),
+            TextField(controller: txtVenc, keyboardType: TextInputType.datetime,
+                decoration: const InputDecoration(labelText: 'Vencimiento en la caja (DD-MM-AAAA)')),
+          ])),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCELAR')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('GUARDAR')),
+          ],
+        );
+      }),
+    );
+    if (guardar != true) return;
+    final total = (int.tryParse(txtCajas.text) ?? 0) * mult + (int.tryParse(txtSueltas.text) ?? 0);
+    final lote = txtLote.text.trim().toUpperCase();
+    final venc = txtVenc.text.trim().toUpperCase();
+    if (venc.isNotEmpty && venc != 'S/F' && !RegExp(r'^\d{2}-\d{2}-\d{4}$').hasMatch(venc)) {
+      _notificar('Vencimiento inválido: use DD-MM-AAAA (ej. 31-12-2027).', color: Colors.red);
+      return;
+    }
+    setState(() {
+      _recibidoTraslado[clave] = total < 0 ? 0 : total;
+      if (lote.isNotEmpty && lote != (l['lote'] ?? '').toString().toUpperCase()) {
+        _loteRecibidoTraslado[clave] = lote;
+      } else {
+        _loteRecibidoTraslado.remove(clave);
+      }
+      final vencOriginal = (l['vencimiento'] ?? '').toString().toUpperCase();
+      if (venc.isNotEmpty && venc != vencOriginal && !(venc == 'S/F' && vencOriginal.isEmpty)) {
+        _vencRecibidoTraslado[clave] = venc;
+      } else {
+        _vencRecibidoTraslado.remove(clave);
+      }
+    });
+  }
+
+  /// Escaneo de un producto dentro del pallet: abre su línea para contarla.
+  Future<void> _procesarScanTraslado() async {
+    var cod = _txtScanTraslado.text.trim().toUpperCase();
+    _txtScanTraslado.clear();
+    if (cod.isEmpty || _palletTraslado == null) return;
+    final digitos = cod.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digitos.length >= 16 && (cod.startsWith('(01)') || digitos.startsWith('01'))) {
+      cod = digitos.substring(2, 16); // GS1-128: (01) GTIN-14
+    }
+    String sinCeros(String s) => s.replaceFirst(RegExp(r'^0+'), '');
+    final buscado = sinCeros(cod);
+    final lineas = _lineasPalletTraslado(_palletTraslado!).where((l) {
+      if ((l['sku'] ?? '').toString().toUpperCase() == cod) return true;
+      final codigos = (l['codigo_barras'] ?? '').toString().toUpperCase().split(RegExp(r'[,;|\s]+'));
+      return codigos.any((c) => c.isNotEmpty && sinCeros(c) == buscado);
+    }).toList();
+    if (lineas.isEmpty) {
+      _notificar('El producto $cod no viene en este pallet.', color: Colors.red);
+      return;
+    }
+    await _editarLineaTraslado(lineas.first);
+  }
+
+  Future<String?> _pedirMotivoTraslado(String titulo, List<String> detalle, List<String> motivos) async {
+    String? motivo;
+    final txtOtro = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: Text(titulo, style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ...detalle.map((d) => Text('• $d', style: const TextStyle(fontSize: 12.5))),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: motivo, isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Motivo *'),
+            items: motivos.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
+            onChanged: (v) => setD(() => motivo = v),
+          ),
+          if (motivo == 'Otro') TextField(controller: txtOtro, decoration: const InputDecoration(labelText: 'Detalle del motivo')),
+          const SizedBox(height: 10),
+          const Text('Quedará registrado y el PC lo verá como diferencia del traslado.',
+              style: TextStyle(fontSize: 11.5, color: Color(0xFF92400E))),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
+          ElevatedButton(
+            onPressed: motivo == null ? null : () {
+              final m = motivo == 'Otro' ? txtOtro.text.trim() : motivo!;
+              if (m.isEmpty) return;
+              Navigator.pop(ctx, m);
+            },
+            child: const Text('CONFIRMAR'),
+          ),
+        ],
+      )),
+    );
+  }
+
+  Future<String?> _pedirLpnNuevoTraslado(String lpnOriginal) async {
+    final txt = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: const Text('Etiqueta nueva', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('El LPN $lpnOriginal ya existe en Concepción.\n\nPegue una etiqueta LPN nueva sobre el pallet (tape la anterior) y escanéela.'),
+          const SizedBox(height: 10),
+          TextField(controller: txt, autofocus: true, textCapitalization: TextCapitalization.characters,
+            inputFormatters: [UpperCaseTextFormatter()],
+            onSubmitted: (_) => Navigator.pop(ctx, txt.text.trim().toUpperCase()),
+            decoration: InputDecoration(labelText: 'LPN nuevo', prefixIcon: const Icon(Icons.qr_code_2),
+              suffixIcon: IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: () async {
+                final cod = await showDialog<String>(context: ctx, builder: (_) => const _DialogoEscanerVivo(titulo: 'Escanear LPN nuevo'));
+                if (cod != null && cod.trim().isNotEmpty) setD(() => txt.text = cod.trim().toUpperCase());
+              }))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, txt.text.trim().toUpperCase()), child: const Text('RECIBIR CON ESTE LPN')),
+        ],
+      )),
+    );
+  }
+
+  Future<void> _recibirPalletTraslado() async {
+    final p = _palletTraslado;
+    if (p == null || _trasladoActivo == null) return;
+    final lineas = _lineasPalletTraslado(p);
+    final sinRevisar = lineas.where((l) => !_recibidoTraslado.containsKey(l['clave'].toString())).length;
+    if (sinRevisar > 0) {
+      _notificar('Faltan $sinRevisar producto(s) por revisar. Confírmelos uno a uno o use TODO CONFORME.', color: Colors.orange);
+      return;
+    }
+    if (lineas.every((l) => (_recibidoTraslado[l['clave'].toString()] ?? 0) == 0)) {
+      _notificar('No hay unidades contadas. Si el pallet no llegó, vuelva y use "Pallets que no llegaron".', color: Colors.orange);
+      return;
+    }
+    final difs = lineas.map(_diferenciaLineaTraslado).whereType<String>().toList();
+    String? motivo;
+    if (difs.isNotEmpty) {
+      motivo = await _pedirMotivoTraslado('Recibir con diferencias', difs, const [
+        'Faltan cajas o unidades', 'Sobran cajas o unidades', 'Producto dañado en el viaje', 'Lote o vencimiento distinto', 'Otro']);
+      if (motivo == null) return;
+    }
+    await _enviarRecepcionPalletTraslado(motivo: motivo);
+  }
+
+  Future<void> _enviarRecepcionPalletTraslado({String? motivo, String? lpnNuevo}) async {
+    final p = _palletTraslado!;
+    final ot = _trasladoActivo!;
+    final lineas = _lineasPalletTraslado(p);
+    setState(() => _guardandoTraslado = true);
+    late Map<String, dynamic> r;
+    try {
+      final res = await supabase.rpc('wms_recibir_pallet_traslado', params: {
+        'p_orden_id': _aEntero(ot['orden_id']),
+        'p_lpn': p['lpn'],
+        'p_lineas': lineas.map((l) {
+          final c = l['clave'].toString();
+          return {
+            'clave': c,
+            'unidades_recibidas': _recibidoTraslado[c] ?? 0,
+            if (_loteRecibidoTraslado.containsKey(c)) 'lote_recibido': _loteRecibidoTraslado[c],
+            if (_vencRecibidoTraslado.containsKey(c)) 'vencimiento_recibido': _vencRecibidoTraslado[c],
+          };
+        }).toList(),
+        'p_usuario': _usuarioRf(),
+        'p_observacion': motivo,
+        'p_lpn_nuevo': lpnNuevo,
+      });
+      r = Map<String, dynamic>.from(res as Map);
+    } catch (e) {
+      if (mounted) setState(() => _guardandoTraslado = false);
+      final msg = _mensajeError(e);
+      if (msg.contains('LPN_EN_USO_CCP')) {
+        final nuevo = await _pedirLpnNuevoTraslado((p['lpn'] ?? '').toString());
+        if (nuevo != null && nuevo.isNotEmpty) await _enviarRecepcionPalletTraslado(motivo: motivo, lpnNuevo: nuevo);
+        return;
+      }
+      if (mounted) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('El pallet NO se recibió', style: TextStyle(fontWeight: FontWeight.bold)),
+            content: Text('$msg\n\nNo se perdió nada: revise y vuelva a presionar RECIBIR PALLET.'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ENTENDIDO'))],
+          ),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _guardandoTraslado = false);
+    final destino = (r['lpn_destino'] ?? p['lpn']).toString();
+    final estadoOt = (r['estado_ot'] ?? '').toString();
+    final conDif = (r['resultado'] ?? '') != 'RECIBIDO_CCP';
+    if (estadoOt.startsWith('RECIBIDO')) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(estadoOt == 'RECIBIDO_CCP' ? 'OT recibida completa' : 'OT recibida con diferencias',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+          content: Text('${r['numero_ot']}: se recibieron todos los pallets.\n\n'
+              'Los pallets quedaron en el andén de Concepción. Ubíquelos con ALMACENAMIENTO escaneando su LPN.'),
+          actions: [ElevatedButton(onPressed: () => Navigator.pop(ctx), child: const Text('LISTO'))],
+        ),
+      );
+      _volverBandejaTraslados();
+      return;
+    }
+    _notificar(
+      '${conDif ? 'Pallet recibido CON DIFERENCIAS' : 'Pallet recibido conforme'}: $destino'
+      '${destino != p['lpn'] ? ' (etiqueta nueva)' : ''}. Quedan ${r['pallets_pendientes']} pallet(s).',
+      color: conDif ? const Color(0xFFB45309) : const Color(0xFF047857),
+    );
+    await _abrirTrasladoCcp(_aEntero(ot['orden_id']));
+  }
+
+  Future<void> _cerrarTrasladoConPendientes() async {
+    final ot = _trasladoActivo;
+    if (ot == null) return;
+    final pendientes = _palletsTraslado.where((p) => p['pendiente'] == true).toList();
+    final motivo = await _pedirMotivoTraslado(
+      pendientes.isEmpty ? 'Cerrar recepción' : 'Pallets que no llegaron',
+      pendientes.isEmpty
+          ? ['No quedan pallets pendientes.']
+          : pendientes.map((p) => '${p['lpn']}: ${p['skus']} SKU · ${p['unidades_despachadas']} UN').toList(),
+      const ['El pallet no venía en el camión', 'Llega en otro camión', 'Pallet extraviado', 'Otro'],
+    );
+    if (motivo == null) return;
+    setState(() => _guardandoTraslado = true);
+    try {
+      final res = await supabase.rpc('wms_cerrar_recepcion_traslado', params: {
+        'p_orden_id': _aEntero(ot['orden_id']), 'p_usuario': _usuarioRf(), 'p_motivo': motivo,
+      });
+      final r = Map<String, dynamic>.from(res as Map);
+      _notificar('${r['numero_ov']} cerrada: ${r['pallets_recibidos']} recibido(s), ${r['pallets_no_llegaron']} no llegaron.',
+          color: const Color(0xFFB45309));
+      _volverBandejaTraslados();
+    } catch (e) {
+      _notificar('No se pudo cerrar: ${_mensajeError(e)}', color: Colors.red);
+    } finally {
+      if (mounted) setState(() => _guardandoTraslado = false);
+    }
+  }
+
+  Widget _construirVistaTrasladosCcp() {
+    if (!_esBodegaConcepcion) {
+      return ListView(padding: const EdgeInsets.all(16), children: const [
+        _TarjetaMovil(child: Text('Este módulo es solo para Bodega Concepción. Inicie sesión con un usuario de Concepción.',
+            style: TextStyle(fontWeight: FontWeight.bold))),
+      ]);
+    }
+    if (_pasoTraslado == 2 && _palletTraslado != null) return _vistaRevisarPalletTraslado();
+    if (_pasoTraslado == 1 && _trasladoActivo != null) return _vistaPalletsTraslado();
+    return _vistaBandejaTraslados();
+  }
+
+  Widget _vistaBandejaTraslados() {
+    return RefreshIndicator(
+      onRefresh: _cargarTrasladosCcp,
+      child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 86), children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: const Color(0xFF0F172A), borderRadius: BorderRadius.circular(10)),
+          child: Row(children: [
+            const Icon(Icons.local_shipping_rounded, color: Color(0xFF5EEAD4), size: 28),
+            const SizedBox(width: 10),
+            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('TRASLADOS DESDE SANTIAGO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14)),
+              Text('Elija la OT que llegó y escanee cada pallet', style: TextStyle(color: Color(0xFFCBD5E1), fontSize: 11)),
+            ])),
+            IconButton(
+              onPressed: _cargandoTraslados ? null : _cargarTrasladosCcp,
+              icon: _cargandoTraslados
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.sync, color: Colors.white),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 12),
+        if (!_cargandoTraslados && _trasladosCcp.isEmpty)
+          const _TarjetaMovil(child: Text('No hay traslados en camino a Concepción.', style: TextStyle(color: Color(0xFF64748B)))),
+        ..._trasladosCcp.map((t) {
+          final total = _aEntero(t['pallets']);
+          final hechos = _aEntero(t['pallets_recibidos']) + _aEntero(t['pallets_no_llegaron']);
+          final enProceso = (t['estado'] ?? '') == 'RECEPCION_CCP_EN_PROCESO';
+          final faltPk = _aEntero(t['faltante_packing']);
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () => _abrirTrasladoCcp(_aEntero(t['orden_id'])),
+              child: _TarjetaMovil(
+                borderColor: enProceso ? const Color(0xFF0284C7) : const Color(0xFF14B8A6),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(child: Text((t['numero_ot'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16))),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: enProceso ? const Color(0xFFE0F2FE) : const Color(0xFFCCFBF1), borderRadius: BorderRadius.circular(20)),
+                      child: Text(enProceso ? 'RECIBIENDO' : 'EN CAMINO',
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900,
+                              color: enProceso ? const Color(0xFF0369A1) : const Color(0xFF0F766E))),
+                    ),
+                  ]),
+                  const SizedBox(height: 4),
+                  Text('Salió de Santiago ${_fechaCortaTraslado(t['despachado_en'])}'
+                      '${(t['despachado_por'] ?? '').toString().isNotEmpty ? ' · ${t['despachado_por']}' : ''}',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Text('$hechos / $total pallets', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    const Spacer(),
+                    Text('${t['unidades_despachadas']} UN', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF475569))),
+                  ]),
+                  const SizedBox(height: 6),
+                  LinearProgressIndicator(value: total == 0 ? 0 : hechos / total, minHeight: 6,
+                      backgroundColor: const Color(0xFFE2E8F0), color: const Color(0xFF0F766E)),
+                  if (faltPk > 0) ...[
+                    const SizedBox(height: 8),
+                    Text('Santiago la envió con faltante de $faltPk UN (${t['motivo_faltante_packing'] ?? ''})',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFFB45309), fontWeight: FontWeight.bold)),
+                  ],
+                ]),
+              ),
+            ),
+          );
+        }),
+      ]),
+    );
+  }
+
+  Widget _cabeceraTraslado({String? subtitulo, VoidCallback? alVolver}) {
+    final ot = _trasladoActivo ?? {};
+    final pallets = _palletsTraslado;
+    final hechos = pallets.where((p) => p['pendiente'] != true).length;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: const Color(0xFF0F172A), borderRadius: BorderRadius.circular(10)),
+      child: Row(children: [
+        IconButton(onPressed: alVolver, icon: const Icon(Icons.arrow_back_rounded, color: Colors.white)),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text((ot['numero_ot'] ?? '').toString(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
+          Text(subtitulo ?? 'SANTIAGO → CONCEPCIÓN · $hechos de ${pallets.length} pallets registrados',
+              style: const TextStyle(color: Color(0xFF5EEAD4), fontSize: 10.5, fontWeight: FontWeight.bold)),
+        ])),
+      ]),
+    );
+  }
+
+  Widget _vistaPalletsTraslado() {
+    final pallets = _palletsTraslado;
+    final pendientes = pallets.where((p) => p['pendiente'] == true).toList();
+    final listos = pallets.where((p) => p['pendiente'] != true).toList();
+    return ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 86), children: [
+      _cabeceraTraslado(alVolver: _volverBandejaTraslados),
+      const SizedBox(height: 10),
+      if (pendientes.isNotEmpty)
+        _TarjetaMovil(borderColor: const Color(0xFF14B8A6), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('ESCANEE EL LPN DEL PALLET', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Color(0xFF0F766E))),
+          const SizedBox(height: 8),
+          TextField(controller: _txtLpnTraslado, autofocus: true, textCapitalization: TextCapitalization.characters,
+            inputFormatters: [UpperCaseTextFormatter()], onSubmitted: _seleccionarPalletTraslado,
+            decoration: InputDecoration(labelText: 'LPN del pallet', prefixIcon: const Icon(Icons.qr_code_2),
+              suffixIcon: IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: () async {
+                await _escanearParaCampo(_txtLpnTraslado, 'Escanear LPN del pallet');
+                if (_txtLpnTraslado.text.isNotEmpty) _seleccionarPalletTraslado(_txtLpnTraslado.text);
+              }))),
+          const SizedBox(height: 8),
+          SizedBox(width: double.infinity, height: 46, child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F766E), foregroundColor: Colors.white),
+            onPressed: () => _seleccionarPalletTraslado(_txtLpnTraslado.text),
+            icon: const Icon(Icons.fact_check_rounded), label: const Text('REVISAR PALLET'))),
+        ])),
+      if (pendientes.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        Text('POR RECIBIR (${pendientes.length})', style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFB45309))),
+        ...pendientes.map((p) => Card(
+          margin: const EdgeInsets.only(top: 6),
+          child: ListTile(
+            dense: true,
+            leading: const Icon(Icons.inventory_2_outlined, color: Color(0xFFB45309)),
+            title: Text((p['lpn'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.w900)),
+            subtitle: Text('${p['skus']} SKU · ${p['unidades_despachadas']} UN'),
+            trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+            onTap: () => _seleccionarPalletTraslado((p['lpn'] ?? '').toString()),
+          ),
+        )),
+      ],
+      if (listos.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        Text('REGISTRADOS (${listos.length})', style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF047857))),
+        ...listos.map((p) {
+          final estado = (p['estado'] ?? '').toString();
+          final noLlego = estado == 'NO_LLEGO';
+          final conDif = estado == 'RECIBIDO_CON_DIFERENCIAS';
+          final destino = (p['lpn_destino'] ?? '').toString();
+          return Card(
+            margin: const EdgeInsets.only(top: 6),
+            child: ListTile(
+              dense: true,
+              leading: Icon(noLlego ? Icons.block : (conDif ? Icons.report_problem_outlined : Icons.check_circle),
+                  color: noLlego ? const Color(0xFF64748B) : (conDif ? const Color(0xFFB45309) : const Color(0xFF047857))),
+              title: Text('${p['lpn']}${destino.isNotEmpty && destino != p['lpn'] ? ' → $destino' : ''}',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text(noLlego
+                  ? 'NO LLEGÓ · ${p['observacion'] ?? ''}'
+                  : '${p['unidades_recibidas']} de ${p['unidades_despachadas']} UN · ${p['usuario'] ?? ''} ${_fechaCortaTraslado(p['fecha'])}'
+                    '${conDif ? '\n${p['observacion'] ?? ''}' : ''}'),
+            ),
+          );
+        }),
+      ],
+      const SizedBox(height: 16),
+      if (pendientes.isNotEmpty)
+        SizedBox(width: double.infinity, height: 46, child: OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(side: const BorderSide(color: Color(0xFFB45309), width: 1.4)),
+          onPressed: _guardandoTraslado ? null : _cerrarTrasladoConPendientes,
+          icon: const Icon(Icons.report_problem_outlined, color: Color(0xFFB45309)),
+          label: Text('PALLETS QUE NO LLEGARON · CERRAR OT (${pendientes.length})',
+              style: const TextStyle(color: Color(0xFFB45309), fontWeight: FontWeight.bold, fontSize: 12)),
+        )),
+    ]);
+  }
+
+  Widget _vistaRevisarPalletTraslado() {
+    final p = _palletTraslado!;
+    final lineas = _lineasPalletTraslado(p);
+    final revisadas = lineas.where((l) => _recibidoTraslado.containsKey(l['clave'].toString())).length;
+    final hayDif = lineas.any((l) => _diferenciaLineaTraslado(l) != null);
+    final completo = revisadas == lineas.length && lineas.isNotEmpty;
+    return Column(children: [
+      Expanded(child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 12), children: [
+        _cabeceraTraslado(
+          subtitulo: 'PALLET ${p['lpn']} · ${p['skus']} SKU · ${p['unidades_despachadas']} UN',
+          alVolver: () => setState(() { _pasoTraslado = 1; _palletTraslado = null; }),
+        ),
+        const SizedBox(height: 10),
+        _TarjetaMovil(borderColor: const Color(0xFF14B8A6), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('REVISE CADA PRODUCTO · $revisadas de ${lineas.length}',
+              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: Color(0xFF0F766E))),
+          const SizedBox(height: 4),
+          const Text('✓ si coincide cantidad, lote y vencimiento. Lápiz para anotar lo que realmente llegó.',
+              style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: TextField(controller: _txtScanTraslado, textCapitalization: TextCapitalization.characters,
+              inputFormatters: [UpperCaseTextFormatter()], onSubmitted: (_) => _procesarScanTraslado(),
+              decoration: const InputDecoration(labelText: 'Escanear producto (opcional)', prefixIcon: Icon(Icons.barcode_reader)))),
+            const SizedBox(width: 8),
+            ElevatedButton(onPressed: () async {
+              await _escanearParaCampo(_txtScanTraslado, 'Escanear producto');
+              if (_txtScanTraslado.text.isNotEmpty) await _procesarScanTraslado();
+            }, child: const Icon(Icons.qr_code_scanner)),
+          ]),
+          const SizedBox(height: 8),
+          SizedBox(width: double.infinity, child: OutlinedButton.icon(
+            onPressed: () => setState(() {
+              for (final l in lineas) {
+                final c = l['clave'].toString();
+                if (!_recibidoTraslado.containsKey(c)) _recibidoTraslado[c] = _aEntero(l['unidades']);
+              }
+            }),
+            icon: const Icon(Icons.done_all_rounded),
+            label: Text(revisadas == 0 ? 'TODO CONFORME' : 'MARCAR CONFORME EL RESTO'),
+          )),
+        ])),
+        const SizedBox(height: 10),
+        ...lineas.map((l) {
+          final c = l['clave'].toString();
+          final revisada = _recibidoTraslado.containsKey(c);
+          final dif = _diferenciaLineaTraslado(l);
+          final mult = _aEntero(l['multiplo']) < 1 ? 1 : _aEntero(l['multiplo']);
+          final color = !revisada ? const Color(0xFFCBD5E1) : (dif != null ? const Color(0xFFF59E0B) : const Color(0xFF22C55E));
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+            decoration: BoxDecoration(
+              color: !revisada ? null : (dif != null ? const Color(0xFFFFFBEB) : const Color(0xFFF0FDF4)),
+              borderRadius: BorderRadius.circular(9), border: Border.all(color: color, width: 1.4)),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${l['sku']}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                Text('${l['descripcion'] ?? ''}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
+                const SizedBox(height: 2),
+                Text('${_textoCajasTraslado(_aEntero(l['unidades']), mult)} · Lote ${l['lote']} · ${l['vencimiento'] ?? 'S/F'}',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF334155))),
+                if (dif != null)
+                  Text(dif.replaceFirst('${l['sku']}: ', 'Llegó: '),
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFFB45309))),
+              ])),
+              IconButton(tooltip: 'Coincide', onPressed: () => setState(() {
+                _recibidoTraslado[c] = _aEntero(l['unidades']);
+                _loteRecibidoTraslado.remove(c);
+                _vencRecibidoTraslado.remove(c);
+              }), icon: Icon(Icons.check_circle, color: revisada && dif == null ? const Color(0xFF16A34A) : const Color(0xFF94A3B8))),
+              IconButton(tooltip: 'Anotar diferencia', onPressed: () => _editarLineaTraslado(l),
+                  icon: Icon(Icons.edit_note_rounded, color: dif != null ? const Color(0xFFB45309) : const Color(0xFF475569))),
+            ]),
+          );
+        }),
+      ])),
+      SafeArea(top: false, child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+        child: SizedBox(width: double.infinity, height: 52, child: ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: hayDif ? const Color(0xFFB45309) : const Color(0xFF047857), foregroundColor: Colors.white),
+          onPressed: (!completo || _guardandoTraslado) ? null : _recibirPalletTraslado,
+          icon: _guardandoTraslado
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : Icon(hayDif ? Icons.report_problem_outlined : Icons.verified_rounded),
+          label: Text(!completo
+              ? 'REVISE ${lineas.length - revisadas} PRODUCTO(S) MÁS'
+              : (hayDif ? 'RECIBIR PALLET CON DIFERENCIAS' : 'RECIBIR PALLET CONFORME')),
+        )),
+      )),
+    ]);
+  }
+
   Widget _construirMenuCentral() {
+    // Tareas de conteo: se refrescan al volver al menú (como máximo cada 15 segundos)
+    if (_tareasConteoLeidas == null || DateTime.now().difference(_tareasConteoLeidas!).inSeconds > 15) {
+      _tareasConteoLeidas = DateTime.now();
+      Future.microtask(_cargarMisTareasConteo);
+    }
     final botones = [
+      if (_esBodegaConcepcion)
+        {'indice': 10, 'titulo': 'RECIBIR TRASLADOS DE SANTIAGO', 'subtitulo': 'OT-CCP: escanear pallets, revisar y recibir', 'icono': Icons.local_shipping_rounded, 'color': const Color(0xFF0F766E), 'fondo': const Color(0xFFCCFBF1)},
       {'indice': 0, 'titulo': 'RECEPCIÓN EN ANDÉN', 'subtitulo': 'OC, Lectura GS1, Descuento Cajas y LPN', 'icono': Icons.inventory_2_rounded, 'color': const Color(0xFF1D4ED8), 'fondo': const Color(0xFFEFF6FF)},
       {'indice': 1, 'titulo': 'ALMACENAMIENTO', 'subtitulo': 'Paso 1: Escanear LPN -> Paso 2: Escanear Ubicación', 'icono': Icons.warehouse_rounded, 'color': const Color(0xFF047857), 'fondo': const Color(0xFFECFDF5)},
       {'indice': 2, 'titulo': 'MOVIMIENTO A PICKING (FEFO)', 'subtitulo': 'Sugerencia automática por fecha más próxima a vencer', 'icono': Icons.move_down_rounded, 'color': const Color(0xFF0D9488), 'fondo': const Color(0xFFF0FDFA)},
+      {'indice': 11, 'titulo': 'CONSULTA DE STOCK', 'subtitulo': '¿Queda stock? Escanee el producto y vea dónde está', 'icono': Icons.manage_search_rounded, 'color': const Color(0xFF7C3AED), 'fondo': const Color(0xFFF5F3FF)},
       {'indice': 3, 'titulo': 'STOCK Y CONTEO CÍCLICO', 'subtitulo': 'Consulta Rayos-X y toma de inventario en piso', 'icono': Icons.fact_check_rounded, 'color': const Color(0xFF4338CA), 'fondo': const Color(0xFFEEF2FF)},
       {'indice': 4, 'titulo': 'MAESTRA DE PRODUCTOS', 'subtitulo': 'Enrolamiento de SKU, EAN y múltiplos de caja', 'icono': Icons.list_alt_rounded, 'color': const Color(0xFFB45309), 'fondo': const Color(0xFFFFFBEB)},
       {'indice': 9, 'titulo': 'PICKING ESTÁNDAR (OV NORMAL)', 'subtitulo': 'Escribir OV y preparar por marca (Churu -> Ferall -> Giwi -> Arenas)', 'icono': Icons.shopping_cart_checkout_rounded, 'color': const Color(0xFF0284C7), 'fondo': const Color(0xFFE0F2FE)},
@@ -6438,6 +9593,18 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                 ),
               ),
               const SizedBox(height: 18),
+              if (_hayVersionNueva)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFDC2626))),
+                  child: const Text('HAY UNA VERSIÓN NUEVA DE LA APP. Termine lo que está haciendo, cierre esta pestaña y vuelva a abrir el enlace.',
+                      style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF991B1B))),
+                ),
+              if (_tarjetaTrabajoEnCurso() != null) _tarjetaTrabajoEnCurso()!,
+              if (_misTareasConteo.isNotEmpty) _tarjetaMisTareasConteo(),
               ...botones.where((b) => _tienePermisoModulo(b['indice'] as int)).map((b) {
                 final int idx = b['indice'] as int;
                 final Color colorPrincipal = b['color'] as Color;
@@ -6872,6 +10039,31 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                     ],
                   ),
                 ),
+                if (_sugerenciasPutaway.isNotEmpty) ...[
+                  const Text('UBICACIÓN SUGERIDA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: Color(0xFF065F46))),
+                  const SizedBox(height: 4),
+                  Text((_sugerenciasPutaway.first['motivo'] ?? '').toString(),
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF475569))),
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 6, children: _sugerenciasPutaway.map((sug) {
+                    final u = (sug['ubicacion'] ?? '').toString();
+                    final sel = _txtPutUbi.text.trim().toUpperCase() == u;
+                    return ChoiceChip(
+                      label: Text(u, style: TextStyle(fontWeight: FontWeight.w900, color: sel ? Colors.white : const Color(0xFF065F46))),
+                      selected: sel,
+                      selectedColor: const Color(0xFF047857),
+                      tooltip: (sug['motivo'] ?? '').toString(),
+                      onSelected: (_) => setState(() {
+                        _txtPutUbi.text = u;
+                        _validarUbicacionPutaway(u);
+                      }),
+                    );
+                  }).toList()),
+                  const SizedBox(height: 4),
+                  const Text('Escanee la etiqueta de la ubicación para confirmar dónde lo dejó.',
+                      style: TextStyle(fontSize: 10.5, color: Color(0xFF64748B))),
+                  const SizedBox(height: 10),
+                ],
                 TextField(
                   controller: _txtPutUbi,
                   autofocus: true,
@@ -6916,11 +10108,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                             foregroundColor: Colors.white,
                           ),
                           onPressed: () async {
-                            String ubi = _txtPutUbi.text.trim().toUpperCase()
-                                .replaceAll('RACK ', '')
-                                .replaceAll('RACK', '')
-                                .replaceAll(' ', '-');
-                            ubi = ubi.replaceAll(RegExp(r'-+'), '-');
+                            // B2501 / B25-01 / B 25 01 -> B-25-01
+                            final String ubi = _normalizarRackOCodigo(_txtPutUbi.text);
+                            if (ubi != _txtPutUbi.text.trim().toUpperCase()) _txtPutUbi.text = ubi;
 
                             if (lpnActual.isEmpty || ubi.isEmpty) {
                               _notificar('Escanee o digite la Ubicación Destino.', color: const Color(0xFFD97706));
@@ -6949,6 +10139,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                                 camposQueSeMantienen: 'Ubicación Destino ($ubi) pre-cargada para el siguiente LPN',
                               );
                               _reiniciarPasoAlmacenamiento(mantenerUbicacion: mantenerUbi);
+                              _cargarMisAlmacenamientos();
                             } catch (ex) {
                               _notificar('No se almacenó: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
                             } finally {
@@ -6981,6 +10172,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                             });
                             _notificar('LPN $lpnActual enviado a ZONA-MERMA ($bodegaActiva).', color: const Color(0xFFDC2626));
                             _reiniciarPasoAlmacenamiento(mantenerUbicacion: false);
+                            _cargarMisAlmacenamientos();
                           } catch (ex) {
                             _notificar('No se envió a merma: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
                           } finally {
@@ -6996,6 +10188,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
               ],
             ),
           ),
+        const SizedBox(height: 12),
+        _tarjetaHistorialAlmacenamiento(),
       ],
     );
   }
@@ -7140,6 +10334,34 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         ),
         const SizedBox(height: 10),
 
+        // Stock antiguo en ZONA-PICKING: asignarlo a su ubicación real de nivel 01
+        if (_stockZonaPickingSku.isNotEmpty) ...[
+          _TarjetaMovil(
+            borderColor: const Color(0xFFF59E0B),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('STOCK EN ZONA-PICKING (SIN UBICACIÓN REAL)',
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Color(0xFFB45309))),
+              const SizedBox(height: 4),
+              const Text('El picking ahora es el nivel 01 de los racks. Asigne este stock a la ubicación (ej. B-25-01) donde está físicamente.',
+                  style: TextStyle(fontSize: 11.5, color: Color(0xFF475569))),
+              ..._stockZonaPickingSku.map((r) => Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+                decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFFCD34D))),
+                child: Row(children: [
+                  Expanded(child: Text(
+                    'Lote ${r['lote'] ?? 'S/L'} · ${normalizarFechaSql(r['fecha_vencimiento_cl']?.toString()) ?? 'S/F'}\n'
+                    '${r['cajas'] ?? 0} Cj (${r['cantidad_unidades'] ?? 0} UN)${(r['lpn'] ?? '').toString().isNotEmpty ? ' · ${r['lpn']}' : ''}',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+                  TextButton(onPressed: () => _asignarZonaPickingANivel1(r), child: const Text('ASIGNAR A NIVEL 01')),
+                ]),
+              )),
+            ]),
+          ),
+          const SizedBox(height: 10),
+        ],
+
         if (_stockFefoSeleccionado != null) ...[
           _TarjetaMovil(
             borderColor: const Color(0xFF10B981),
@@ -7190,6 +10412,14 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                               'LPN: ${_stockFefoSeleccionado!['lpn'] ?? 'SIN LPN'} | Lote: ${_stockFefoSeleccionado!['lote'] ?? 'S/L'}',
                               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
                             ),
+                            if (_lotesDelLpn(_stockFefoSeleccionado!).length > 1)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  'Este LPN tiene ${_lotesDelLpn(_stockFefoSeleccionado!).length} lotes. Si baja el pallet completo se mueve todo.',
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFFB45309)),
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -7245,8 +10475,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                         textCapitalization: TextCapitalization.characters,
                         inputFormatters: [UpperCaseTextFormatter()],
                         decoration: InputDecoration(
-                          labelText: 'Destino Picking',
-                          hintText: 'ZONA-PICKING o C-01-01',
+                          labelText: 'Destino picking (nivel 01)',
+                          hintText: 'Ej: H-02-01',
                           suffixIcon: IconButton(
                             icon: const Icon(Icons.qr_code_scanner, size: 18),
                             onPressed: () => _escanearUbicacion(_txtUbiDestinoPicking, false),
@@ -7303,6 +10533,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                         _stockFefoSeleccionado = item;
                         final cDisp = (item['cajas'] as num?)?.toInt() ?? 1;
                         _txtCajasMoverPicking.text = cDisp > 0 ? cDisp.toString() : '1';
+                        _txtUbiDestinoPicking.text = _destinoPickingPara(item);
                       });
                     },
                     child: Container(
@@ -7393,10 +10624,15 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
           .toList();
       setState(() => _resultadosConsulta = filtrados);
     } catch (ex) {
-      _notificar('Error en consulta: $ex', color: const Color(0xFFDC2626));
+      _notificar('Error en consulta: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
     }
   }
   Widget _construirVistaConsulta() {
+    final conteoDuplicados = <String, int>{};
+    for (final r in _resultadosConsulta) {
+      final k = _claveDuplicado(r);
+      conteoDuplicados[k] = (conteoDuplicados[k] ?? 0) + 1;
+    }
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 86),
       children: [
@@ -7493,9 +10729,24 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                           Row(children: [const Icon(Icons.sell_outlined, size: 12, color: Color(0xFF475569)), const SizedBox(width: 4), Text('Lote: ${r['lote'] ?? 'S/L'}', style: const TextStyle(fontSize: 11, color: Color(0xFF475569)))]),
                           const SizedBox(height: 2),
                           Row(children: [const Icon(Icons.calendar_month_rounded, size: 12, color: Color(0xFF047857)), const SizedBox(width: 4), Text('Venc: $vencimientoStr', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF047857)))]),
+                          if ((conteoDuplicados[_claveDuplicado(r)] ?? 0) > 1)
+                            Container(
+                              margin: const EdgeInsets.only(top: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFFF59E0B))),
+                              child: const Text('POSIBLE DUPLICADO (misma ubicación, lote y cantidad)',
+                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Color(0xFF92400E))),
+                            ),
                         ],
                       ),
                     ),
+                    if (_puedeDepurarStock && (conteoDuplicados[_claveDuplicado(r)] ?? 0) > 1)
+                      IconButton(
+                        tooltip: 'Eliminar esta fila duplicada',
+                        onPressed: () => _eliminarDuplicado(r),
+                        icon: const Icon(Icons.delete_forever_rounded, color: Color(0xFFDC2626)),
+                      ),
                   ],
                 ),
               ),
@@ -7780,7 +11031,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                       });
                       final mantener = await _preguntarMantenerDatos(tituloMovimiento: 'SKU $sku Guardado en Maestra', detalleMovimiento: 'Marca: ${_txtMMarca.text} | Múltiplo: x${_txtMMult.text}', camposQueSeMantienen: 'Marca, Múltiplo y base de Descripción');
                       setState(() { _txtMSku.clear(); _txtMEan.clear(); if (!mantener) { _txtMDesc.clear(); _txtMMarca.text = 'ESTANDAR'; _txtMMult.text = '1'; } });
-                    } catch (ex) { _notificar('Error guardando en Maestra: $ex', color: const Color(0xFFDC2626)); }
+                    } catch (ex) { _notificar('Error guardando en Maestra: ${_mensajeError(ex)}', color: const Color(0xFFDC2626)); }
                   }, icon: const Icon(Icons.save_outlined), label: const Text('GUARDAR EN MAESTRA SKU'))),
             ],
           ),
@@ -7891,6 +11142,12 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
             },
           ),
           const Divider(),
+          if (_esBodegaConcepcion)
+            ListTile(
+              leading: const Icon(Icons.local_shipping_rounded, color: Color(0xFF0F766E)),
+              title: const Text('Recibir traslados de Santiago', style: TextStyle(color: Color(0xFF0F766E), fontWeight: FontWeight.bold)),
+              onTap: () => _abrirModulo(10, desdeDrawer: true),
+            ),
           ListTile(
             leading: const Icon(Icons.inventory_2_rounded, color: Color(0xFF1D4ED8)),
             title: const Text('Recepción en Andén'),
@@ -7950,6 +11207,24 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
             onTap: () => _abrirModulo(6, desdeDrawer: true),
           ),
           const Divider(),
+          ListTile(
+            leading: const Icon(Icons.bug_report_outlined, color: Color(0xFFB91C1C)),
+            title: const Text('Reportar un problema de la app', style: TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: const Text('Algo no funciona, un error o una idea', style: TextStyle(fontSize: 11)),
+            onTap: () {
+              Navigator.pop(context);
+              _dialogoReportarProblemaApp();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.list_alt_rounded, color: Color(0xFF475569)),
+            title: const Text('Mis reportes'),
+            onTap: () {
+              Navigator.pop(context);
+              _verMisReportes();
+            },
+          ),
+          const Divider(),
           SwitchListTile(
             secondary: Icon(isDark ? Icons.dark_mode_rounded : Icons.light_mode_rounded),
             title: const Text('Modo Oscuro'),
@@ -7964,6 +11239,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
             title: const Text('Cerrar Sesión', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
             onTap: () {
               usuarioActivo = null;
+              () async {   // cierra la sesión en el servidor
+                try { await supabase.rpc('wms_cerrar_sesion'); } catch (_) {}
+              }();
               Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreenLudipek()));
             },
           ),
@@ -7989,6 +11267,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       case 7: return _construirVistaCiclicoPorSku();
       case 8: return _construirVistaAuditoriaPackingLpn();
       case 9: return _construirVistaPickingNormal(); // Picking Estándar separado de Farmacia
+      case 10: return _construirVistaTrasladosCcp();
+      case 11: return _construirVistaConsultaStock();
       default: return _construirMenuCentral();
     }
   }
@@ -8001,6 +11281,15 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         // 1. Si está en el Paso 2 de Almacenamiento, regresar al Paso 1
         if (!_mostrarMenuCentral && _tabActual == 1 && _pasoAlmacenamiento == 2) {
           setState(() => _pasoAlmacenamiento = 1);
+          return false;
+        }
+        // Recepción de traslados: volver un paso (pallet -> OT -> bandeja)
+        if (!_mostrarMenuCentral && _tabActual == 10 && _pasoTraslado > 0) {
+          if (_pasoTraslado == 2) {
+            setState(() { _pasoTraslado = 1; _palletTraslado = null; });
+          } else {
+            _volverBandejaTraslados();
+          }
           return false;
         }
         // 2. Si está dentro de cualquier módulo, regresar al Menú Principal sin perder datos
@@ -8053,6 +11342,12 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
             ],
           ),
           actions: [
+            if (!_mostrarMenuCentral && (_tabActual == 0 || _tabActual == 1 || _tabActual == 2))
+              IconButton(
+                tooltip: 'Reportar un problema al supervisor',
+                icon: const Icon(Icons.report_problem_rounded, color: Color(0xFFFBBF24)),
+                onPressed: _dialogoReporteOperador,
+              ),
             if (!_mostrarMenuCentral)
               IconButton(
                 tooltip: 'Volver al Menú Principal',
