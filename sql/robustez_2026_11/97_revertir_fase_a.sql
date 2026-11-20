@@ -78,6 +78,10 @@ drop function if exists public.wms_reservar_correlativo(text, integer, text, big
 drop function if exists public.wms_max_lpn_rango(text, bigint, bigint);
 drop function if exists public.wms_dashboard_resumen(text, integer);
 -- 30: la función wms_tareas_conteo vuelve a la versión del 20 ejecutando ese script
+drop function if exists public.wms_deshacer_conciliacion(bigint, text);
+drop function if exists public.wms_conciliar_recepciones(bigint, bigint[], text, text);
+drop function if exists public.wms_recepciones_sin_oc(text, date, date);
+drop table if exists public.wms_conciliaciones_recepcion;
 drop function if exists public.wms_vacias_de_tarea(text, text, timestamptz);
 drop function if exists public.wms_actualizar_tarea_conteo(bigint, text, text);
 drop trigger if exists tg_estado_unico_ov on public.netsuite_ordenes_venta;

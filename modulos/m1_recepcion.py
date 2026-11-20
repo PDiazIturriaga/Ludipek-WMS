@@ -12,6 +12,7 @@ import requests
 import pandas as pd
 import flet as ft
 from dependencias import *
+from modulos.m1_conciliacion import PanelConciliacionSinOc
 
 
 class RecepcionModulo:
@@ -3441,6 +3442,8 @@ class RecepcionModulo:
 
         def auditar_asn_seleccionado(e=None):
             _auditar_base(e)
+            if contenedor_subvista_inbound.content is panel_conciliacion.vista:
+                panel_conciliacion.refrescar()     # solo recarga si cambió la OC (no borra lo marcado)
             if dd_asn.value:
                 lbl_resumen_operacion.value = (
                     f"Avance {lbl_inb_avance.value}   ·   Cajas físicas/OC {lbl_inb_cajas.value}   ·   "
@@ -3722,6 +3725,9 @@ class RecepcionModulo:
         lbl_lpn_unitario_activo.size = 13
         lbl_lpn_unitario_activo.weight = ft.FontWeight.W_600
 
+        # ---------- PANTALLA 5: CONCILIAR RECEPCIONES SIN OC ----------
+        panel_conciliacion = PanelConciliacionSinOc(page, lambda: dd_asn.value, lambda: _auditar_base(None))
+
         # ---------- Armado del módulo ----------
         contenedor_subvista_inbound = ft.Container(content=subvista_inb_recepcion)
         col_inbound = ft.Column([barra_oc, contenedor_subvista_inbound], spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
@@ -3735,7 +3741,9 @@ class RecepcionModulo:
             subvista_inb_consultas,
             subvista_inb_qa,
             subvista_inb_modificacion,
+            panel_conciliacion.vista,
         ]
+        self.panel_conciliacion = panel_conciliacion
         self.cargar_lista_asns_func = cargar_lista_asns
         self.cargar_historico_recepciones_func = cargar_historico_recepciones
         self.auditar_asn_seleccionado_func = auditar_asn_seleccionado
@@ -3745,11 +3753,13 @@ class RecepcionModulo:
         self.cargar_lista_asns_func()
 
     def sel_sub_inb(self, idx: int):
-        """0 Recepción y validación · 1 Indicadores · 2 Historial · 3 Calidad · 4 Ajustes"""
+        """0 Recepción y validación · 1 Indicadores · 2 Historial · 3 Calidad · 4 Ajustes · 5 Conciliar sin OC"""
         idx = idx if 0 <= idx < len(self.subvistas) else 0
         self.contenedor.content = self.subvistas[idx]
         self.barra_oc.visible = idx != 2
         if idx == 2:
             self.cargar_historico_recepciones_func()
+        elif idx == 5:
+            self.panel_conciliacion.refrescar(forzar=True)
         elif idx != 0 and self.dd_asn.value:
             self.auditar_asn_seleccionado_func()

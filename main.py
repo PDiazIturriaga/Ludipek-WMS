@@ -1151,6 +1151,7 @@ def main(page: ft.Page):
                     ("Historial", _ico("MANAGE_SEARCH_ROUNDED", "QR_CODE_SCANNER_OUTLINED")),
                     ("Control de calidad", _ico("VERIFIED_USER_OUTLINED", "CENTER_FOCUS_STRONG_OUTLINED")),
                     ("Ajustes de OC y pallets", _ico("EDIT_NOTE_ROUNDED", "CROP_FREE_OUTLINED")),
+                    ("Conciliar recepciones sin OC", _ico("LINK_ROUNDED", "COMPARE_ARROWS_ROUNDED")),
                 ],
             ),
             (
