@@ -160,8 +160,6 @@ class RecepcionTrasladosCcpModulo:
                         self.btn_cerrar_ot,
                         ui_boton("Acta de recepción", ft.Icons.DESCRIPTION_OUTLINED, lambda e: self._acta_pdf(), "secundario",
                                  tooltip="PDF con enviado vs recibido, diferencias, lotes y motivos (para imprimir y firmar)"),
-                        ui_boton("Fotos de la fecha", ft.Icons.PHOTO_LIBRARY_OUTLINED, lambda e: self._dialogo_fotos(), "secundario",
-                                 tooltip="Fotos de la fecha de cada caja tomadas en el picking (script 38)"),
                         ui_boton("Exportar", ft.Icons.DOWNLOAD_ROUNDED, lambda e: self._exportar_detalle(), "secundario"),
                         ui_boton("Actualizar", ft.Icons.REFRESH_ROUNDED, lambda e: self._recargar_detalle(), "secundario"),
                     ], spacing=8, wrap=True),
@@ -278,86 +276,6 @@ class RecepcionTrasladosCcpModulo:
         self.contenedor.content = self.sub_detalle
         self.page.update()
 
-    def _dialogo_fotos(self):
-        """Fotos de la fecha de cada caja, agrupadas por pallet, tomadas al pickear la OT en Santiago."""
-        orden_id = (self.detalle or {}).get("orden_id")
-        if not orden_id:
-            return
-        try:
-            cajas = supabase.table("wms_ot_cajas").select("*").eq("orden_id", int(orden_id)).is_("anulado_en", "null") \
-                .order("lpn").order("id").execute().data or []
-        except Exception as ex:
-            msg = str(getattr(ex, "message", None) or ex)
-            if "wms_ot_cajas" in msg:
-                msg = "esta OT no se pickeó con fotos (o falta ejecutar 38_ot_picking_pallets_fotos.sql)"
-            self._notificar(f"Sin fotos: {msg}", "#B45309")
-            return
-        rutas = [c["foto_path"] for c in cajas if c.get("foto_path")]
-        urls = {}
-        if rutas:
-            try:
-                firmadas = supabase.storage.from_("fotos-picking").create_signed_urls(rutas, 3600) or []
-                for f in firmadas:
-                    ruta = f.get("path") or f.get("name")
-                    url = f.get("signedURL") or f.get("signedUrl") or f.get("signed_url")
-                    if ruta and url:
-                        urls[ruta] = url if url.startswith("http") else f"{SUPABASE_URL}/storage/v1{url}"
-            except Exception as ex:
-                self._notificar(f"No se pudieron abrir las fotos: {_error(ex)}", "#B45309")
-        por_lpn = {}
-        for c in cajas:
-            por_lpn.setdefault(c.get("lpn") or "-", []).append(c)
-        bloques = []
-        for lpn, lista in por_lpn.items():
-            tarjetas = []
-            for c in lista:
-                url = urls.get(c.get("foto_path") or "")
-                tarjetas.append(ft.Container(
-                    width=170, padding=8, border_radius=8, bgcolor=UI["card_alt"], border=ft.Border.all(1, UI["borde"]),
-                    content=ft.Column([
-                        ft.Image(src=url, width=154, height=116) if url else
-                        ft.Container(width=154, height=116, border_radius=6, bgcolor=UI["bg"], alignment=ft.Alignment.CENTER,
-                                     content=ft.Text("sin foto", size=11, color=UI["texto_3"])),
-                        ft.Text(f"{c.get('sku')} · {c.get('unidades')} UN", size=11.5, weight=ft.FontWeight.W_600, color=UI["texto"]),
-                        ft.Text(f"Lote {c.get('lote')} · vence {c.get('fecha_vencimiento_cl') or 'S/F'}", size=10.5, color=UI["texto_2"]),
-                        ft.Text(f"Leído: {c.get('fecha_leida') or '-'} · {c.get('usuario') or ''}", size=10.5, color=UI["texto_3"]),
-                    ], spacing=3, tight=True),
-                    tooltip="Clic para ver la foto en grande" if url else None,
-                    on_click=(lambda e, u=url: self._abrir_url(u)) if url else None, ink=bool(url),
-                ))
-            bloques.append(ft.Column([
-                ft.Text(f"{lpn} · {len(lista)} cajas · {sum(int(x.get('unidades') or 0) for x in lista)} UN",
-                        size=13, weight=ft.FontWeight.W_700, color=UI["texto"]),
-                ft.Row(tarjetas, wrap=True, spacing=8, run_spacing=8),
-            ], spacing=6))
-        if not bloques:
-            bloques = [ft.Text("Esta OT no tiene cajas registradas con foto (se pickeó con el flujo anterior).",
-                               size=12, color=UI["texto_2"])]
-
-        def cerrar(e=None):
-            try:
-                self.page.pop_dialog()
-            except Exception:
-                pass
-
-        self.page.show_dialog(ft.AlertDialog(
-            title=ft.Text(f"Fotos de la fecha · {(self.detalle or {}).get('numero_ot') or ''}", weight=ft.FontWeight.BOLD),
-            content=ft.Container(width=760, height=560, content=ft.Column(bloques, spacing=14, scroll=ft.ScrollMode.AUTO)),
-            actions=[ui_boton("Cerrar", None, cerrar, "texto")],
-            actions_alignment=ft.MainAxisAlignment.END))
-
-    def _abrir_url(self, url):
-        import inspect
-        try:
-            if inspect.iscoroutinefunction(self.page.launch_url):
-                async def _ir():
-                    await self.page.launch_url(url)
-                self.page.run_task(_ir)
-            else:
-                self.page.launch_url(url)
-        except Exception:
-            pass
-
     def _recargar_detalle(self):
         if self.detalle:
             self.abrir_detalle(self.detalle.get("orden_id"))
@@ -375,8 +293,10 @@ class RecepcionTrasladosCcpModulo:
         pallets = self._pallets()
         total_env = sum(_n(p.get("unidades_despachadas")) for p in pallets)
         total_rec = sum(_n(p.get("unidades_recibidas")) for p in pallets)
-        self.lbl_meta.value = (f"Salió de Santiago {_fh(desp.get('cerrado_en'))} · {desp.get('cerrado_por') or '—'}  ·  "
-                               f"{len(pallets)} pallets  ·  recibido {total_rec:,} de {total_env:,} UN").replace(",", ".")
+        camiones = " / ".join(sorted({str(p.get("carga")) for p in pallets if p.get("carga")}))
+        self.lbl_meta.value = ((f"Camión {camiones}  ·  " if camiones else
+                                f"Salió de Santiago {_fh(desp.get('cerrado_en'))} · {desp.get('cerrado_por') or '—'}  ·  "
+                               f"{len(pallets)} pallets  ·  recibido {total_rec:,} de {total_env:,} UN")).replace(",", ".")
         falt = _n(desp.get("faltante_un"))
         self.aviso_packing.visible = falt > 0
         if falt:
@@ -391,17 +311,23 @@ class RecepcionTrasladosCcpModulo:
                 ], spacing=10),
             )
         self.btn_cerrar_ot.visible = estado in ("EN_TRANSITO_CCP", "RECEPCION_CCP_EN_PROCESO") and any(
-            p.get("pendiente") for p in pallets)
+            p.get("pendiente") and not p.get("en_santiago") for p in pallets)
 
         tarjetas = []
         for p in pallets:
             est = str(p.get("estado") or "PENDIENTE")
             col = COLOR_RESULTADO.get(est, UI["texto_2"])
+            if p.get("en_santiago"):      # script 40: todavía no sale en un camión
+                col = UI["texto_3"]
             destino = p.get("lpn_destino")
             lineas_txt = [
                 ft.Text(f"{_n(p.get('unidades_recibidas')):,} de {_n(p.get('unidades_despachadas')):,} UN · {p.get('skus')} SKU".replace(",", "."),
                         size=12, color=UI["texto"]),
             ]
+            if p.get("en_santiago"):
+                lineas_txt.append(ft.Text("Aún en Santiago: viene en otro camión", size=11, color=UI["alerta"]))
+            elif p.get("carga"):
+                lineas_txt.append(ft.Text(f"Camión {p.get('carga')}", size=11, color=UI["texto_3"]))
             if destino and destino != p.get("lpn"):
                 lineas_txt.append(ft.Text(f"Etiqueta nueva en CCP: {destino}", size=11, color=UI["acento"]))
             if p.get("usuario"):
@@ -416,7 +342,7 @@ class RecepcionTrasladosCcpModulo:
                                  right=ft.BorderSide(1, UI["borde"]), bottom=ft.BorderSide(1, UI["borde"])),
                 content=ft.Column([
                     ft.Row([ft.Text(str(p.get("lpn") or ""), size=13.5, weight=ft.FontWeight.W_700, color=UI["texto"], expand=True),
-                            _chip(NOMBRE_RESULTADO.get(est, est), col)], spacing=6),
+                            _chip("En Santiago" if p.get("en_santiago") else NOMBRE_RESULTADO.get(est, est), col)], spacing=6),
                     *lineas_txt,
                 ], spacing=4, tight=True),
             ))
@@ -466,7 +392,7 @@ class RecepcionTrasladosCcpModulo:
     # ==================================================================
     def _dialogo_cerrar_ot(self):
         d = self.detalle or {}
-        pendientes = [p for p in self._pallets() if p.get("pendiente")]
+        pendientes = [p for p in self._pallets() if p.get("pendiente") and not p.get("en_santiago")]
         if not pendientes:
             self._notificar("No quedan pallets por recibir.", "#D97706")
             return

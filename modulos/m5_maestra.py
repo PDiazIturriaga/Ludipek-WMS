@@ -41,6 +41,7 @@ class MaestraModulo:
             ("PC_ADMIN_MAESTRA", "Admin. Usuarios & Maestra SKU"),
             ("PC_RUTEO", "Ruteo y Facturación"),
             ("PC_IMPRESION", "Etiquetas & Impresión"),
+            ("PC_CARGAS", "Cargas de camión (OT)"),
             ("PC_RECEPCION_CCP", "Recepción Traslados Concepción"),
         ]
 
@@ -431,6 +432,7 @@ class MaestraModulo:
                 "APP_ALMACENAMIENTO": "RF_PUTAWAY", "APP_REABASTECIMIENTO": "RF_REABASTECIMIENTO",
                 "APP_PICKING": "RF_PICKING", "APP_PICKING_FARMACIA": "RF_PICKING", "APP_PACKING": "RF_PICKING",
                 "APP_STOCK_CONTEO": "RF_CONSULTA", "APP_VACIAS": "RF_INVENTARIO", "APP_CICLICO_SKU": "RF_INVENTARIO",
+                "APP_PICKING_OT": "RF_PICKING", "APP_CARGA_CAMION": "RF_PICKING",
             }
             if any(k.startswith("APP_") for k in rf_sel):
                 rf_sel = rf_sel + sorted({LEGADO_RF[k] for k in rf_sel if k in LEGADO_RF} - set(rf_sel))

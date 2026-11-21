@@ -92,14 +92,14 @@ values
       ('16','wms_eliminar_stock_duplicado'),('17','wms_multiplo_sku'),('18','wms_asignar_ovs_por_equipo'),
       ('19','wms_sugerir_ubicacion_lpn'),('20','wms_ts_app'),('21','wms_eliminar_pallet'),('22','wms_consulta_stock_operador'),
       ('24','wms_iniciar_sesion'),('25','wms_anular_ov'),('26','wms_registrar_error'),('27','wms_reservar_correlativo'),
-      ('29','wms_dashboard_resumen'),('30','wms_vacias_de_tarea'),('33','wms_conciliar_recepciones'),('34','wms_reportar_problema')) s(n, f)
+      ('29','wms_dashboard_resumen'),('30','wms_vacias_de_tarea'),('33','wms_conciliar_recepciones'),('34','wms_reportar_problema'),('40','wms_carga_cerrar')) s(n, f)
     where not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = s.f)$q$,
  $q$select s.n || ' (' || s.f || ')' from (values ('04','wms_almacenar_lpn'),('09','wms_tareas_conteo'),('12','wms_cerrar_packing'),
       ('13','wms_recibir_pallet_traslado'),('14','wms_alertas_operacion'),('15','wms_mover_lpn_a_picking'),
       ('16','wms_eliminar_stock_duplicado'),('17','wms_multiplo_sku'),('18','wms_asignar_ovs_por_equipo'),
       ('19','wms_sugerir_ubicacion_lpn'),('20','wms_ts_app'),('21','wms_eliminar_pallet'),('22','wms_consulta_stock_operador'),
       ('24','wms_iniciar_sesion'),('25','wms_anular_ov'),('26','wms_registrar_error'),('27','wms_reservar_correlativo'),
-      ('29','wms_dashboard_resumen'),('30','wms_vacias_de_tarea'),('33','wms_conciliar_recepciones'),('34','wms_reportar_problema')) s(n, f)
+      ('29','wms_dashboard_resumen'),('30','wms_vacias_de_tarea'),('33','wms_conciliar_recepciones'),('34','wms_reportar_problema'),('40','wms_carga_cerrar')) s(n, f)
     where not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = s.f) order by 1$q$,
  'Ejecutar los scripts que falten, en orden (ver LEEME_DESPLIEGUE.md).'),
 (202, 'ESTRUCTURA', 'Script 14 sin la última versión (reportes con módulo y SKU)', 'MEDIO',

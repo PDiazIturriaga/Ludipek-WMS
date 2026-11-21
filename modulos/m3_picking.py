@@ -1596,7 +1596,7 @@ class PickingModulo:
             est = str(estado or "").upper()
             if est in ("FACTURADO", "DESPACHADO", "CERRADO", "RECIBIDO_CCP", "RECIBIDO_CCP_CON_DIFERENCIAS"):
                 return 3
-            if est in ("PENDIENTE_FACTURACION", "EN_TRANSITO_CCP", "RECEPCION_CCP_EN_PROCESO"):
+            if est in ("PENDIENTE_FACTURACION", "LISTA_PARA_CARGA", "EN_TRANSITO_CCP", "RECEPCION_CCP_EN_PROCESO"):
                 return 2
             if est in ("PENDIENTE_PACKING", "PACKING_EN_PROCESO", "PICKING_COMPLETO"):
                 return 1
@@ -1609,6 +1609,8 @@ class PickingModulo:
             et = etapa_ov(r.get("estado"))
             es_ot = str(r.get("ov") or "").upper().startswith("OT-")
             if et == 2:
+                if es_ot and str(r.get("estado") or "").upper() == "LISTA_PARA_CARGA":
+                    return "Lista para carga (en Santiago)"
                 return "En tránsito a CCP" if es_ot else "En facturación"
             if et == 3:
                 return "Recibida en CCP" if es_ot else "Facturada"

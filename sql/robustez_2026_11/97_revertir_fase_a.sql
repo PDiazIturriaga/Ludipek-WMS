@@ -89,6 +89,35 @@ drop function if exists public.wms_reservar_correlativo(text, integer, text, big
 drop function if exists public.wms_max_lpn_rango(text, bigint, bigint);
 drop function if exists public.wms_dashboard_resumen(text, integer);
 -- 30: la función wms_tareas_conteo vuelve a la versión del 20 ejecutando ese script
+-- 40: carga de camión y ajustes de OT
+drop function if exists public.wms_carga_cerrar(bigint, text, text);
+drop function if exists public.wms_carga_anular(bigint, text, text);
+drop function if exists public.wms_carga_cambiar_item(bigint, text, text, text, text);
+drop function if exists public.wms_carga_escanear(bigint, text, text);
+drop function if exists public.wms_carga_quitar_orden(bigint, bigint, text);
+drop function if exists public.wms_carga_agregar_orden(bigint, text, text);
+drop function if exists public.wms_carga_crear(text, text, text, text, text, text);
+drop function if exists public.wms_cargas_lista(text, boolean, integer);
+drop function if exists public.wms_carga_detalle(bigint);
+drop function if exists public.wms_carga_renumerar(bigint, bigint);
+drop function if exists public.wms_carga_sincronizar_ot(bigint);
+drop function if exists public.wms_ot_ajustar_lote(bigint[], text, text, text, text, boolean);
+drop function if exists public.wms_ot_mover_cajas(bigint[], text, text, text);
+drop function if exists public.wms_ot_reabrir_picking(bigint, text, text);
+drop function if exists public.wms_ot_ajustes_lista(bigint);
+drop function if exists public.wms_ot_regenerar_packing(bigint);
+drop function if exists public.wms_ot_validar_ajuste(bigint, text[]);
+drop function if exists public.wms_ot_por_cargar(text);
+drop function if exists public.wms_ot_cajas_detalle(bigint);
+drop function if exists public.wms_ot_pallets_por_cargar(bigint);
+drop function if exists public.wms_ot_salio_en_carga(bigint);
+drop function if exists public.wms_ot_lpn_en_santiago(bigint, text);
+drop function if exists public.wms_codigo_carga(text);
+drop function if exists public.wms_usuario_carga(text);
+drop table if exists public.wms_carga_items;
+drop table if exists public.wms_carga_ordenes;
+drop table if exists public.wms_cargas;
+drop table if exists public.wms_ot_ajustes;
 drop function if exists public.wms_cerrar_picking_farmacia(bigint, jsonb, text);
 drop function if exists public.wms_cerrar_picking_ot(bigint, jsonb, text);
 drop function if exists public.wms_ot_cerrar_pallet(bigint, text);

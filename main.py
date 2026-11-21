@@ -8,7 +8,7 @@ import traceback
 import flet as ft
 from datetime import datetime
 from dependencias import *
-from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion, m8_recepcion_ccp, m9_desarrollador
+from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion, m8_recepcion_ccp, m9_desarrollador, m10_cargas
 os.environ["TZ"] = "America/Santiago"
 if hasattr(time, "tzset"):
     time.tzset()
@@ -1149,6 +1149,7 @@ def main(page: ft.Page):
         mae = m5_maestra.MaestraModulo(page, tarjetas_adaptables, kpis_adaptables)
         imp = m6_impresion.ImpresionModulo(page, tarjetas_adaptables, kpis_adaptables)
         ruteo = m7_ruteo_facturacion.RuteoFacturacionModulo(page, tarjetas_adaptables, kpis_adaptables)
+        cargas = m10_cargas.CargasCamionModulo(page, tarjetas_adaptables, kpis_adaptables)
         bodega_sesion_normalizada = str(getattr(page, "bodega_actual", "") or "").upper().replace("Ó", "O")
         es_bodega_concepcion = "CONCEPCION" in bodega_sesion_normalizada
         recep_ccp = (
@@ -1280,6 +1281,21 @@ def main(page: ft.Page):
                 ],
             ),
         ]
+
+        # Cargas de camión (script 40): después de Etiquetas, antes de Recepción Concepción
+        vistas_mapa.append(
+            (
+                "Cargas de camión\n(OT / OV)",
+                _ico("LOCAL_SHIPPING_OUTLINED", "LOCAL_SHIPPING_ROUNDED"),
+                cargas.vista,
+                cargas.refrescar,
+                cargas.sel_sub_cargas,
+                [
+                    ("1. OT por cargar y ajustes", _ico("INVENTORY_2_OUTLINED", "VIEW_IN_AR_OUTLINED")),
+                    ("2. Cargas de camión", _ico("LOCAL_SHIPPING_OUTLINED", "LOCAL_SHIPPING_ROUNDED")),
+                ],
+            )
+        )
 
         if es_bodega_concepcion and recep_ccp is not None:
             vistas_mapa.append(
@@ -1413,6 +1429,7 @@ def main(page: ft.Page):
             "PC_ADMIN_MAESTRA",
             "PC_RUTEO",
             "PC_IMPRESION",
+            "PC_CARGAS",
         ]
         if es_bodega_concepcion:
             codigos_mod.append("PC_RECEPCION_CCP")
