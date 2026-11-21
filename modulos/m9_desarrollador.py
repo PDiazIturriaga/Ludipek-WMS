@@ -16,6 +16,7 @@ import flet as ft
 
 import os
 import threading
+from pathlib import Path
 
 from dependencias import (supabase, UI, ui_boton, ui_kpi, ui_tabla, notificar_global, formatear_fecha_hora_chile,
                           obtener_bodega_activa, CONTEXTO_ERRORES_PC)
@@ -342,6 +343,32 @@ class DesarrolladorModulo:
                                                  content=ft.ProgressRing(width=24, height=24, stroke_width=2))]
         self._update()
         self._construir()
+
+    def _es_web(self) -> bool:
+        """El PC se está usando en el navegador (servidor Render) y no en el programa de Windows."""
+        return bool(getattr(self.page, "web", False)) or os.name != "nt"
+
+    async def _descargar_respaldo(self, ruta: str, borrar_del_servidor: bool = False):
+        """Envía el zip al computador del usuario (en el navegador, a la carpeta Descargas)."""
+        try:
+            if getattr(self, "_picker_resp", None) is None:
+                self._picker_resp = ft.FilePicker()
+                if hasattr(self.page, "services") and self._picker_resp not in self.page.services:
+                    self.page.services.append(self._picker_resp)
+                    self.page.update()
+            destino = await self._picker_resp.save_file(
+                dialog_title="Guardar respaldo del WMS", file_name=os.path.basename(ruta),
+                file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["zip"], src_bytes=Path(ruta).read_bytes())
+            notificar_global(self.page, f"Respaldo guardado en: {destino}" if destino else
+                             f"Respaldo {os.path.basename(ruta)} enviado al navegador: revise su carpeta Descargas.", "#047857")
+        except Exception as ex:
+            notificar_global(self.page, f"No se pudo descargar el respaldo: {_msg_error(ex)}", "#B91C1C")
+            return
+        if borrar_del_servidor:
+            try:
+                os.remove(ruta)       # en el servidor no debe quedar una copia de toda la base
+            except Exception:
+                pass
 
     def _update(self):
         try:
@@ -909,6 +936,9 @@ class DesarrolladorModulo:
                     msg = (f"Respaldo {r['estado']}: {r['tablas']} tablas, {_miles(r['filas'])} filas, "
                            f"{r['bytes'] / 1_048_576:.1f} MB en {r['segundos']} s.")
                     notificar_global(self.page, msg, "#047857" if r["estado"] == "OK" else "#B45309")
+                    if self._es_web():
+                        # En el navegador el zip quedó en el servidor: se envía al computador y se borra de allá
+                        self.page.run_task(self._descargar_respaldo, r["ruta"], True)
                 except Exception as ex:
                     notificar_global(self.page, f"El respaldo falló: {_msg_error(ex)}", "#B91C1C")
                 finally:
@@ -924,6 +954,16 @@ class DesarrolladorModulo:
             except Exception:
                 notificar_global(self.page, f"Carpeta: {CARPETA_RESPALDOS}", "#0284C7")
 
+        def descargar_ultimo(e=None):
+            try:
+                zips = sorted(f for f in os.listdir(CARPETA_RESPALDOS) if f.startswith("WMS_respaldo_") and f.endswith(".zip"))
+            except Exception:
+                zips = []
+            if not zips:
+                notificar_global(self.page, "No hay respaldos guardados en este equipo. Presione «Respaldar ahora».", "#B45309")
+                return
+            self.page.run_task(self._descargar_respaldo, os.path.join(CARPETA_RESPALDOS, zips[-1]), self._es_web())
+
         filas = [ft.DataRow(cells=[
             ft.DataCell(_t(formatear_fecha_hora_chile(h.get("creado_en")))),
             ft.DataCell(_chip(("OK", ESTADO["bueno"], ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED) if h.get("estado") == "OK"
@@ -938,9 +978,12 @@ class DesarrolladorModulo:
         ultimo = formatear_fecha_hora_chile(hist[0].get("creado_en")) if hist else "nunca"
         return [
             _tarjeta("Respaldo de datos", f"Último respaldo: {ultimo}. Descarga todas las tablas a un .zip (un CSV por tabla) "
-                     f"en {CARPETA_RESPALDOS}. Se conservan los últimos 30.", ft.Column([
+                     + ("a su computador (carpeta Descargas del navegador)." if self._es_web()
+                        else f"en {CARPETA_RESPALDOS}. Se conservan los últimos 30."), ft.Column([
                          ft.Row([ui_boton("Respaldar ahora", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, respaldar, "primario",
                                           disabled=self.respaldando),
+                                 ui_boton("Descargar último", ft.Icons.DOWNLOAD_ROUNDED, descargar_ultimo, "secundario")
+                                 if self._es_web() else
                                  ui_boton("Abrir carpeta", ft.Icons.FOLDER_OPEN_OUTLINED, abrir_carpeta, "secundario")], spacing=10),
                          self.barra_resp, self.lbl_resp,
                          ft.Text("Automático: programe en Windows (Programador de tareas) el archivo "

@@ -3,7 +3,8 @@
 Cada tabla del esquema public se descarga por lotes (wms_respaldo_lote) y se guarda como CSV
 dentro del zip, junto a un manifiesto con la cantidad de filas de cada tabla. Los zip quedan en
 la carpeta "respaldos" junto al programa (si esa carpeta está en OneDrive, quedan también en la
-nube) y se conservan los últimos 30.
+nube) y se conservan los últimos 30. Si el PC se usa en el navegador (versión web, servidor), el
+zip se descarga al computador del usuario y no queda en el servidor.
 
 Uso:
   · Desde el PC: Desarrollador > Respaldos > "Respaldar ahora".
@@ -21,7 +22,16 @@ import time
 import zipfile
 from datetime import datetime
 
-CARPETA_RESPALDOS = os.path.abspath("respaldos")
+def _carpeta_programa() -> str:
+    """Carpeta del programa (la del WMS.exe o la de main.py), sin importar desde dónde se abrió."""
+    import sys
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+# Siempre en LUDIPEK_WMS_PC\respaldos (antes dependía de la carpeta desde donde se abría el programa)
+CARPETA_RESPALDOS = os.path.join(_carpeta_programa(), "respaldos")
 CONSERVAR = 30
 LOTE = 3000
 
