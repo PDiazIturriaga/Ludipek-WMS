@@ -166,6 +166,8 @@ class PutawayModulo:
             # Zonas de arena (posiciones de piso, 2 pallets apilados): MK/BE = arena, ME = mermas de arena
             if ubi == "FARMACIA":
                 return ("FARMACIA", "PICKING FARMACIA", 1)
+            if ubi == "ESTANTE-GIWI":          # estante provisorio de picking Giwi (script 41)
+                return ("ESTANTE GIWI", "PICKING GIWI", 1)
             m_arena = re.match(r"^(MK|ME|BE)-\d{2}-\d{2}$", ubi)
             if m_arena:
                 return (ZONAS_ARENA[m_arena.group(1)], "ARENA (PISO)", 0)
@@ -882,6 +884,10 @@ class PutawayModulo:
             items_fa = [x for x in stock_en_racks if x["rack"] == "FARMACIA"]
             if pos_por_rack.get("FARMACIA") or items_fa:
                 zonas.append(tarjeta_zona("FARMACIA", "Farmacia", ft.Icons.MEDICAL_SERVICES_OUTLINED, "#F472B6", items_fa))
+            # Estante provisorio de Giwi (script 41)
+            items_gw = [x for x in stock_en_racks if x["rack"] == "ESTANTE GIWI"]
+            if pos_por_rack.get("ESTANTE GIWI") or items_gw:
+                zonas.append(tarjeta_zona("ESTANTE GIWI", "Estante Giwi", ft.Icons.SHELVES, "#60A5FA", items_gw))
             fila_racks.controls = tarjetas
             fila_zonas.controls = zonas
             lbl_dig_ocupacion.value = f"{int(round(total_ocup * 100 / total_pos))}%" if total_pos else "—"
