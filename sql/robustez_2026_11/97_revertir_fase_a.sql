@@ -90,6 +90,18 @@ drop function if exists public.wms_max_lpn_rango(text, bigint, bigint);
 drop function if exists public.wms_dashboard_resumen(text, integer);
 -- 30: la función wms_tareas_conteo vuelve a la versión del 20 ejecutando ese script
 drop function if exists public.wms_cerrar_picking_farmacia(bigint, jsonb, text);
+drop function if exists public.wms_cerrar_picking_ot(bigint, jsonb, text);
+drop function if exists public.wms_ot_cerrar_pallet(bigint, text);
+drop function if exists public.wms_ot_anular_caja(bigint, text, text);
+drop function if exists public.wms_ot_registrar_caja(bigint, bigint, text, text, integer, text, text, text, text);
+drop function if exists public.wms_ot_estado(bigint, text);
+drop function if exists public.wms_ot_estado_sin_abrir(bigint);
+drop function if exists public.wms_ot_pallet_abierto(bigint, text);
+drop function if exists public.wms_es_ot_traslado(text);
+drop function if exists public.wms_picking_fuera_de_lugar(text, text);
+drop function if exists public.wms_consolidar_picking(text, bigint[], text);
+drop table if exists public.wms_ot_cajas;
+drop table if exists public.wms_ot_pallets;
 drop function if exists public.wms_es_pedido_farmacia(text);
 drop function if exists public.wms_salud_sistema();
 drop function if exists public.wms_preparacion_sesion();

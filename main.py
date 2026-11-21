@@ -1239,6 +1239,7 @@ def main(page: ft.Page):
                     ("Conciliación WMS vs NetSuite", _ico("COMPARE_ARROWS_ROUNDED", "RULE_ROUNDED")),
                     ("Trazabilidad", _ico("HISTORY_ROUNDED", "QR_CODE_SCANNER")),
                     ("Alertas y desvíos", _ico("WARNING_AMBER_ROUNDED", "CROP_FREE")),
+                    ("Consolidar picking", _ico("MOVE_DOWN_ROUNDED", "SWAP_VERT_ROUNDED")),
                 ],
             ),
             (

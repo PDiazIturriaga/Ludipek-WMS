@@ -158,6 +158,10 @@ class RecepcionTrasladosCcpModulo:
                               spacing=4, tight=True, expand=True),
                     ft.Row([
                         self.btn_cerrar_ot,
+                        ui_boton("Acta de recepción", ft.Icons.DESCRIPTION_OUTLINED, lambda e: self._acta_pdf(), "secundario",
+                                 tooltip="PDF con enviado vs recibido, diferencias, lotes y motivos (para imprimir y firmar)"),
+                        ui_boton("Fotos de la fecha", ft.Icons.PHOTO_LIBRARY_OUTLINED, lambda e: self._dialogo_fotos(), "secundario",
+                                 tooltip="Fotos de la fecha de cada caja tomadas en el picking (script 38)"),
                         ui_boton("Exportar", ft.Icons.DOWNLOAD_ROUNDED, lambda e: self._exportar_detalle(), "secundario"),
                         ui_boton("Actualizar", ft.Icons.REFRESH_ROUNDED, lambda e: self._recargar_detalle(), "secundario"),
                     ], spacing=8, wrap=True),
@@ -274,6 +278,86 @@ class RecepcionTrasladosCcpModulo:
         self.contenedor.content = self.sub_detalle
         self.page.update()
 
+    def _dialogo_fotos(self):
+        """Fotos de la fecha de cada caja, agrupadas por pallet, tomadas al pickear la OT en Santiago."""
+        orden_id = (self.detalle or {}).get("orden_id")
+        if not orden_id:
+            return
+        try:
+            cajas = supabase.table("wms_ot_cajas").select("*").eq("orden_id", int(orden_id)).is_("anulado_en", "null") \
+                .order("lpn").order("id").execute().data or []
+        except Exception as ex:
+            msg = str(getattr(ex, "message", None) or ex)
+            if "wms_ot_cajas" in msg:
+                msg = "esta OT no se pickeó con fotos (o falta ejecutar 38_ot_picking_pallets_fotos.sql)"
+            self._notificar(f"Sin fotos: {msg}", "#B45309")
+            return
+        rutas = [c["foto_path"] for c in cajas if c.get("foto_path")]
+        urls = {}
+        if rutas:
+            try:
+                firmadas = supabase.storage.from_("fotos-picking").create_signed_urls(rutas, 3600) or []
+                for f in firmadas:
+                    ruta = f.get("path") or f.get("name")
+                    url = f.get("signedURL") or f.get("signedUrl") or f.get("signed_url")
+                    if ruta and url:
+                        urls[ruta] = url if url.startswith("http") else f"{SUPABASE_URL}/storage/v1{url}"
+            except Exception as ex:
+                self._notificar(f"No se pudieron abrir las fotos: {_error(ex)}", "#B45309")
+        por_lpn = {}
+        for c in cajas:
+            por_lpn.setdefault(c.get("lpn") or "-", []).append(c)
+        bloques = []
+        for lpn, lista in por_lpn.items():
+            tarjetas = []
+            for c in lista:
+                url = urls.get(c.get("foto_path") or "")
+                tarjetas.append(ft.Container(
+                    width=170, padding=8, border_radius=8, bgcolor=UI["card_alt"], border=ft.Border.all(1, UI["borde"]),
+                    content=ft.Column([
+                        ft.Image(src=url, width=154, height=116) if url else
+                        ft.Container(width=154, height=116, border_radius=6, bgcolor=UI["bg"], alignment=ft.Alignment.CENTER,
+                                     content=ft.Text("sin foto", size=11, color=UI["texto_3"])),
+                        ft.Text(f"{c.get('sku')} · {c.get('unidades')} UN", size=11.5, weight=ft.FontWeight.W_600, color=UI["texto"]),
+                        ft.Text(f"Lote {c.get('lote')} · vence {c.get('fecha_vencimiento_cl') or 'S/F'}", size=10.5, color=UI["texto_2"]),
+                        ft.Text(f"Leído: {c.get('fecha_leida') or '-'} · {c.get('usuario') or ''}", size=10.5, color=UI["texto_3"]),
+                    ], spacing=3, tight=True),
+                    tooltip="Clic para ver la foto en grande" if url else None,
+                    on_click=(lambda e, u=url: self._abrir_url(u)) if url else None, ink=bool(url),
+                ))
+            bloques.append(ft.Column([
+                ft.Text(f"{lpn} · {len(lista)} cajas · {sum(int(x.get('unidades') or 0) for x in lista)} UN",
+                        size=13, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                ft.Row(tarjetas, wrap=True, spacing=8, run_spacing=8),
+            ], spacing=6))
+        if not bloques:
+            bloques = [ft.Text("Esta OT no tiene cajas registradas con foto (se pickeó con el flujo anterior).",
+                               size=12, color=UI["texto_2"])]
+
+        def cerrar(e=None):
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                pass
+
+        self.page.show_dialog(ft.AlertDialog(
+            title=ft.Text(f"Fotos de la fecha · {(self.detalle or {}).get('numero_ot') or ''}", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=760, height=560, content=ft.Column(bloques, spacing=14, scroll=ft.ScrollMode.AUTO)),
+            actions=[ui_boton("Cerrar", None, cerrar, "texto")],
+            actions_alignment=ft.MainAxisAlignment.END))
+
+    def _abrir_url(self, url):
+        import inspect
+        try:
+            if inspect.iscoroutinefunction(self.page.launch_url):
+                async def _ir():
+                    await self.page.launch_url(url)
+                self.page.run_task(_ir)
+            else:
+                self.page.launch_url(url)
+        except Exception:
+            pass
+
     def _recargar_detalle(self):
         if self.detalle:
             self.abrir_detalle(self.detalle.get("orden_id"))
@@ -356,6 +440,9 @@ class RecepcionTrasladosCcpModulo:
                 lote_env = f"{l.get('lote') or 'S/L'} · {l.get('vencimiento') or 'S/F'}"
                 lote_rec = ("—" if l.get("lote_recibido") is None
                             else f"{l.get('lote_recibido')} · {l.get('vencimiento_recibido') or 'S/F'}")
+                if l.get("partes"):   # varios lotes recibidos en la misma línea (script 39)
+                    lote_rec = " + ".join(f"{p.get('lote')} · {p.get('vencimiento') or 'S/F'} ({p.get('unidades')} UN)"
+                                          for p in (l.get("partes") or []))
                 filas.append(ft.DataRow(cells=[
                     ft.DataCell(ft.Text(str(p.get("lpn") or ""), size=12, color=UI["texto_2"])),
                     ft.DataCell(ft.Text(str(l.get("sku") or ""), size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])),
@@ -454,7 +541,10 @@ class RecepcionTrasladosCcpModulo:
                     "SKU": l.get("sku"), "Descripción": l.get("descripcion"),
                     "Lote enviado": l.get("lote"), "Venc. enviado": l.get("vencimiento"),
                     "UN enviadas": _n(l.get("unidades")),
-                    "Lote recibido": l.get("lote_recibido"), "Venc. recibido": l.get("vencimiento_recibido"),
+                    "Lote recibido": (" + ".join(f"{p.get('lote')} ({p.get('unidades')} UN)" for p in l.get("partes"))
+                                      if l.get("partes") else l.get("lote_recibido")),
+                    "Venc. recibido": (" + ".join(str(p.get("vencimiento") or "S/F") for p in l.get("partes"))
+                                       if l.get("partes") else l.get("vencimiento_recibido")),
                     "UN recibidas": _n(l.get("unidades_recibidas")) if res != "PENDIENTE" else None,
                     "Diferencia UN": (_n(l.get("unidades_recibidas")) - _n(l.get("unidades"))) if res != "PENDIENTE" else None,
                     "Resultado": NOMBRE_RESULTADO.get(res, res),
@@ -470,6 +560,22 @@ class RecepcionTrasladosCcpModulo:
         os.makedirs("reportes_traslados", exist_ok=True)
         ruta = os.path.join("reportes_traslados", f"{nombre}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
         pd.DataFrame(filas).to_excel(ruta, index=False)
+        descargar_o_abrir_archivo(self.page, ruta)
+
+    def _acta_pdf(self):
+        if not self.detalle:
+            return
+        try:
+            from servicios.acta_traslado import generar_pdf_acta_traslado
+            datos = generar_pdf_acta_traslado(self.detalle, str(getattr(self.page, "usuario_actual", "") or ""))
+        except Exception as ex:
+            self._notificar(f"No se pudo generar el acta: {_error(ex)}", "#B91C1C")
+            return
+        os.makedirs("reportes_traslados", exist_ok=True)
+        ruta = os.path.join("reportes_traslados",
+                            f"Acta_Recepcion_{self.detalle.get('numero_ot') or 'OT'}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf")
+        with open(ruta, "wb") as f:
+            f.write(datos)
         descargar_o_abrir_archivo(self.page, ruta)
 
     def _exportar_detalle(self):

@@ -7,6 +7,7 @@ from datetime import datetime
 import pandas as pd
 import flet as ft
 from dependencias import *
+from modulos.m4_consolidar_picking import PanelConsolidarPicking
 
 
 def clave_inventario_wms(fila: dict) -> tuple:
@@ -1771,7 +1772,9 @@ class InventarioModulo:
         ], spacing=12)
 
         # ---------- Armado ----------
-        vistas_inv = [vista_0_consulta, vista_1_tareas, vista_2_resultados, vista_3_conciliacion, vista_4_trazabilidad, vista_5_desvios]
+        panel_consolidar = PanelConsolidarPicking(page)
+        vistas_inv = [vista_0_consulta, vista_1_tareas, vista_2_resultados, vista_3_conciliacion, vista_4_trazabilidad, vista_5_desvios,
+                      panel_consolidar.vista]
         titulos_inv = [
             ("Consulta de stock", "Cuánto hay de un producto y dónde está, con lo comprometido en OV."),
             ("Tareas de conteo", "Asigne pasillos o SKU a un operador; las ve en su celular."),
@@ -1779,6 +1782,7 @@ class InventarioModulo:
             ("Conciliación WMS vs NetSuite", "Diferencias SKU a SKU entre el stock físico y el ERP."),
             ("Trazabilidad", "Historia completa de un pallet o de una ubicación."),
             ("Alertas y desvíos", "Incidencias reportadas desde los terminales RF."),
+            ("Consolidar picking", "Stock en una ubicación de picking que no es la asignada a su SKU: muévalo a la correcta."),
         ]
         contenedor_subvista_inv = ft.Container(content=vista_0_consulta)
         lbl_titulo_inv = ft.Text(titulos_inv[0][0], size=18, weight=ft.FontWeight.W_700, color=UI["texto"])
@@ -1791,6 +1795,8 @@ class InventarioModulo:
             contenedor_subvista_inv.content = vistas_inv[idx]
             lbl_titulo_inv.value, lbl_sub_inv.value = titulos_inv[idx]
             page.update()
+            if idx == 6:
+                panel_consolidar.refrescar()
 
         encabezado = ft.Row([
             ft.Row([ft.Icon(ft.Icons.INVENTORY_OUTLINED, size=24, color=UI["acento"]),

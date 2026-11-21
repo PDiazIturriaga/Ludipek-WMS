@@ -441,6 +441,15 @@ values
  $q$select coalesce('último: ' || to_char(max(creado_en) at time zone 'America/Santiago', 'DD-MM-YYYY HH24:MI'), 'nunca')
       from public.wms_respaldos where estado = 'OK'$q$,
  'Haga un respaldo en Desarrollador > Respaldos o programe el respaldo automático (ver GUIA_RESPALDO_Y_PRUEBAS.md).'),
+(808, 'UBICACIONES', 'Ubicaciones de picking (nivel 01) vacías (no entran en la auditoría de vacías)', 'INFO',
+ $q$select count(*) from public.bodega_ubicaciones u where public.wms_es_ubicacion_picking(u.codigo_ubicacion)
+      and not exists (select 1 from public.bodega_inventario_ubicacion i where i.bodega = u.bodega
+                        and upper(i.codigo_ubicacion) = upper(u.codigo_ubicacion) and i.cantidad_unidades > 0)$q$,
+ $q$select u.codigo_ubicacion || ' (' || u.bodega || ')' from public.bodega_ubicaciones u where public.wms_es_ubicacion_picking(u.codigo_ubicacion)
+      and not exists (select 1 from public.bodega_inventario_ubicacion i where i.bodega = u.bodega
+                        and upper(i.codigo_ubicacion) = upper(u.codigo_ubicacion) and i.cantidad_unidades > 0)
+    order by 1$q$,
+ 'Son posiciones de picking sin stock: reponga desde la reserva (Movimiento a picking) si el SKU asignado lo necesita.'),
 (807, 'SEGURIDAD', 'Equipos PC que trabajaron en los últimos 7 días con la llave maestra (service_role)', 'ALTO',
  $q$select count(distinct coalesce(usuario, '-') || equipo) from public.wms_pc_conexiones
       where creado_en > now() - interval '7 days' and modo = 'LLAVE_MAESTRA'$q$,
