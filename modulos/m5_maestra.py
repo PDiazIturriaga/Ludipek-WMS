@@ -691,6 +691,13 @@ class MaestraModulo:
                         )
                     )
 
+            if filtro and not nuevas_filas and not getattr(renderizar_tabla_maestra, "_buscando", False):
+                renderizar_tabla_maestra._buscando = True
+                try:
+                    if buscar_sku_en_servidor(filtro):
+                        return renderizar_tabla_maestra()
+                finally:
+                    renderizar_tabla_maestra._buscando = False
             tabla_maestra_skus.rows = nuevas_filas
             lbl_kpi_sku_total.value = str(len(copia_skus))
             lbl_kpi_sku_farma.value = str(farma_cnt)
@@ -702,21 +709,36 @@ class MaestraModulo:
         def cargar_maestra_skus(e=None):
             nonlocal skus_db, columnas_reales_maestra
             with lock_datos:
-                acumulado = []
-                paso = 1000
-                for offset in range(0, 5000, paso):
-                    try:
-                        res = supabase.table("maestra_sku").select("*").range(offset, offset + paso - 1).execute()
-                        lote = res.data or []
-                        acumulado.extend(lote)
-                        if len(lote) < paso:
-                            break
-                    except Exception:
-                        break
-                skus_db = acumulado
+                # Todas las filas, ordenadas (sin orden la paginación puede saltarse o repetir SKU) y sin tope:
+                # antes se cortaba si Supabase devolvía menos de 1.000 por página (límite "Max rows" del proyecto).
+                try:
+                    acumulado = leer_tabla_paginada(lambda: supabase.table("maestra_sku").select("*").order("sku"))
+                except Exception as ex:
+                    acumulado = None
+                    notificar(f"No se pudo leer la maestra completa: {getattr(ex, 'message', None) or ex}", "#B91C1C")
+                if acumulado is not None:
+                    skus_db = acumulado
                 if skus_db:
                     columnas_reales_maestra = set(skus_db[0].keys())
             renderizar_tabla_maestra()
+
+        def buscar_sku_en_servidor(filtro: str) -> bool:
+            """Si lo buscado no está en lo cargado, se busca directo en maestra_sku (SKU, descripción o código)."""
+            nonlocal skus_db
+            limpio = "".join(c for c in filtro if c.isalnum() or c in "-_ .")
+            if len(limpio) < 3:
+                return False
+            try:
+                res = (supabase.table("maestra_sku").select("*")
+                       .or_(f"sku.ilike.*{limpio}*,descripcion.ilike.*{limpio}*,codigo_barras.ilike.*{limpio}*")
+                       .limit(300).execute().data or [])
+            except Exception:
+                return False
+            conocidos = {str(x.get("sku") or "").strip().upper() for x in skus_db}
+            nuevos = [x for x in res if str(x.get("sku") or "").strip().upper() not in conocidos]
+            if nuevos:
+                skus_db = list(skus_db) + nuevos
+            return bool(nuevos)
 
         def guardar_sku_maestra(e=None):
             sku_c = (txt_sku_codigo.value or "").strip().upper()
