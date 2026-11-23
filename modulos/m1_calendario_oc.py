@@ -39,6 +39,23 @@ ESTADOS = {
 COLOR_CITA = "#A78BFA"
 
 
+def _valor(v):
+    """Texto limpio para la base: los vacíos de pandas (NaN, NaT, None) van como null, no como 'nan'."""
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    t = str(v).strip()
+    if t.lower() in ("", "nan", "nat", "none", "null"):
+        return None
+    if t.endswith(".0") and t[:-2].isdigit():      # ids y cantidades que pandas dejó como float
+        t = t[:-2]
+    return t
+
+
 def _num_oc(txt) -> str:
     return re.sub(r"^(OC|PO)[\s\-#]*", "", str(txt or "").strip().upper())
 
@@ -296,9 +313,9 @@ class PanelCalendarioOc:
                           AND t.trandate <= TO_DATE('{fin.isoformat()}', 'YYYY-MM-DD')
                         GROUP BY tl.transaction""")
                     if dfl is not None and len(dfl):
-                        por_id = {str(r.get("ns_id")): r for r in dfl.to_dict("records")}
+                        por_id = {_valor(r.get("ns_id")): r for r in dfl.to_dict("records")}
                         for f in filas:
-                            r = por_id.get(str(f.get("ns_id")))
+                            r = por_id.get(_valor(f.get("ns_id")))
                             if r:
                                 f["unidades"], f["lineas"] = r.get("unidades"), r.get("lineas")
                 except Exception:
@@ -318,13 +335,13 @@ class PanelCalendarioOc:
                             filas += dfx.where(pd.notna(dfx), None).to_dict("records")
                 except Exception:
                     pass
-                limpio = [{k: (str(v) if v is not None else None) for k, v in f.items()} for f in filas]
+                limpio = [{k: _valor(v) for k, v in f.items()} for f in filas]
                 res = supabase.rpc("wms_oc_sincronizar", {"p_filas": limpio}).execute().data or {}
                 self._meses_leidos.add((ini.year, ini.month))
                 # ¿Cada OC ya tiene su recepción de artículos (Item Receipt) en NetSuite?
                 msg_r = ""
                 try:
-                    ids = sorted({str(f.get("ns_id")) for f in filas if str(f.get("ns_id") or "").isdigit()})
+                    ids = sorted({_valor(f.get("ns_id")) for f in filas if (_valor(f.get("ns_id")) or "").isdigit()})
                     marcas = []
                     for i in range(0, len(ids), 200):
                         lote = ids[i:i + 200]
@@ -335,10 +352,10 @@ class PanelCalendarioOc:
                             GROUP BY t.createdfrom""")
                         if dfr is None:
                             raise RuntimeError(getattr(conexion_erp, "ULTIMO_ERROR_NETSUITE", "") or "sin respuesta")
-                        por_po = {str(r.get("po_id")): r for r in dfr.to_dict("records")} if len(dfr) else {}
+                        por_po = {_valor(r.get("po_id")): r for r in dfr.to_dict("records")} if len(dfr) else {}
                         for pid in lote:
                             r = por_po.get(pid) or {}
-                            marcas.append({"ns_id": pid, "recepciones": str(r.get("recepciones") or 0), "fecha": r.get("fecha")})
+                            marcas.append({"ns_id": pid, "recepciones": _valor(r.get("recepciones")) or "0", "fecha": _valor(r.get("fecha"))})
                     if marcas:
                         supabase.rpc("wms_oc_marcar_recepcion_ns", {"p_filas": marcas}).execute()
                         msg_r = f" Recepción en NetSuite revisada en {len(marcas)} OC."

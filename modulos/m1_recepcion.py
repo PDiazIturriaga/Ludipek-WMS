@@ -2018,8 +2018,8 @@ class RecepcionModulo:
             )
             lbl_estado = ft.Text(
                 f"Adjunto: {nombre_pdf}" if smtp_listo else
-                "Envío directo no configurado (faltan SMTP_USER / SMTP_PASS en .env). "
-                "Use 'Abrir en Outlook' y adjunte el acta descargada.",
+                "Envío directo no configurado (faltan SMTP_USER / SMTP_PASS). 'Enviar' abre Outlook con el "
+                "mensaje listo y descarga el acta para adjuntarla.",
                 size=11, color="#94A3B8" if smtp_listo else "#FBBF24",
             )
             barra_progreso = ft.ProgressBar(visible=False, color=ACCENT_CYAN)
@@ -2042,22 +2042,37 @@ class RecepcionModulo:
             def descargar_acta(ev=None):
                 descargar_archivo_web(ruta, f"Acta de recepción OC {cod_po_str}")
 
-            async def abrir_outlook(ev=None):
+            def _url_outlook():
+                """mailto con lo escrito en el diálogo (Outlook u otro programa de correo del equipo)."""
+                para = _lista_correos(txt_para.value)
+                cc = _lista_correos(txt_cc.value)
+                cuerpo = (txt_mensaje.value or "")[:1500]  # los clientes de correo cortan enlaces largos
+                return (
+                    f"mailto:{','.join(para)}?subject={urllib.parse.quote(txt_asunto.value or '')}"
+                    + (f"&cc={','.join(cc)}" if cc else "")
+                    + f"&body={urllib.parse.quote(cuerpo)}"
+                )
+
+            def _actualizar_url_outlook(ev=None):
+                # El botón lleva el enlace: el navegador abre Outlook directamente al hacer clic
+                # (funciona con cualquier versión de Flet; page.launch_url ya no existe en las nuevas)
+                url = _url_outlook()
+                for b in botones_outlook:
+                    b.url = url
+                    try:
+                        b.update()
+                    except Exception:
+                        pass
+
+            def abrir_outlook(ev=None):
                 para, cc, err = _validar()
                 if err:
                     lbl_estado.value, lbl_estado.color = err, "#F87171"
                     page.update()
                     return
-                cuerpo = (txt_mensaje.value or "")[:1500]  # los clientes de correo cortan enlaces largos
-                url = (
-                    f"mailto:{','.join(para)}?subject={urllib.parse.quote(txt_asunto.value or '')}"
-                    + (f"&cc={','.join(cc)}" if cc else "")
-                    + f"&body={urllib.parse.quote(cuerpo)}"
-                )
-                res = page.launch_url(url)
-                if inspect.iscoroutine(res):
-                    await res
-                lbl_estado.value = "Outlook abierto con el mensaje. Adjunte el acta (botón 'Descargar acta') y envíe."
+                descargar_acta()      # para adjuntarla en Outlook
+                lbl_estado.value = ("Outlook se abre con el mensaje listo. El acta se está descargando: adjúntela y envíe. "
+                                    "Si Outlook no se abrió, revise que sea su programa de correo predeterminado.")
                 lbl_estado.color = "#34D399"
                 page.update()
 
@@ -2105,7 +2120,8 @@ class RecepcionModulo:
                         detalle = str(ex_s)
                         if "535" in detalle or "Authentication" in detalle:
                             detalle = "usuario o contraseña SMTP rechazados (en Microsoft 365 debe estar habilitado 'SMTP autenticado' para ese buzón)"
-                        lbl_estado.value, lbl_estado.color = f"No se pudo enviar: {detalle}", "#F87171"
+                        lbl_estado.value, lbl_estado.color = (
+                            f"No se pudo enviar: {detalle}. Use 'Abrir en Outlook' para enviarlo desde su correo.", "#F87171")
                         btn_enviar.disabled = False
                         barra_progreso.visible = False
                     try:
@@ -2115,10 +2131,19 @@ class RecepcionModulo:
 
                 threading.Thread(target=tarea, daemon=True).start()
 
-            btn_enviar = ui_boton(
-                "Enviar", ft.Icons.SEND_ROUNDED, enviar_directo, "primario", disabled=not smtp_listo,
-                tooltip=None if smtp_listo else "Configure SMTP_USER y SMTP_PASS en el archivo .env",
-            )
+            btn_outlook = ui_boton("Abrir en Outlook", ft.Icons.OPEN_IN_NEW_ROUNDED, abrir_outlook, "secundario",
+                                   tooltip="Abre su correo con el mensaje listo y descarga el acta para adjuntarla")
+            if smtp_listo:
+                btn_enviar = ui_boton("Enviar", ft.Icons.SEND_ROUNDED, enviar_directo, "primario")
+                botones_outlook = [btn_outlook]
+            else:
+                # sin SMTP, "Enviar" = enviar desde Outlook (abre el correo y descarga el acta)
+                btn_enviar = ui_boton("Enviar con Outlook", ft.Icons.SEND_ROUNDED, abrir_outlook, "primario",
+                                      tooltip="Abre Outlook con el mensaje listo y descarga el acta para adjuntarla")
+                botones_outlook = [btn_outlook, btn_enviar]
+            for campo_mail in (txt_para, txt_cc, txt_asunto, txt_mensaje):
+                campo_mail.on_change = _actualizar_url_outlook
+            _actualizar_url_outlook()
 
             dlg_mail = ft.AlertDialog(
                 modal=True,
@@ -2135,7 +2160,7 @@ class RecepcionModulo:
                 actions=[
                     ui_boton("Cancelar", None, lambda ev: page.pop_dialog(), "texto"),
                     ui_boton("Descargar acta", ft.Icons.DOWNLOAD_ROUNDED, descargar_acta, "secundario"),
-                    ui_boton("Abrir en Outlook", ft.Icons.OPEN_IN_NEW_ROUNDED, abrir_outlook, "secundario"),
+                    *([btn_outlook] if smtp_listo else []),
                     btn_enviar,
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,
