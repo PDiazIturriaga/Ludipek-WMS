@@ -922,7 +922,17 @@ class MonitorUsuariosColaModulo:
         self.page.update()
 
 
+def _iniciar_servicios_de_fondo():
+    """Procesos en segundo plano del programa (una sola vez, no por pantalla)."""
+    try:
+        from servicios.reportes_recepcion import iniciar_envio_automatico
+        iniciar_envio_automatico()          # reporte de recepción por correo (script 46)
+    except Exception as ex:
+        print(f"[SERVICIOS] reportes de recepción no iniciados: {ex}")
+
+
 def main(page: ft.Page):
+    _iniciar_servicios_de_fondo()
     page.title = "LUDIPEK WMS | Cloud Planning" + ("  ·  AMBIENTE DE PRUEBAS" if AMBIENTE == "PRUEBAS" else "")
 
     def franja_ambiente():
@@ -1187,6 +1197,8 @@ def main(page: ft.Page):
                     ("Control de calidad", _ico("VERIFIED_USER_OUTLINED", "CENTER_FOCUS_STRONG_OUTLINED")),
                     ("Ajustes de OC y pallets", _ico("EDIT_NOTE_ROUNDED", "CROP_FREE_OUTLINED")),
                     ("Conciliar recepciones sin OC", _ico("LINK_ROUNDED", "COMPARE_ARROWS_ROUNDED")),
+                    ("Calendario de OC", _ico("CALENDAR_MONTH_OUTLINED", "EVENT_NOTE_OUTLINED")),
+                    ("Panel de recepciones", _ico("DASHBOARD_CUSTOMIZE_OUTLINED", "MOVE_TO_INBOX_ROUNDED")),
                 ],
             ),
             (

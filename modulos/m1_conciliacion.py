@@ -1,11 +1,12 @@
 """Recepción > Conciliar recepciones sin OC.
 
 Cuando un contenedor llega antes de que exista la OC se recibe como "Recepción directa sin OC".
-Cuando la OC se crea, aquí se eligen esos pallets (por día de recepción) y se asignan a la OC
+Cuando la OC se crea, aquí se eligen esos pallets (por contenedor o por día de recepción) y se asignan a la OC
 seleccionada en la barra superior. Se muestra el cruce por SKU antes de confirmar, y cada
 conciliación queda registrada y se puede deshacer mientras la OC no esté cerrada.
 Requiere 33_conciliacion_sin_oc.sql.
 """
+import threading
 from datetime import datetime, timedelta
 
 import flet as ft
@@ -96,6 +97,16 @@ class PanelConciliacionSinOc:
         self.k_avance_det = ft.Text("", size=11, color=UI["texto_2"])
 
         self.fila_dias = ft.Row(spacing=8, wrap=True, run_spacing=8)
+        self._lock_pintar = threading.Lock()    # la barra "En vivo" y los clics pintan desde hilos distintos
+        self.agrupar = "CONTENEDOR"
+        self.dd_agrupar = ft.Dropdown(
+            label="Agrupar por", dense=True, width=170, value=self.agrupar,
+            options=[ft.DropdownOption(key="CONTENEDOR", text="Contenedor"), ft.DropdownOption(key="DIA", text="Día")],
+            bgcolor=UI["input"], border_color=UI["borde"], focused_border_color=UI["acento"],
+            text_style=ft.TextStyle(size=12, color=UI["texto"]), border_radius=6,
+            on_select=lambda e: self._cambiar_agrupar(),
+        )
+        self.lbl_grupos = ft.Text("", size=11, color=UI["texto_2"])
 
         self.tabla_lpn = ft.DataTable(columns=[
             _col(""), _col("Recibido"), _col("LPN"), _col("SKU"), _col("Descripción"), _col("Lote / venc."),
@@ -131,8 +142,8 @@ class PanelConciliacionSinOc:
                     ui_boton("Buscar", ft.Icons.SEARCH_ROUNDED, lambda e: self.refrescar(forzar=True), "secundario"),
                     self.txt_buscar, self.chk_solo_oc,
                 ], spacing=8, wrap=True, run_spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Text("Días con recepciones sin OC (clic en un día para marcar o desmarcar todos sus pallets):",
-                        size=11, color=UI["texto_2"]),
+                ft.Row([self.dd_agrupar, self.lbl_grupos], spacing=10,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True),
                 self.fila_dias,
                 ft.Row([
                     ui_boton("Sugerir según la OC", ft.Icons.AUTO_FIX_HIGH_ROUNDED, self._sugerir, "secundario",
@@ -285,8 +296,20 @@ class PanelConciliacionSinOc:
             self.seleccion.discard(lpn)
         self._pintar()
 
-    def _toggle_dia(self, dia):
-        lpns = {str(f["lpn"]) for f in self._visibles() if str(f.get("dia")) == dia}
+    @staticmethod
+    def _cont(f) -> str:
+        return (str(f.get("contenedor") or "").replace(" ", "").upper()) or "SIN CONTENEDOR"
+
+    def _clave_grupo(self, f) -> str:
+        return self._cont(f) if self.agrupar == "CONTENEDOR" else str(f.get("dia"))
+
+    def _cambiar_agrupar(self):
+        self.agrupar = self.dd_agrupar.value or "CONTENEDOR"
+        self._pintar()
+
+    def _toggle_dia(self, clave):
+        """Marca o desmarca todos los pallets visibles del grupo (contenedor o día)."""
+        lpns = {str(f["lpn"]) for f in self._visibles() if self._clave_grupo(f) == clave}
         if lpns and lpns <= self.seleccion:
             self.seleccion -= lpns
         else:
@@ -331,42 +354,75 @@ class PanelConciliacionSinOc:
     def _seleccionados(self):
         return [f for f in self.filas if str(f.get("lpn")) in self.seleccion]
 
+    @staticmethod
+    def _dia_txt(dia) -> str:
+        try:
+            return datetime.strptime(str(dia), "%Y-%m-%d").strftime("%d-%m-%Y")
+        except Exception:
+            return str(dia or "")
+
     def _pintar(self):
+        with self._lock_pintar:
+            self._pintar_interno()
+
+    def _pintar_interno(self):
         visibles = self._visibles()
         sel = self._seleccionados()
+        por_contenedor = self.agrupar == "CONTENEDOR"
+        cont_oc = str(self.cabecera.get("contenedor_referencia") or "").replace(" ", "").upper()
 
-        # Días
-        por_dia = {}
+        # Grupos: por contenedor (con sus días) o por día
+        grupos = {}
         for f in visibles:
-            d = por_dia.setdefault(str(f.get("dia")), {"lpns": set(), "un": 0, "sel": set()})
-            d["lpns"].add(str(f["lpn"]))
+            lpn = str(f["lpn"])
+            d = grupos.setdefault(self._clave_grupo(f), {"lpns": set(), "un": 0, "sel": set(), "dias": set(), "conts": set()})
+            d["lpns"].add(lpn)
             d["un"] += int(f.get("unidades") or 0)
-            if str(f["lpn"]) in self.seleccion:
-                d["sel"].add(str(f["lpn"]))
-        self.fila_dias.controls = []
-        for dia in sorted(por_dia):
-            d = por_dia[dia]
+            d["dias"].add(str(f.get("dia") or ""))
+            d["conts"].add(self._cont(f))
+            if lpn in self.seleccion:
+                d["sel"].add(lpn)
+
+        def orden(k):
+            if por_contenedor:      # el contenedor de la OC primero, "sin contenedor" al final, luego por fecha
+                return (0 if k == cont_oc else 2 if k == "SIN CONTENEDOR" else 1, min(grupos[k]["dias"]), k)
+            return (k,)
+
+        chips = []
+        for clave in sorted(grupos, key=orden):
+            d = grupos[clave]
             completo = d["sel"] == d["lpns"]
-            try:
-                dia_txt = datetime.strptime(dia, "%Y-%m-%d").strftime("%d-%m-%Y")
-            except Exception:
-                dia_txt = dia
-            self.fila_dias.controls.append(ft.Container(
+            dias = sorted(x for x in d["dias"] if x)
+            if por_contenedor:
+                titulo = clave + ("  · contenedor de la OC" if cont_oc and clave == cont_oc else "")
+                detalle_extra = (self._dia_txt(dias[0]) + (f" al {self._dia_txt(dias[-1])}" if len(dias) > 1 else "")) if dias else ""
+            else:
+                titulo = self._dia_txt(clave)
+                conts = sorted(c for c in d["conts"] if c != "SIN CONTENEDOR")
+                detalle_extra = ", ".join(conts[:2]) + (f" +{len(conts) - 2}" if len(conts) > 2 else "")
+            es_de_oc = por_contenedor and cont_oc and clave == cont_oc
+            chips.append(ft.Container(
                 padding=ft.Padding.symmetric(horizontal=12, vertical=8), border_radius=8, ink=True,
                 bgcolor=ft.Colors.with_opacity(0.18, UI["acento"]) if d["sel"] else UI["card_alt"],
-                border=ft.Border.all(1, UI["acento"] if completo else UI["borde"]),
-                on_click=lambda e, x=dia: self._toggle_dia(x),
+                border=ft.Border.all(2 if es_de_oc else 1, UI["acento"] if (completo or es_de_oc) else UI["borde"]),
+                on_click=lambda e, x=clave: self._toggle_dia(x),
+                tooltip="Clic para marcar o desmarcar todos sus pallets",
                 content=ft.Column([
-                    ft.Text(dia_txt, size=12, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                    ft.Text(titulo, size=12, weight=ft.FontWeight.W_700, color=UI["texto"]),
+                    *([ft.Text(detalle_extra, size=10.5, color=UI["texto_3"])] if detalle_extra else []),
                     ft.Text(f"{len(d['lpns'])} pallets · {_miles(d['un'])} UN", size=11, color=UI["texto_2"]),
                     ft.Text(f"{len(d['sel'])} marcados", size=10.5,
                             color=UI["acento"] if d["sel"] else UI["texto_3"]),
                 ], spacing=1, tight=True),
             ))
-        if not por_dia:
-            self.fila_dias.controls.append(ft.Text("No hay recepciones sin OC en el rango"
-                                                   + (" con SKUs de esta OC." if self.chk_solo_oc.value else "."),
-                                                   size=12, color=UI["texto_2"]))
+        if not grupos:
+            chips.append(ft.Text("No hay recepciones sin OC en el rango"
+                                 + (" con SKUs de esta OC." if self.chk_solo_oc.value else "."),
+                                 size=12, color=UI["texto_2"]))
+        self.fila_dias.controls = chips            # se reemplaza de una vez (antes se llenaba en el lugar y se duplicaba)
+        self.lbl_grupos.value = ("Contenedores con pallets sin OC (clic para marcar o desmarcar todos sus pallets)"
+                                 if por_contenedor else
+                                 "Días con recepciones sin OC (clic para marcar o desmarcar todos sus pallets)")
 
         # Tabla de pallets
         filas = []

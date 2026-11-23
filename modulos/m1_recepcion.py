@@ -13,6 +13,19 @@ import pandas as pd
 import flet as ft
 from dependencias import *
 from modulos.m1_conciliacion import PanelConciliacionSinOc
+from modulos.m1_calendario_oc import PanelCalendarioOc
+from modulos.m1_panel_recepciones import PanelRecepciones
+
+
+def _entero_o_none(v):
+    try:
+        return None if v is None or str(v).strip() == "" else int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _txt_cant(v) -> str:
+    return "-" if v is None else str(v)
 
 
 class RecepcionModulo:
@@ -238,19 +251,37 @@ class RecepcionModulo:
             pdf.set_fill_color(30, 58, 138)
             pdf.set_text_color(255, 255, 255)
             pdf.set_font("Helvetica", "B", 8)
-            pdf.cell(24, 7, "SKU", border=1, fill=True)
-            pdf.cell(62, 7, "DESCRIPCION", border=1, fill=True)
-            pdf.cell(26, 7, "LOTE", border=1, align="C", fill=True)
-            pdf.cell(22, 7, "VENCIMIENTO", border=1, align="C", fill=True)
-            pdf.cell(14, 7, "CAJAS", border=1, align="C", fill=True)
-            pdf.cell(16, 7, "UNID.", border=1, align="C", fill=True)
-            pdf.cell(26, 7, "ESTATUS OC", border=1, align="C", fill=True, ln=True)
+            # anchos: SKU, descripción, lote, vencimiento, uni OC, uni PL, cajas, uni recibidas, estatus (= 190 mm)
+            W = (21, 45, 22, 19, 15, 15, 12, 16, 25)
+            for ancho, titulo in zip(W, ("SKU", "DESCRIPCION", "LOTE", "VENCIMIENTO", "UNI EN OC", "UNI EN PL",
+                                          "CAJAS", "UNI REC.", "ESTATUS OC")):
+                pdf.cell(ancho, 7, titulo, border=1, align="L" if titulo in ("SKU", "DESCRIPCION") else "C", fill=True)
+            pdf.ln(7)
 
             pdf.set_text_color(0, 0, 0)
-            pdf.set_font("Helvetica", "", 7.8)
+            pdf.set_font("Helvetica", "", 7.6)
             tot_cajas_acta = 0
             tot_unid_acta = 0
             incidencias_acta = []
+            sku_con_oc_pl_impreso = set()
+            hay_oc = any(f.get("unidades_oc") is not None for f in filas_conc)
+            hay_pl = any(f.get("unidades_pl") is not None for f in filas_conc)
+            tot_oc = sum(int(f.get("unidades_oc") or 0) for f in filas_conc)
+            tot_pl = sum(int(f.get("unidades_pl") or 0) for f in filas_conc)
+
+            def fila_pdf(valores, relleno):
+                for i_c, (ancho, val) in enumerate(zip(W, valores)):
+                    pdf.cell(ancho, 5.8, _txt_latin(str(val))[:(12 if i_c == 0 else 27 if i_c == 1 else 16 if i_c == 8 else 13)], border=1,
+                             align="L" if i_c in (0, 1) else "C", fill=relleno)
+                pdf.ln(5.8)
+
+            def oc_pl_de(sku_k):
+                """Uni en OC / Uni en PL solo en la primera fila (lote) del SKU, para no repetirlas."""
+                if sku_k in sku_con_oc_pl_impreso:
+                    return "", ""
+                sku_con_oc_pl_impreso.add(sku_k)
+                info = mapa_conc_sku.get(sku_k, {})
+                return _txt_cant(info.get("unidades_oc")), _txt_cant(info.get("unidades_pl"))
 
             for (sku_k, lote_k, venc_k), inf_l in sorted(lotes_agrupados.items()):
                 info_c = mapa_conc_sku.get(sku_k, {})
@@ -261,9 +292,9 @@ class RecepcionModulo:
                 if est_sku == "SKU FUERA DE OC":
                     txt_est_pdf = "FUERA DE OC"
                 elif est_sku == "SOBRANTE":
-                    txt_est_pdf = f"SOBRANTE ({dif_cajas_sku:+d} Cj)"
+                    txt_est_pdf = f"SOBRANTE {dif_cajas_sku:+d} Cj"
                 elif est_sku == "PARCIAL":
-                    txt_est_pdf = f"PARCIAL ({dif_cajas_sku:+d} Cj)"
+                    txt_est_pdf = f"PARCIAL {dif_cajas_sku:+d} Cj"
                 else:
                     txt_est_pdf = "OK (VALIDADA)"
 
@@ -276,35 +307,31 @@ class RecepcionModulo:
                 else:
                     pdf.set_fill_color(255, 255, 255)
 
-                pdf.cell(24, 5.8, _txt_latin(sku_k)[:13], border=1, fill=es_alerta)
-                pdf.cell(62, 5.8, _txt_latin(desc_k)[:35], border=1, fill=es_alerta)
-                pdf.cell(26, 5.8, _txt_latin(lote_k)[:14], border=1, align="C", fill=es_alerta)
-                pdf.cell(22, 5.8, _txt_latin(venc_k)[:11], border=1, align="C", fill=es_alerta)
-                pdf.cell(14, 5.8, str(inf_l["cajas"]), border=1, align="C", fill=es_alerta)
-                pdf.cell(16, 5.8, str(inf_l["unidades"]), border=1, align="C", fill=es_alerta)
-                pdf.cell(26, 5.8, _txt_latin(txt_est_pdf)[:15], border=1, align="C", fill=es_alerta, ln=True)
+                u_oc, u_pl = oc_pl_de(sku_k)
+                fila_pdf((sku_k, desc_k, lote_k, venc_k, u_oc, u_pl, inf_l["cajas"], inf_l["unidades"], txt_est_pdf), es_alerta)
 
-            if not lotes_agrupados and filas_conc:
-                for f in filas_conc:
-                    s_f = str(f.get("sku") or "").strip().upper()
-                    c_rec = int(f.get("cajas_recibidas") or 0)
-                    u_rec = int(f.get("unidades_recibidas") or 0)
-                    tot_cajas_acta += c_rec
-                    tot_unid_acta += u_rec
-                    pdf.cell(24, 5.8, _txt_latin(s_f)[:13], border=1)
-                    pdf.cell(62, 5.8, _txt_latin(f.get("descripcion", ""))[:35], border=1)
-                    pdf.cell(26, 5.8, _txt_latin(f.get("lotes_reales", "SIN INGRESO"))[:14], border=1, align="C")
-                    pdf.cell(22, 5.8, "-", border=1, align="C")
-                    pdf.cell(14, 5.8, str(c_rec), border=1, align="C")
-                    pdf.cell(16, 5.8, str(u_rec), border=1, align="C")
-                    pdf.cell(26, 5.8, _txt_latin(f.get("estado", "PENDIENTE"))[:14], border=1, align="C", ln=True)
+            # SKU de la OC/PL que no llegaron (o acta sin pallets): igual muestran lo pedido
+            for f in filas_conc:
+                s_f = str(f.get("sku") or "").strip().upper()
+                if not s_f or s_f in sku_con_oc_pl_impreso:
+                    continue
+                c_rec = int(f.get("cajas_recibidas") or 0)
+                u_rec = int(f.get("unidades_recibidas") or 0)
+                tot_cajas_acta += c_rec
+                tot_unid_acta += u_rec
+                u_oc, u_pl = oc_pl_de(s_f)
+                lote_f = "SIN INGRESO" if not u_rec else str(f.get("lotes_reales") or "S/L")
+                fila_pdf((s_f, f.get("descripcion", ""), lote_f, "-", u_oc, u_pl, c_rec, u_rec,
+                          f.get("estado", "PENDIENTE")), False)
 
-            pdf.set_font("Helvetica", "B", 8.5)
+            pdf.set_font("Helvetica", "B", 8)
             pdf.set_fill_color(226, 232, 240)
-            pdf.cell(134, 6.5, "TOTAL FISICO RECIBIDO", border=1, align="R", fill=True)
-            pdf.cell(14, 6.5, str(tot_cajas_acta), border=1, align="C", fill=True)
-            pdf.cell(16, 6.5, str(tot_unid_acta), border=1, align="C", fill=True)
-            pdf.cell(26, 6.5, "", border=1, align="C", fill=True, ln=True)
+            pdf.cell(sum(W[:4]), 6.5, "TOTAL", border=1, align="R", fill=True)
+            pdf.cell(W[4], 6.5, str(tot_oc) if hay_oc else "-", border=1, align="C", fill=True)
+            pdf.cell(W[5], 6.5, str(tot_pl) if hay_pl else "-", border=1, align="C", fill=True)
+            pdf.cell(W[6], 6.5, str(tot_cajas_acta), border=1, align="C", fill=True)
+            pdf.cell(W[7], 6.5, str(tot_unid_acta), border=1, align="C", fill=True)
+            pdf.cell(W[8], 6.5, "", border=1, align="C", fill=True, ln=True)
 
             for f in filas_conc:
                 est_f = str(f.get("estado") or "")
@@ -316,8 +343,9 @@ class RecepcionModulo:
                     u_rec = int(f.get("unidades_recibidas") or 0)
                     dif_c = c_rec - c_esp
                     dif_u = u_rec - u_esp
+                    txt_pl = f" / PL {f.get('unidades_pl')} UN" if f.get("unidades_pl") is not None else ""
                     incidencias_acta.append(
-                        f"- {s_f} [{est_f}]: OC Esperado {c_esp} Cj ({u_esp} UN) vs Recibido {c_rec} Cj ({u_rec} UN) -> Dif: {dif_c:+d} Cj ({dif_u:+d} UN)"
+                        f"- {s_f} [{est_f}]: OC Esperado {c_esp} Cj ({u_esp} UN){txt_pl} vs Recibido {c_rec} Cj ({u_rec} UN) -> Dif: {dif_c:+d} Cj ({dif_u:+d} UN)"
                     )
 
             if incidencias_acta:
@@ -1364,6 +1392,11 @@ class RecepcionModulo:
                             "dif_cajas": dif_cajas,
                             "lotes_reales": f"{lotes_reales} ({venc_reales})",
                             "estado": estado_txt,
+                            # Uni en OC / Uni en PL para el acta (None = el documento no lo trae)
+                            "unidades_oc": None if es_fuera_oc else _entero_o_none(
+                                l.get("unidades_oc") if l.get("unidades_oc") is not None else
+                                (None if es_recepcion_libre else unid_esp)),
+                            "unidades_pl": None if es_fuera_oc else _entero_o_none(l.get("unidades_packing_list")),
                         }
                     )
                     fila_barras_po.controls.append(
@@ -2178,7 +2211,10 @@ class RecepcionModulo:
                     else:
                         est_mostrar = "OK (VALIDADA)"
 
+                    primera_del_sku = sku_k not in {x["sku"] for x in filas_lotes}
                     filas_lotes.append({
+                        "uni_oc": inf_c.get("unidades_oc") if primera_del_sku else "",
+                        "uni_pl": inf_c.get("unidades_pl") if primera_del_sku else "",
                         "sku": sku_k,
                         "descripcion": mapa_desc.get(sku_k, "Ingreso Directo"),
                         "packs": packs_tot,
@@ -2190,17 +2226,21 @@ class RecepcionModulo:
                         "es_alerta": est_k in ("SKU FUERA DE OC", "SOBRANTE"),
                     })
 
-                if not filas_lotes and filas_conciliacion_export:
-                    for f in filas_conciliacion_export:
-                        sku_f = str(f.get("sku", "")).strip().upper()
+                # SKU de la OC/PL sin ingreso (o sin pallets): igual muestran lo pedido
+                sku_con_fila = {x["sku"] for x in filas_lotes}
+                for f in filas_conciliacion_export:
+                    sku_f = str(f.get("sku", "")).strip().upper()
+                    if sku_f and sku_f not in sku_con_fila:
                         filas_lotes.append({
+                            "uni_oc": f.get("unidades_oc"),
+                            "uni_pl": f.get("unidades_pl"),
                             "sku": sku_f,
                             "descripcion": mapa_desc.get(sku_f, str(f.get("descripcion", ""))),
-                            "packs": int(f.get("cajas_recibidas") or f.get("cajas_esperadas") or 0),
-                            "lote": str(f.get("lotes_reales") or "S/L"),
+                            "packs": int(f.get("cajas_recibidas") or 0),
+                            "lote": "SIN INGRESO" if not int(f.get("unidades_recibidas") or 0) else str(f.get("lotes_reales") or "S/L"),
                             "lote_fecha": str(f.get("lotes_reales") or "S/L"),
                             "fecha": "S/F",
-                            "unidades": int(f.get("unidades_recibidas") or f.get("unidades_esperadas") or 0),
+                            "unidades": int(f.get("unidades_recibidas") or 0),
                             "estatus": str(f.get("estado") or "PENDIENTE"),
                             "es_alerta": False,
                         })
@@ -2259,7 +2299,9 @@ class RecepcionModulo:
                     "Lote Físico",
                     "LOTE - FECHA",
                     "Fecha Vencimiento",
-                    "Cantidad (Unidades)",
+                    "Uni en OC",
+                    "Uni en PL",
+                    "Uni recibidas",
                     "Estatus Conciliación OC",
                 ]
                 fill_hdr = PatternFill(fill_type="solid", start_color="1E3A8A", end_color="1E3A8A")
@@ -2293,6 +2335,8 @@ class RecepcionModulo:
                         item["lote"],
                         item["lote_fecha"],
                         item["fecha"],
+                        "-" if item.get("uni_oc") is None else item.get("uni_oc"),
+                        "-" if item.get("uni_pl") is None else item.get("uni_pl"),
                         int(item["unidades"]),
                         item["estatus"],
                     ]
@@ -2302,7 +2346,7 @@ class RecepcionModulo:
                         celda.font = Font(
                             name="Calibri",
                             size=11,
-                            bold=(c_idx in (1, 7, 8) or es_alerta),
+                            bold=(c_idx in (1, 9, 10) or es_alerta),
                             color="991B1B" if es_alerta else "000000",
                         )
                         celda.border = border_celda
@@ -2310,7 +2354,7 @@ class RecepcionModulo:
                             celda.fill = fill_alerta
                         elif idx_f % 2 == 1:
                             celda.fill = fill_zebra
-                        if c_idx in (1, 3, 4, 5, 6, 7, 8):
+                        if c_idx in (1, 3, 4, 5, 6, 7, 8, 9, 10):
                             celda.alignment = Alignment(horizontal="center", vertical="center")
                         else:
                             celda.alignment = Alignment(horizontal="left", vertical="center")
@@ -2323,16 +2367,20 @@ class RecepcionModulo:
                 ws.cell(row=fila_actual, column=4, value="-").alignment = Alignment(horizontal="center", vertical="center")
                 ws.cell(row=fila_actual, column=5, value="-").alignment = Alignment(horizontal="center", vertical="center")
                 ws.cell(row=fila_actual, column=6, value="-").alignment = Alignment(horizontal="center", vertical="center")
-                ws.cell(row=fila_actual, column=7, value=tot_unidades).alignment = Alignment(horizontal="center", vertical="center")
-                ws.cell(row=fila_actual, column=8, value="").alignment = Alignment(horizontal="center", vertical="center")
+                tot_oc_x = [f.get("unidades_oc") for f in filas_conciliacion_export if f.get("unidades_oc") is not None]
+                tot_pl_x = [f.get("unidades_pl") for f in filas_conciliacion_export if f.get("unidades_pl") is not None]
+                ws.cell(row=fila_actual, column=7, value=sum(tot_oc_x) if tot_oc_x else "-").alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=fila_actual, column=8, value=sum(tot_pl_x) if tot_pl_x else "-").alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=fila_actual, column=9, value=tot_unidades).alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=fila_actual, column=10, value="").alignment = Alignment(horizontal="center", vertical="center")
 
-                for c_i in range(1, 9):
+                for c_i in range(1, 11):
                     c_tot = ws.cell(row=fila_actual, column=c_i)
                     c_tot.font = Font(name="Calibri", size=11, bold=True, color="0F172A")
                     c_tot.fill = fill_total
                     c_tot.border = border_celda
 
-                anchos = {"A": 16, "B": 44, "C": 20, "D": 18, "E": 24, "F": 18, "G": 20, "H": 26}
+                anchos = {"A": 16, "B": 44, "C": 20, "D": 18, "E": 24, "F": 18, "G": 14, "H": 14, "I": 16, "J": 26}
                 for col_l, w_val in anchos.items():
                     ws.column_dimensions[col_l].width = w_val
 
@@ -3728,6 +3776,13 @@ class RecepcionModulo:
         # ---------- PANTALLA 5: CONCILIAR RECEPCIONES SIN OC ----------
         panel_conciliacion = PanelConciliacionSinOc(page, lambda: dd_asn.value, lambda: _auditar_base(None))
 
+        # ---------- PANTALLA 6: CALENDARIO DE OC (NetSuite) Y TIEMPOS ----------
+        panel_calendario = PanelCalendarioOc(page)
+
+        # ---------- PANTALLA 7: PANEL DE RECEPCIONES (agenda, NetSuite y reporte automático) ----------
+        panel_recepciones = PanelRecepciones(page, panel_calendario.sincronizar)
+        panel_calendario.despues_de_sincronizar = panel_recepciones.refrescar_sin_revisar
+
         # ---------- Armado del módulo ----------
         contenedor_subvista_inbound = ft.Container(content=subvista_inb_recepcion)
         col_inbound = ft.Column([barra_oc, contenedor_subvista_inbound], spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
@@ -3742,8 +3797,12 @@ class RecepcionModulo:
             subvista_inb_qa,
             subvista_inb_modificacion,
             panel_conciliacion.vista,
+            panel_calendario.vista,
+            panel_recepciones.vista,
         ]
         self.panel_conciliacion = panel_conciliacion
+        self.panel_calendario = panel_calendario
+        self.panel_recepciones = panel_recepciones
         self.cargar_lista_asns_func = cargar_lista_asns
         self.cargar_historico_recepciones_func = cargar_historico_recepciones
         self.auditar_asn_seleccionado_func = auditar_asn_seleccionado
@@ -3753,11 +3812,16 @@ class RecepcionModulo:
         self.cargar_lista_asns_func()
 
     def sel_sub_inb(self, idx: int):
-        """0 Recepción y validación · 1 Indicadores · 2 Historial · 3 Calidad · 4 Ajustes · 5 Conciliar sin OC"""
+        """0 Recepción y validación · 1 Indicadores · 2 Historial · 3 Calidad · 4 Ajustes · 5 Conciliar sin OC
+        · 6 Calendario de OC · 7 Panel de recepciones"""
         idx = idx if 0 <= idx < len(self.subvistas) else 0
         self.contenedor.content = self.subvistas[idx]
-        self.barra_oc.visible = idx != 2
-        if idx == 2:
+        self.barra_oc.visible = idx not in (2, 6, 7)
+        if idx == 6:
+            self.panel_calendario.refrescar()
+        elif idx == 7:
+            self.panel_recepciones.refrescar()
+        elif idx == 2:
             self.cargar_historico_recepciones_func()
         elif idx == 5:
             self.panel_conciliacion.refrescar(forzar=True)

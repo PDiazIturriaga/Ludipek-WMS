@@ -186,7 +186,7 @@ const bool kDescontarStockAlPickear = true;
 
 /// Versión de esta app (AAAA.MM.DD). Debe ser >= wms_config.version_minima_rf (script 12);
 /// si no, la app pide recargar para que nadie trabaje con una versión antigua.
-const String kVersionApp = '2026.11.23.3';
+const String kVersionApp = '2026.11.23.4';
 
 /// Devuelve la versión mínima exigida por el servidor, o null si no se pudo consultar.
 Future<String?> versionMinimaServidor() async {
@@ -1781,6 +1781,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
 
   // Banderas anti doble-toque: evitan registros duplicados en Supabase
   bool _guardandoPallet = false;
+  bool _finalizandoRecepcion = false;
   bool _confirmandoPutaway = false;
   bool _moviendoAPicking = false;
   bool _registrandoConteo = false;
@@ -8229,6 +8230,60 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       color: const Color(0xFF047857),
     );
   }
+  /// Fin del contenedor: el reporte de recepción física sale solo por correo a los destinatarios
+  /// configurados en el PC (Recepción > Panel de recepciones). Script 46.
+  Future<void> _finalizarRecepcionYEnviarReporte() async {
+    if (_finalizandoRecepcion) return;
+    final contenedor = _txtContenedorManual.text.trim().toUpperCase();
+    if (_asnActualId == null && contenedor.isEmpty) {
+      _notificar('Ingrese el N° de contenedor de la recepción libre.', color: const Color(0xFFD97706));
+      return;
+    }
+    if (_palletEnConstruccion.isNotEmpty) {
+      _notificar('Primero cierre el pallet que está armando.', color: const Color(0xFFD97706));
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Finalizar recepción'),
+        content: Text(_asnActualId != null
+            ? '¿Terminó de recibir todo lo de esta OC/PL? Se enviará el reporte de recepción física por correo.'
+            : '¿Terminó de recibir el contenedor $contenedor? Se enviará el reporte de recepción física por correo.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCELAR')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('FINALIZAR Y ENVIAR')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _finalizandoRecepcion = true);
+    try {
+      final res = await supabase.rpc('wms_recepcion_finalizar', params: {
+        'p_bodega': bodegaActiva,
+        'p_asn_id': _asnActualId,
+        'p_contenedor': _asnActualId == null ? contenedor : null,
+        'p_usuario': _usuarioRf(),
+      });
+      final m = res is Map ? res : <String, dynamic>{};
+      final dest = int.tryParse('${m['destinatarios'] ?? 0}') ?? 0;
+      _notificar(
+          dest > 0
+              ? 'Recepción finalizada (${m['pallets'] ?? 0} pallets). El reporte se enviará a $dest destinatario(s).'
+              : 'Recepción finalizada. El reporte queda en cola: falta agregar destinatarios en el PC.',
+          color: dest > 0 ? const Color(0xFF047857) : const Color(0xFFD97706));
+    } catch (e) {
+      final t = e.toString();
+      _notificar(
+          t.contains('PGRST202') || t.contains('Could not find')
+              ? 'Falta actualizar la base (script 46). Avise al administrador.'
+              : 'No se pudo finalizar: ${t.replaceAll('WMS: ', '')}',
+          color: const Color(0xFFB91C1C));
+    } finally {
+      if (mounted) setState(() => _finalizandoRecepcion = false);
+    }
+  }
+
   Future<void> _confirmarYCerrarPallet() async {
     if (_palletEnConstruccion.isEmpty || _guardandoPallet) return;
     setState(() => _guardandoPallet = true);
@@ -11226,6 +11281,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
               }),
               const SizedBox(height: 6),
               SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF047857), foregroundColor: Colors.white), onPressed: (_palletEnConstruccion.isEmpty || _guardandoPallet) ? null : _confirmarYCerrarPallet, icon: const Icon(Icons.verified_outlined), label: Text(_guardandoPallet ? 'GUARDANDO PALLET...' : 'CERRAR PALLET Y EMITIR AVISO DE INGRESO'))),
+              const SizedBox(height: 10),
+              SizedBox(width: double.infinity, height: 44, child: OutlinedButton.icon(style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF0369A1), side: const BorderSide(color: Color(0xFF0369A1))), onPressed: (_finalizandoRecepcion || _guardandoPallet || _palletEnConstruccion.isNotEmpty) ? null : _finalizarRecepcionYEnviarReporte, icon: const Icon(Icons.forward_to_inbox_outlined), label: Text(_finalizandoRecepcion ? 'FINALIZANDO...' : 'FINALIZAR RECEPCIÓN Y ENVIAR REPORTE'))),
             ],
           ),
         ),
