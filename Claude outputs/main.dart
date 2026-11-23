@@ -186,7 +186,7 @@ const bool kDescontarStockAlPickear = true;
 
 /// Versión de esta app (AAAA.MM.DD). Debe ser >= wms_config.version_minima_rf (script 12);
 /// si no, la app pide recargar para que nadie trabaje con una versión antigua.
-const String kVersionApp = '2026.11.21.5';
+const String kVersionApp = '2026.11.23.1';
 
 /// Devuelve la versión mínima exigida por el servidor, o null si no se pudo consultar.
 Future<String?> versionMinimaServidor() async {
@@ -9264,8 +9264,15 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         final cajas = (r['cajas'] as num?)?.toInt() ?? 0;
         return unid > 0 || cajas > 0;
       }).toList();
-      // Lo que ya está en picking (nivel 01) no se vuelve a bajar: solo se informa
-      _stockPickingSku = conStock.where((r) => _esUbicacionPicking((r['codigo_ubicacion'] ?? '').toString())).toList()
+      // Lo que ya está en su picking no se vuelve a bajar: solo se informa.
+      // Stock en OTRO picking (el anterior, ej. A-17-01 cuando ahora es ESTANTE-GIWI) sí se puede llevar al asignado.
+      bool esPickingAnterior(Map r) {
+        final u = (r['codigo_ubicacion'] ?? '').toString().trim().toUpperCase();
+        return _pickingFijoSku != null && _esUbicacionPicking(u) && u != _pickingFijoSku;
+      }
+      _stockPickingSku = conStock
+          .where((r) => _esUbicacionPicking((r['codigo_ubicacion'] ?? '').toString()) && !esPickingAnterior(r))
+          .toList()
         ..sort((a, b) => ((b['cantidad_unidades'] as num?) ?? 0).compareTo((a['cantidad_unidades'] as num?) ?? 0));
       final enPickingTxt = (_pickingFijoSku != null ? 'Picking asignado: $_pickingFijoSku. ' : 'Sin picking asignado. ') +
           (_stockPickingSku.isEmpty
@@ -9274,8 +9281,13 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       _stockZonaPickingSku = conStock.where((r) => (r['codigo_ubicacion'] ?? '').toString().toUpperCase() == 'ZONA-PICKING').toList();
       final disponibles = conStock.where((r) {
         final ubi = (r['codigo_ubicacion'] ?? '').toString().toUpperCase();
-        // Origen = reserva: nunca picking (nivel 01), merma ni la antigua ZONA-PICKING; lotes QA bloqueados tampoco
-        return !_esUbicacionPicking(ubi) && !_esUbicacionMerma(ubi) && ubi != 'ZONA-PICKING' && !loteBloqueadoPorQa(r['lote']);
+        // Origen = reserva o picking anterior: nunca su picking actual, merma ni la antigua ZONA-PICKING; lotes QA tampoco
+        if (loteBloqueadoPorQa(r['lote']) || _esUbicacionMerma(ubi) || ubi == 'ZONA-PICKING') return false;
+        if (esPickingAnterior(r)) {
+          r['_picking_anterior'] = true;
+          return true;
+        }
+        return !_esUbicacionPicking(ubi);
       }).toList();
 
       if (disponibles.isEmpty) {
@@ -9308,7 +9320,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         _stockFefoSeleccionado = sugerido;
         _txtCajasMoverPicking.text = cajasDisp > 0 ? cajasDisp.toString() : '1';
         _txtUbiDestinoPicking.text = _destinoPickingPara(sugerido);
-        _mensajeEstadoFefo = 'FEFO ($bodegaActiva): ${disponibles.length} ubicación(es) de reserva para $skuBuscar. $enPickingTxt';
+        final nAnt = disponibles.where((r) => r['_picking_anterior'] == true).length;
+        _mensajeEstadoFefo = 'FEFO ($bodegaActiva): ${disponibles.length} ubicación(es) para bajar $skuBuscar'
+            '${nAnt > 0 ? ' ($nAnt en su picking anterior: muévalo a $_pickingFijoSku)' : ''}. $enPickingTxt';
       });
     } catch (ex) {
       _notificar('Error consultando FEFO: ${_mensajeError(ex)}', color: const Color(0xFFDC2626));
@@ -11869,7 +11883,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'UBICACIÓN: ${item['codigo_ubicacion']} | VENC: $vencStr',
+                                  'UBICACIÓN: ${item['codigo_ubicacion']}${item['_picking_anterior'] == true ? ' (picking anterior)' : ''} | VENC: $vencStr',
                                   style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Color(0xFF0F172A)),
                                 ),
                                 Text(
