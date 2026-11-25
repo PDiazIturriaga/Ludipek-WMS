@@ -322,14 +322,15 @@ class PanelRecepciones:
     def _resumen_excel(self, r):
         try:
             import os
-            from servicios.reporte_ejecutivo import reporte_recepcion
+            from servicios.reporte_ejecutivo import reporte_recepcion, nombre_reporte_desde_datos
             datos = supabase.rpc("wms_reporte_recepcion", {
                 "p_bodega": self._bodega(), "p_numero_oc": r.get("numero_oc") or None,
                 "p_clave": None if r.get("numero_oc") else r.get("clave")}).execute().data or {}
             carpeta = os.path.join(os.getcwd(), "reportes_recepcion")
             os.makedirs(carpeta, exist_ok=True)
-            nombre = re.sub(r"[^A-Za-z0-9_-]+", "_", str(r.get("numero_oc") or r.get("contenedor") or r.get("clave")))[:40]
-            ruta = reporte_recepcion(datos, os.path.join(carpeta, f"Resumen_Recepcion_{nombre}_{datetime.now():%Y%m%d_%H%M}.xlsx"))
+            if not datos.get("numero_oc") and r.get("contenedor"):
+                datos = dict(datos, solo_contenedor=True, contenedor=r.get("contenedor"))   # sin OC: se identifica por contenedor
+            ruta = reporte_recepcion(datos, os.path.join(carpeta, nombre_reporte_desde_datos(datos)))
             descargar_o_abrir_archivo(self.page, ruta)
         except Exception as ex:
             msg = self._error(ex)

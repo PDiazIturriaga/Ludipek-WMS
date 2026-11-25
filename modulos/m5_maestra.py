@@ -842,6 +842,112 @@ class MaestraModulo:
                 limpiar_formulario_sku()
                 cargar_maestra_skus()
 
+        def abrir_traer_netsuite(e=None):
+            """Busca artículos en NetSuite y crea en la maestra los que faltan (UNIDAD + CAJA de compra)."""
+            try:
+                from conexion_erp import consultar_netsuite
+                from servicios.maestra_netsuite import buscar_items_netsuite, crear_en_maestra, skus_que_faltan
+            except Exception as ex_imp:
+                notificar(f"La conexión con NetSuite no está disponible: {ex_imp}", "#D97706")
+                return
+            txt_buscar_ns = ft.TextField(label="Código, nombre o código de barras en NetSuite", dense=True, width=360,
+                                         color=TEXT_WHITE, bgcolor=BG_INPUT, border_color=BORDER_COLOR,
+                                         text_style=ft.TextStyle(size=12))
+            lbl_ns = ft.Text("", size=11.5, color=TEXT_MUTED)
+            lista_ns = ft.Column(spacing=2, scroll=ft.ScrollMode.AUTO, height=330)
+            items_ns, checks_ns = [], {}
+
+            def pintar(items, faltan):
+                items_ns[:] = items
+                checks_ns.clear()
+                filas = []
+                for it in items:
+                    nuevo = it["sku"] in faltan
+                    chk = ft.Checkbox(value=nuevo, disabled=not nuevo)
+                    checks_ns[it["sku"]] = chk
+                    filas.append(ft.Row([
+                        chk,
+                        ft.Text(it["sku"], size=11.5, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN, width=120),
+                        ft.Text(str(it["descripcion"])[:42], size=11.5, color=TEXT_WHITE, width=300),
+                        ft.Text(f"UPC {it.get('upc') or '-'}", size=11, color=TEXT_MUTED, width=140),
+                        ft.Text(f"{it.get('unidad_compra') or 'UN'} x{it.get('factor_compra') or 1}", size=11, color=ACCENT_GREEN, width=110),
+                        ft.Text("nuevo" if nuevo else "ya está en la maestra", size=11, color="#FBBF24" if nuevo else TEXT_MUTED),
+                    ], spacing=8))
+                lista_ns.controls = filas or [ft.Text("Sin resultados en NetSuite.", size=12, color=TEXT_MUTED)]
+                lbl_ns.value = f"{len(items)} artículos · {sum(1 for i in items if i['sku'] in faltan)} no están en la maestra"
+                page.update()
+
+            def buscar(ev=None):
+                t = (txt_buscar_ns.value or "").strip()
+                if len(t) < 3:
+                    notificar("Escriba al menos 3 caracteres.", "#D97706")
+                    return
+                lbl_ns.value = "Buscando en NetSuite..."
+                page.update()
+                try:
+                    items = buscar_items_netsuite(consultar_netsuite, texto=t)
+                    pintar(items, set(skus_que_faltan(supabase, [i["sku"] for i in items])))
+                except Exception as ex_b:
+                    lbl_ns.value = f"No se pudo buscar: {ex_b}"
+                    page.update()
+
+            def faltantes_oc(ev=None):
+                lbl_ns.value = "Revisando los SKU de las OC abiertas..."
+                page.update()
+                try:
+                    abiertas = [r["id"] for r in (supabase.table("asn_cabecera").select("id")
+                                                  .eq("estado", "EN_RECEPCION").execute().data or [])]
+                    skus = set()
+                    for i in range(0, len(abiertas), 100):
+                        skus |= {str(r.get("sku") or "").strip().upper() for r in (
+                            supabase.table("asn_detalle").select("sku").in_("asn_id", abiertas[i:i + 100]).execute().data or [])}
+                    faltan = skus_que_faltan(supabase, skus)
+                    if not faltan:
+                        lista_ns.controls = [ft.Text("Todos los SKU de las OC abiertas están en la maestra.", size=12, color=ACCENT_GREEN)]
+                        lbl_ns.value = ""
+                        page.update()
+                        return
+                    items = buscar_items_netsuite(consultar_netsuite, skus=faltan)
+                    pintar(items, set(faltan))
+                    sin = [s_ for s_ in faltan if s_ not in {i["sku"] for i in items}]
+                    if sin:
+                        lbl_ns.value += f" · sin ficha en NetSuite: {', '.join(sin[:6])}"
+                        page.update()
+                except Exception as ex_f:
+                    lbl_ns.value = f"No se pudo revisar: {ex_f}"
+                    page.update()
+
+            def crear(ev=None):
+                elegidos = [it for it in items_ns if checks_ns.get(it["sku"]) and checks_ns[it["sku"]].value]
+                if not elegidos:
+                    notificar("Marque los artículos a crear.", "#D97706")
+                    return
+                try:
+                    n = crear_en_maestra(supabase, elegidos)
+                except Exception as ex_c:
+                    notificar(f"No se pudo crear en la maestra: {ex_c}", "#B91C1C")
+                    return
+                page.pop_dialog()
+                notificar(f"{n} SKU creados en la maestra desde NetSuite.", "#047857")
+                cargar_maestra_skus()
+
+            page.show_dialog(ft.AlertDialog(
+                bgcolor="#1E293B",
+                title=ft.Text("Traer SKU desde NetSuite", size=16, weight=ft.FontWeight.BOLD, color=TEXT_WHITE),
+                content=ft.Container(width=880, content=ft.Column([
+                    ft.Text("Crea en la maestra los artículos que faltan, con su nombre, código de barras (UPC) y la caja "
+                            "de compra de NetSuite. Los SKU que ya están en la maestra no se modifican.", size=11.5, color=TEXT_MUTED),
+                    ft.Row([txt_buscar_ns, boton_primario("BUSCAR", ft.Icons.SEARCH_ROUNDED, buscar, ACCENT_BLUE, height_val=32),
+                            boton_primario("SKU DE OC SIN MAESTRA", ft.Icons.PLAYLIST_ADD_CHECK_ROUNDED, faltantes_oc, ACCENT_TEAL, height_val=32)],
+                           spacing=8, wrap=True),
+                    lbl_ns,
+                    lista_ns,
+                ], spacing=10, tight=True)),
+                actions=[ft.TextButton("CERRAR", on_click=lambda ev: page.pop_dialog()),
+                         boton_primario("CREAR EN MAESTRA", ft.Icons.ADD_TASK_ROUNDED, crear, "#047857", height_val=32)],
+            ))
+            page.update()
+
         def exportar_maestra_excel(e=None):
             if not skus_db:
                 notificar("No hay SKUs cargados para exportar.", "#D97706")
@@ -900,6 +1006,7 @@ class MaestraModulo:
                                             boton_primario("GUARDAR / ACTUALIZAR SKU", ft.Icons.SAVE_ROUNDED, guardar_sku_maestra, "#047857", height_val=32),
                                             boton_primario("LIMPIAR FORMULARIO", ft.Icons.CLEAR_ALL_ROUNDED, limpiar_formulario_sku, "#475569", height_val=32),
                                             boton_primario("EXPORTAR MAESTRA (.XLSX)", ft.Icons.TABLE_VIEW_ROUNDED, exportar_maestra_excel, ACCENT_TEAL, height_val=32),
+                                            boton_primario("TRAER SKU DE NETSUITE", ft.Icons.CLOUD_DOWNLOAD_OUTLINED, abrir_traer_netsuite, ACCENT_BLUE, height_val=32),
                                         ],
                                         spacing=10,
                                     ),

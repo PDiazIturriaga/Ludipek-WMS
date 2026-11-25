@@ -375,7 +375,7 @@ class PanelOcPorProveedor:
         """Resumen ejecutivo en Excel de todo lo recibido de la OC (script 51)."""
         try:
             import os
-            from servicios.reporte_ejecutivo import reporte_recepcion
+            from servicios.reporte_ejecutivo import reporte_recepcion, nombre_reporte_desde_datos
             datos = supabase.rpc("wms_reporte_recepcion", {"p_bodega": obtener_bodega_activa(self.page),
                                                            "p_numero_oc": str(numero_oc), "p_clave": None}).execute().data or {}
             if not (datos.get("lineas") or datos.get("oc")):
@@ -383,7 +383,7 @@ class PanelOcPorProveedor:
                 return
             carpeta = os.path.join(os.getcwd(), "reportes_recepcion")
             os.makedirs(carpeta, exist_ok=True)
-            ruta = reporte_recepcion(datos, os.path.join(carpeta, f"Resumen_Recepcion_OC_{numero_oc}_{datetime.now():%Y%m%d_%H%M}.xlsx"))
+            ruta = reporte_recepcion(datos, os.path.join(carpeta, nombre_reporte_desde_datos(datos)))
             descargar_o_abrir_archivo(self.page, ruta)
         except Exception as ex:
             msg = _err(ex)

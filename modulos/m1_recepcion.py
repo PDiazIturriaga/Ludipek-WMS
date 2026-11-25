@@ -381,8 +381,9 @@ class RecepcionModulo:
             pdf.set_xy(125, y_f + 16)
             pdf.cell(65, 5, "CONTROL DE CALIDAD / SUPERVISION", align="C")
 
-            oc_limpio = _nombre_archivo_seguro_local(oc_num)
-            ruta_out = os.path.join("reportes_recepcion", f"Acta_OC_{oc_limpio}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+            from servicios.reporte_ejecutivo import nombre_reporte_recepcion
+            ruta_out = os.path.join("reportes_recepcion", nombre_reporte_recepcion(
+                oc_raw, codigo_po, proveedor, None if oc_raw else contenedor_guia, extension="pdf"))
             pdf.output(ruta_out)
             return ruta_out
 
@@ -739,6 +740,7 @@ class RecepcionModulo:
                 ft.DataColumn(ft.Text("N° OC / PO", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                 ft.DataColumn(ft.Text("PROVEEDOR / REF.", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("LPN", weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
+                ft.DataColumn(ft.Text("CONTENEDOR", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("SKU", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("CAJAS", weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                 ft.DataColumn(ft.Text("MÚLT.", weight=ft.FontWeight.BOLD, size=11, color=TEXT_MUTED)),
@@ -1715,6 +1717,124 @@ class RecepcionModulo:
             dia_lbl = dd_fecha_hist_rec.value if (dd_fecha_hist_rec.value and dd_fecha_hist_rec.value != "TODAS") else datetime.now().strftime("%d-%m-%Y")
             descargar_pdf_historico_grupo(regs_sel, dia_lbl, "SELECCION")
 
+        def _contenedor_lpn(reg: dict) -> str:
+            """Contenedor real escrito en el LPN (vacío si quedó el valor automático PO-xx / SIN-CONTENEDOR)."""
+            c = str(reg.get("contenedor") or "").strip().upper()
+            if not c or c.startswith(("PO-", "OC-")) or c in ("SIN-CONTENEDOR", "SIN CONTENEDOR", "N/A"):
+                return ""
+            return c
+
+        def _solo_marcados_hist() -> list:
+            return [reg for chk, reg in checks_hist_seleccionados.values() if chk.value]
+
+        def asignar_contenedor_marcados_hist(e=None):
+            regs = _solo_marcados_hist()
+            if not regs:
+                notificar("Marque los LPN a los que quiere asignar el contenedor.", "#D97706")
+                return
+            lpns = sorted({str(r.get("lpn") or "").strip() for r in regs if r.get("lpn")})
+            ids = [int(r["id"]) for r in regs if str(r.get("id") or "").isdigit()]
+            unidades = sum(int(r.get("unidades_totales") or 0) for r in regs)
+            ocs = sorted({str(r.get("asn_id")) for r in regs if r.get("asn_id")})
+            actuales = sorted({_contenedor_lpn(r) for r in regs if _contenedor_lpn(r)})
+            txt_cont = ft.TextField(label="N° de contenedor", value=actuales[0] if len(actuales) == 1 else "",
+                                    autofocus=True, dense=True, color=TEXT_WHITE, bgcolor=UI["input"],
+                                    border_color=UI["borde"], focused_border_color=ACCENT_CYAN,
+                                    hint_text="Ej: MSKU1234567")
+            avisos = []
+            if len(ocs) > 1:
+                avisos.append("Los LPN marcados son de más de una OC. Revise que todos vengan en el mismo contenedor.")
+            if actuales:
+                avisos.append(f"Algunos ya tienen contenedor ({', '.join(actuales[:4])}); se reemplazará.")
+            lbl_err = ft.Text("", size=12, color="#F87171")
+
+            def confirmar(ev=None):
+                cont = (txt_cont.value or "").strip()
+                if not cont:
+                    lbl_err.value = "Escriba el número de contenedor."
+                    page.update()
+                    return
+                try:
+                    res = supabase.rpc("wms_recepcion_asignar_contenedor", {
+                        "p_bodega": obtener_bodega_activa(page), "p_contenedor": cont,
+                        "p_ids": ids or None, "p_lpns": lpns if not ids else None,
+                        "p_usuario": str(getattr(page, "usuario_actual", "") or "PC"),
+                    }).execute().data or {}
+                except Exception as ex:
+                    msg = str(getattr(ex, "message", None) or ex)
+                    if "PGRST202" in msg or "wms_recepcion_asignar_contenedor" in msg:
+                        msg = "falta ejecutar 57_contenedor_lpn_recibidos.sql en Supabase"
+                    lbl_err.value = f"No se pudo asignar: {msg}"
+                    page.update()
+                    return
+                page.pop_dialog()
+                notificar(f"Contenedor {res.get('contenedor', cont)} asignado a {res.get('lpns', 0)} LPN "
+                          f"({res.get('filas', 0)} registro(s) actualizados).", "#059669")
+                cargar_historico_recepciones()
+
+            txt_cont.on_submit = confirmar
+            dlg = ft.AlertDialog(
+                modal=True, bgcolor=UI["card"],
+                title=ft.Row([ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, color=ACCENT_CYAN, size=22),
+                              ft.Text("Asignar contenedor a LPN recibidos", size=16, weight=ft.FontWeight.W_600, color=TEXT_WHITE)],
+                             spacing=8),
+                content=ft.Container(width=480, content=ft.Column([
+                    ft.Text(f"{len(lpns)} LPN marcados · {unidades:,} UN".replace(",", "."), size=13,
+                            weight=ft.FontWeight.W_600, color=TEXT_WHITE),
+                    ft.Text(", ".join(lpns[:12]) + (f" y {len(lpns) - 12} más" if len(lpns) > 12 else ""),
+                            size=11.5, color=UI["texto_2"]),
+                    txt_cont,
+                    *[ft.Row([ft.Icon(ft.Icons.INFO_OUTLINE_ROUNDED, size=16, color="#F59E0B"),
+                              ft.Text(a, size=11.5, color="#FCD34D", expand=True)], spacing=6) for a in avisos],
+                    ft.Text("Queda registrado en las observaciones del LPN (quién, cuándo y el contenedor anterior).",
+                            size=11, color=UI["texto_3"]),
+                    lbl_err,
+                ], spacing=10, tight=True)),
+                actions=[ui_boton("Cancelar", None, lambda ev: page.pop_dialog(), "texto"),
+                         ui_boton("Asignar contenedor", ft.Icons.CHECK_ROUNDED, confirmar, "primario")],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+            page.show_dialog(dlg)
+            page.update()
+
+        def resumen_excel_por_contenedor_hist(e=None):
+            """Un Resumen Excel (formato ejecutivo) por cada OC + contenedor de los LPN marcados."""
+            regs = _solo_marcados_hist() or list(ultimos_filtrados_hist)
+            if not regs:
+                notificar("Marque los LPN del contenedor que quiere reportar.", "#D97706")
+                return
+            grupos = {}
+            for r in regs:
+                aid = r.get("asn_id")
+                cont = _contenedor_lpn(r) or "SIN CONTENEDOR"
+                clave = f"ASN:{aid}" if aid else f"CONT:{str(r.get('contenedor') or 'SIN-CONTENEDOR').strip().upper()}"
+                grupos.setdefault((clave, cont), 0)
+                grupos[(clave, cont)] += 1
+            if len(grupos) > 6:
+                notificar(f"Hay {len(grupos)} combinaciones OC/contenedor marcadas; filtre por OC o marque menos LPN.", "#D97706")
+                return
+            from servicios.reporte_ejecutivo import reporte_recepcion, nombre_reporte_desde_datos
+            carpeta_r = os.path.join(os.getcwd(), "reportes_recepcion")
+            os.makedirs(carpeta_r, exist_ok=True)
+            hechos = 0
+            for (clave, cont), _ in grupos.items():
+                try:
+                    datos_r = supabase.rpc("wms_reporte_recepcion", {
+                        "p_bodega": obtener_bodega_activa(page), "p_numero_oc": None,
+                        "p_clave": clave, "p_contenedor": cont,
+                    }).execute().data or {}
+                    oc_txt = datos_r.get("numero_oc") or "LIBRE"
+                    ruta = reporte_recepcion(datos_r, os.path.join(carpeta_r, nombre_reporte_desde_datos(datos_r)))
+                    descargar_archivo_web(ruta, f"Resumen recepción OC {oc_txt} · contenedor {cont}")
+                    hechos += 1
+                except Exception as ex:
+                    msg = str(getattr(ex, "message", None) or ex)
+                    if "PGRST202" in msg or "p_contenedor" in msg:
+                        msg = "falta ejecutar 57_contenedor_lpn_recibidos.sql en Supabase"
+                    notificar(f"No se pudo armar el resumen del contenedor {cont}: {msg}", "#B91C1C")
+            if hechos:
+                notificar(f"{hechos} resumen(es) Excel por contenedor generado(s).", "#059669")
+
         def cargar_historico_recepciones(e=None):
             nonlocal historico_filtrado_actual
             filtro_h = (txt_buscar_hist_rec.value or "").strip().upper()
@@ -1886,6 +2006,7 @@ class RecepcionModulo:
                                     ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
                                     ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
                                     ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
+                                    ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
                                     ft.DataCell(ft.Text(f"{unid_g_sum} UN recibidas", weight=ft.FontWeight.BOLD, size=10, color="#34D399")),
                                     ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
                                     ft.DataCell(ft.Text("-", size=10, color=TEXT_MUTED)),
@@ -1928,6 +2049,10 @@ class RecepcionModulo:
                                 ft.DataCell(ft.Text(item["po_real"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                                 ft.DataCell(ft.Text(item["proveedor"][:22], size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(lpn_h, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN, size=11)),
+                                ft.DataCell(ft.Text(_contenedor_lpn(r) or "Sin asignar", size=11,
+                                                    weight=ft.FontWeight.W_600 if _contenedor_lpn(r) else None,
+                                                    color=TEXT_WHITE if _contenedor_lpn(r) else "#F59E0B",
+                                                    italic=not _contenedor_lpn(r))),
                                 ft.DataCell(ft.Text(item["sku"], weight=ft.FontWeight.BOLD, size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(str(r.get("cajas", 0)), size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(f"x{r.get('multiplo_aplicado', 1)}", size=11, color=TEXT_MUTED)),
@@ -2020,7 +2145,10 @@ class RecepcionModulo:
             smtp_pass = os.getenv("SMTP_PASS", "").strip()
             smtp_listo = bool(smtp_user and smtp_pass)
             destinatarios_default = os.getenv("CORREOS_ACTA_RECEPCION", "javier.dominguez@ludipek.com, bernardita.lagos@ludipek.com, vanesa.galaz@ludipek.com, mauricio.amenabar@ludipek.com, daniela.medone@ludipek.com, sebastian.oyaneder@ludipek.com, joaquin.bernal@ludipek.com, mery.vargas@ludipek.com, ivan.oyarce@ludipek.com, equipoqa@ludipek.com, marco.falchetti@ludipek.com")
-            nombre_pdf = f"Acta_Recepcion_OC_{_nombre_archivo_seguro_local(cod_po_str)}.pdf"
+            from servicios.reporte_ejecutivo import nombre_reporte_recepcion
+            nombre_pdf = nombre_reporte_recepcion(cabecera_asn_actual.get("numero_oc"), cabecera_asn_actual.get("codigo_asn"),
+                                                  prov_str, None if cabecera_asn_actual.get("numero_oc") else cont_ref,
+                                                  extension="pdf")
 
             txt_para = texto_dark("Para (separe con coma)", value=destinatarios_default)
             txt_cc = texto_dark("CC (opcional)")
@@ -2063,7 +2191,7 @@ class RecepcionModulo:
                 """Resumen ejecutivo en Excel de toda la OC (todas sus recepciones). Script 51."""
                 if resumen_xlsx["ruta"] and os.path.exists(resumen_xlsx["ruta"]):
                     return resumen_xlsx["ruta"]
-                from servicios.reporte_ejecutivo import reporte_recepcion
+                from servicios.reporte_ejecutivo import reporte_recepcion, nombre_reporte_desde_datos
                 datos_r = supabase.rpc("wms_reporte_recepcion", {
                     "p_bodega": obtener_bodega_activa(self.page),
                     "p_numero_oc": str(cabecera_asn_actual.get("numero_oc") or "") or None,
@@ -2071,8 +2199,9 @@ class RecepcionModulo:
                 }).execute().data or {}
                 carpeta_r = os.path.join(os.getcwd(), "reportes_recepcion")
                 os.makedirs(carpeta_r, exist_ok=True)
+                datos_r.setdefault("codigo_asn", cabecera_asn_actual.get("codigo_asn"))
                 resumen_xlsx["ruta"] = reporte_recepcion(datos_r, os.path.join(
-                    carpeta_r, f"Resumen_Recepcion_OC_{_nombre_archivo_seguro_local(cod_po_str)}.xlsx"))
+                    carpeta_r, nombre_reporte_desde_datos(datos_r)))
                 return resumen_xlsx["ruta"]
 
             def descargar_resumen(ev=None):
@@ -2329,10 +2458,12 @@ class RecepcionModulo:
                 ahora_fmt = datetime.now().strftime("%d-%m-%Y %H:%M")
 
                 os.makedirs("reportes_recepcion", exist_ok=True)
-                codigo_po = _nombre_archivo_seguro_local(codigo_po_raw)
+                from servicios.reporte_ejecutivo import nombre_reporte_recepcion
                 nombre_archivo = os.path.join(
                     "reportes_recepcion",
-                    f"Reporte_Recepcion_OC_{codigo_po}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    nombre_reporte_recepcion(cabecera_asn_actual.get("numero_oc"), nota_str, prov_str,
+                                             None if cabecera_asn_actual.get("numero_oc") else cont_str,
+                                             prefijo="Acta_"),
                 )
 
                 wb = openpyxl.Workbook()
@@ -3970,12 +4101,14 @@ class RecepcionModulo:
                             ("Imprimir etiquetas LPN (15x10)", ft.Icons.PRINT_ROUNDED, imprimir_lpns_seleccionados_hist),
                             ("Acta de recepción (PDF)", ft.Icons.PICTURE_AS_PDF_OUTLINED, descargar_pdf_historico_filtrado),
                             ("Exportar a Excel", ft.Icons.TABLE_VIEW_OUTLINED, exportar_excel_seleccionados_hist),
+                            ("Asignar contenedor…", ft.Icons.LOCAL_SHIPPING_OUTLINED, asignar_contenedor_marcados_hist),
+                            ("Resumen Excel por contenedor", ft.Icons.SUMMARIZE_OUTLINED, resumen_excel_por_contenedor_hist),
                         ]),
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True, run_spacing=8),
                     tabla_hist_ui,
                 ], spacing=12, tight=True),
                 titulo="Historial de recepciones",
-                subtitulo="Consulte por día u OC, marque registros y reimprima etiquetas o documentos",
+                subtitulo="Consulte por día u OC, marque LPN y reimprima, asigne contenedor o saque el resumen por contenedor",
                 icono=ft.Icons.MANAGE_SEARCH_ROUNDED,
             ),
         ], spacing=12)

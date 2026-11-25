@@ -93,7 +93,9 @@ def armar_correo(rep: dict):
                            "Recibido": c.get("recibido"),
                            "Diferencia": int(c.get("recibido") or 0) - int(c.get("esperado") or 0)} for c in cruce]
                          ).to_excel(xw, sheet_name="Cruce OC", index=False)
-    nombre = f"Recepcion_{cont.replace(',', '_').replace(' ', '')}_{(oc or 'SIN_OC')}.xlsx"
+    from servicios.reporte_ejecutivo import nombre_reporte_recepcion
+    nombre = nombre_reporte_recepcion(oc, " ".join(str(d.get(k) or "") for k in ("codigo_asn", "nota", "nota_oc")),
+                                      d.get("proveedor"), None if oc else cont)
     return asunto, cuerpo, buf.getvalue(), nombre
 
 
@@ -136,13 +138,16 @@ def procesar_cola(cliente, equipo: str, enviar=_enviar, maximo: int = 10) -> int
             try:   # Excel con el formato del resumen ejecutivo (script 51); si falla, queda el Excel simple
                 import os
                 import tempfile
-                from servicios.reporte_ejecutivo import reporte_recepcion
+                from servicios.reporte_ejecutivo import reporte_recepcion, nombre_reporte_desde_datos
                 d = rep.get("datos") or {}
                 datos_r = cliente.rpc("wms_reporte_recepcion", {
                     "p_bodega": rep.get("bodega"), "p_numero_oc": d.get("numero_oc") or None,
                     "p_clave": None if d.get("numero_oc") else rep.get("clave")}).execute().data or {}
                 if datos_r.get("lineas"):
-                    ruta_t = os.path.join(tempfile.gettempdir(), nombre.replace("Recepcion_", "Resumen_Recepcion_"))
+                    if not datos_r.get("numero_oc") and d.get("contenedor"):
+                        datos_r = dict(datos_r, solo_contenedor=True, contenedor=d.get("contenedor"))
+                    nombre = nombre_reporte_desde_datos(datos_r)
+                    ruta_t = os.path.join(tempfile.gettempdir(), nombre)
                     reporte_recepcion(datos_r, ruta_t)
                     with open(ruta_t, "rb") as fh:
                         adj, nombre = fh.read(), os.path.basename(ruta_t)

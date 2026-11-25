@@ -10,6 +10,7 @@ Detalle a mano, todo se recalcula). Uso:
     reporte_recepcion(datos, ruta)   datos = rpc wms_reporte_recepcion (script 51)
     reporte_despacho(detalle, ruta)  detalle = rpc wms_despacho_detalle (script 50)
 """
+import re
 from datetime import date, datetime
 
 from openpyxl import Workbook
@@ -36,6 +37,46 @@ B_TOTAL = Border(left=_fino, right=_fino, top=Side(style="thin", color=AZUL), bo
 
 
 # ----------------------------------------------------------------------------- utilidades
+
+# ----------------------------------------------------------------------------------------------
+# Nombre de archivo de los reportes de recepción: OC_<n°>_<PO>_<Proveedor>[_<contenedor>].<ext>
+#   El PO se toma de la nota de la OC (ej. "SA20260821 (PO1084)"); si no viene, se omite.
+# ----------------------------------------------------------------------------------------------
+def extraer_po(*textos) -> str:
+    for t in textos:
+        m = re.search(r"\bPO\s*[-#:]?\s*(\d{2,})", str(t or ""), re.I)
+        if m:
+            return f"PO{m.group(1)}"
+    return ""
+
+
+def _parte_archivo(texto, largo=60) -> str:
+    t = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", str(texto or ""))
+    t = re.sub(r"\s+", " ", t).strip().strip(".").strip()
+    return t[:largo].strip()
+
+
+def nombre_reporte_recepcion(numero_oc=None, nota=None, proveedor=None, contenedor=None,
+                             extension="xlsx", prefijo="") -> str:
+    oc = re.sub(r"^OC[\s\-_#:]*", "", str(numero_oc or "").strip(), flags=re.I)
+    if oc.upper() in ("", "S/OC", "S/N", "NONE", "LIBRE", "N/A"):
+        oc = ""
+    po = extraer_po(nota)
+    if po and po.upper() == oc.upper():
+        po = ""
+    partes = [f"OC_{_parte_archivo(oc, 30)}" if oc else "SIN_OC", po, _parte_archivo(proveedor, 50),
+              _parte_archivo(contenedor, 30)]
+    return f"{prefijo}{'_'.join(p for p in partes if p)}.{extension}"
+
+
+def nombre_reporte_desde_datos(datos: dict, extension="xlsx", prefijo="") -> str:
+    """Nombre a partir de lo que devuelve wms_reporte_recepcion (agrega el contenedor si el reporte es de uno solo)."""
+    datos = datos or {}
+    return nombre_reporte_recepcion(
+        datos.get("numero_oc"), " ".join(str(datos.get(k) or "") for k in ("codigo_asn", "nota_oc")),
+        datos.get("proveedor"), datos.get("contenedor") if datos.get("solo_contenedor") else None,
+        extension, prefijo)
+
 def _fecha(v):
     """'DD-MM-YYYY', 'YYYY-MM-DD', date o datetime -> date (o el texto si no se puede)."""
     if v is None or v == "":
@@ -220,12 +261,22 @@ def reporte_recepcion(datos: dict, ruta: str, emitido: datetime = None) -> str:
         s = str(l.get("sku")).upper()
         rec_sku[s] = rec_sku.get(s, 0) + _n(l.get("unidades"))
 
+    solo_contenedor = bool(datos.get("solo_contenedor"))
+
     def estatus(sku):
         o = oc_sku.get(sku)
         if not numero_oc:
             return "SIN OC"
         if not o or not _n(o.get("unidades_oc")):
             return "FUERA DE OC"
+        if solo_contenedor:
+            # reporte de un contenedor: se compara contra su packing list (si se cargó), no contra toda la OC
+            if datos.get("pl_contenedor"):
+                dif = rec_sku.get(sku, 0) - _n(o.get("unidades_pl"))
+                if not _n(o.get("unidades_pl")):
+                    return "NO VIENE EN EL PL"
+                return "OK vs PL" if dif == 0 else (f"SOBRANTE vs PL (+{dif})" if dif > 0 else f"FALTANTE vs PL ({dif})")
+            return "RECIBIDO EN CONTENEDOR" if rec_sku.get(sku, 0) else "NO VINO EN ESTE CONTENEDOR"
         dif = rec_sku.get(sku, 0) - _n(o.get("unidades_oc"))
         return "OK (VALIDADA)" if dif == 0 else (f"SOBRANTE (+{dif})" if dif > 0 else f"PARCIAL ({dif})")
 
@@ -269,7 +320,11 @@ def reporte_recepcion(datos: dict, ruta: str, emitido: datetime = None) -> str:
     rng = lambda col: f"'Detalle Recepciones'!${col}${f0}:${col}${fin}"
 
     # ---------------- Consolidado por SKU ----------------
-    skus = sorted(rec_sku) + sorted(s for s in oc_sku if s not in rec_sku)
+    if solo_contenedor:   # un contenedor: lo recibido + lo que trae su PL (no toda la OC)
+        skus = sorted(rec_sku) + sorted(s for s in oc_sku if s not in rec_sku and datos.get("pl_contenedor")
+                                        and _n(oc_sku[s].get("unidades_pl")))
+    else:
+        skus = sorted(rec_sku) + sorted(s for s in oc_sku if s not in rec_sku)
     cols_c = ["SKU", "Descripción", "Lote(s)", "Vencimiento(s)", "Primera Recepción", "Última Recepción", "N° Recepciones",
               "Unid. / Caja", "Total Cajas", "Total Unidades", "% del Total", "Uni en OC", "Uni en PL", "Diferencia vs OC",
               "Estatus OC"]
@@ -311,18 +366,19 @@ def reporte_recepcion(datos: dict, ruta: str, emitido: datetime = None) -> str:
     wc.freeze_panes = "A5"
 
     # ---------------- Resumen ----------------
-    _titulo(ws, "H", f"RESUMEN EJECUTIVO DE RECEPCIÓN — {doc}",
+    _titulo(ws, "H", f"RESUMEN EJECUTIVO DE RECEPCIÓN — {doc}" + (f" · CONTENEDOR {contenedor}" if solo_contenedor else ""),
             f"LUDIPEK WMS | Proveedor: {proveedor} | Contenedor / Guía: {contenedor} | Fecha de Emisión: {emitido:%d/%m/%Y}")
     _kpis(ws, 4, [("TOTAL UNIDADES RECIBIDAS", f"='Detalle Recepciones'!L{rt}", FMT_MILES),
                   ("TOTAL CAJAS RECIBIDAS", f"='Detalle Recepciones'!K{rt}", FMT_MILES),
                   ("SKUS ÚNICOS RECIBIDOS", len(rec_sku), FMT_MILES),
                   ("DÍAS DE RECEPCIÓN", len(fechas), FMT_MILES)])
     _seccion(ws, 7, "H", "1. DATOS GENERALES" + (" DE LA ORDEN DE COMPRA" if numero_oc else " DE LA RECEPCIÓN"))
-    ok = all(estatus(s) == "OK (VALIDADA)" for s in skus) if numero_oc and skus else False
+    ok = all(estatus(s) in ("OK (VALIDADA)", "OK vs PL") for s in skus) if numero_oc and skus else False
     estado_ns = {"SI": "Sí", "PARCIAL": "Parcial", "NO": "No", "SIN_DATO": "Sin dato"}.get(datos.get("cargada_ns"), "—")
     fila = _datos_generales(ws, 8, [
         ("Orden de Compra:", numero_oc or "SIN OC (recepción libre)"), ("Contenedor / Guía:", contenedor),
-        ("Proveedor:", proveedor), ("Estatus Conciliación:", ("OK (VALIDADA)" if ok else "CON DIFERENCIAS") if numero_oc else "SIN OC"),
+        ("Proveedor:", proveedor), ("Estatus Conciliación:", ("SOLO ESTE CONTENEDOR" + (" · OK vs PL" if ok else (" · CON DIFERENCIAS vs PL" if datos.get("pl_contenedor") else " · sin PL cargado"))
+                                   if solo_contenedor else ("OK (VALIDADA)" if ok else "CON DIFERENCIAS")) if numero_oc else "SIN OC"),
         ("Fechas de Recepción:", fechas_txt or "—"), ("Fecha Emisión:", emitido.replace(microsecond=0)),
         ("Pallets recibidos:", _n(datos.get("pallets"))), ("Recibida en NetSuite:", estado_ns),
         ("Nota de la OC:", str(datos.get("nota_oc") or "—")[:120]), ("SKUs en más de una fecha:", len(multi)),
