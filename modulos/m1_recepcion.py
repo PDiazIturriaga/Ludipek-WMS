@@ -387,6 +387,240 @@ class RecepcionModulo:
             pdf.output(ruta_out)
             return ruta_out
 
+        def generar_acta_parcial_pdf(datos: dict) -> str:
+            """Acta de recepción PARCIAL de un contenedor (o guía) de una OC: lo pedido en la OC, lo que trae el PL del
+            contenedor, lo recibido en él, el acumulado de toda la OC y lo pendiente. Datos: wms_reporte_recepcion (57)."""
+            from fpdf import FPDF
+            from servicios.reporte_ejecutivo import nombre_reporte_desde_datos, extraer_po
+
+            def n_fmt(v):
+                return "-" if v is None else f"{int(v):,}".replace(",", ".")
+
+            def fecha_cl(v):
+                try:
+                    return datetime.fromisoformat(str(v).replace("Z", "+00:00")).strftime("%d-%m-%Y")
+                except Exception:
+                    return str(v or "")[:10]
+
+            oc_num = str(datos.get("numero_oc") or "S/OC")
+            proveedor = str(datos.get("proveedor") or "-")
+            cod_asn = str(datos.get("codigo_asn") or "")
+            nota = cod_asn.split("|", 1)[1].strip() if "|" in cod_asn else (str(datos.get("nota_oc") or "") or cod_asn)
+            po = extraer_po(cod_asn, datos.get("nota_oc"))
+            contenedor = str(datos.get("contenedor") or "SIN CONTENEDOR")
+            hay_pl = bool(datos.get("pl_contenedor"))
+            d1, d2 = fecha_cl(datos.get("fecha_desde")), fecha_cl(datos.get("fecha_hasta"))
+            fechas_txt = d1 if d1 == d2 else f"{d1} al {d2}"
+            estado_ns = {"CARGADA": "Cargada en NetSuite", "PARCIAL": "Cargada parcial en NetSuite",
+                         "NO_CARGADA": "No cargada en NetSuite"}.get(str(datos.get("cargada_ns") or ""), "")
+
+            oc_sku = {str(o.get("sku") or "").upper(): o for o in (datos.get("oc") or [])}
+            lotes = {}
+            for l in (datos.get("lineas") or []):
+                k = (str(l.get("sku") or "").upper(), str(l.get("lote") or "S/L"), str(l.get("vencimiento") or "S/F"))
+                a = lotes.setdefault(k, {"cajas": 0, "unidades": 0, "desc": l.get("descripcion")})
+                a["cajas"] += int(l.get("cajas") or 0)
+                a["unidades"] += int(l.get("unidades") or 0)
+            rec_cont = {}
+            for (sku_k, _, _), a in lotes.items():
+                rec_cont[sku_k] = rec_cont.get(sku_k, 0) + a["unidades"]
+
+            def estatus(sku_k):
+                o = oc_sku.get(sku_k)
+                if not o or not int(o.get("unidades_oc") or 0):
+                    return "FUERA DE OC", "rojo"
+                pend = int(o.get("unidades_oc") or 0) - int(o.get("unidades_rec_oc") or 0)
+                if hay_pl and rec_cont.get(sku_k, 0) != int(o.get("unidades_pl") or 0):
+                    d = rec_cont.get(sku_k, 0) - int(o.get("unidades_pl") or 0)
+                    return f"DIF. PL {d:+d}", "rojo"
+                if pend == 0:
+                    return "OC COMPLETA", "verde"
+                if pend < 0:
+                    return f"SOBRANTE {-pend}", "rojo"
+                return ("PENDIENTE" if rec_cont.get(sku_k) else "NO VINO"), ("normal" if rec_cont.get(sku_k) else "gris")
+
+            pdf = FPDF(orientation="P", unit="mm", format="A4")
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.add_page()
+            pdf.set_fill_color(15, 23, 42)
+            pdf.rect(0, 0, 210, 30, style="F")
+            ruta_logo = _buscar_ruta_logo_ludipek()
+            x_t = 10
+            if ruta_logo:
+                try:
+                    pdf.set_fill_color(255, 255, 255)
+                    pdf.rect(10, 3, 24, 24, style="F")
+                    pdf.image(ruta_logo, x=11, y=4, w=22, h=22)
+                    x_t = 39
+                except Exception:
+                    x_t = 10
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("Helvetica", "B", 12.5)
+            pdf.set_xy(x_t, 6)
+            pdf.cell(200 - x_t, 6, txt=_txt_latin("ACTA DE RECEPCION PARCIAL POR CONTENEDOR"), ln=True)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_x(x_t)
+            pdf.cell(200 - x_t, 5.5, txt=_txt_latin(f"OC {oc_num}{('  |  ' + po) if po else ''}  |  {proveedor[:50]}"), ln=True)
+            pdf.set_x(x_t)
+            pdf.cell(200 - x_t, 5.5, txt=_txt_latin(f"Contenedor / guia: {contenedor}  |  Emitida: {datetime.now():%d-%m-%Y %H:%M}"), ln=True)
+            pdf.set_text_color(0, 0, 0)
+
+            tot_oc = sum(int(o.get("unidades_oc") or 0) for o in oc_sku.values())
+            # acumulado y pendiente solo de los SKU de la OC (lo fuera de OC va en observaciones)
+            tot_acum = (sum(int(o.get("unidades_rec_oc") or 0) for o in oc_sku.values() if int(o.get("unidades_oc") or 0))
+                        if oc_sku else int(datos.get("unidades_rec_oc") or 0))
+            pend_total = sum(max(int(o.get("unidades_oc") or 0) - int(o.get("unidades_rec_oc") or 0), 0) for o in oc_sku.values())
+            avance = f"{n_fmt(tot_acum)} de {n_fmt(tot_oc)} UN ({(tot_acum * 100 / tot_oc):.0f}%)" if tot_oc else n_fmt(tot_acum) + " UN"
+            info = [
+                (f"ORDEN DE COMPRA: {oc_num}", f"PROVEEDOR: {proveedor}"),
+                (f"NOTA / PO: {nota or '-'}", f"CONTENEDOR / GUIA: {contenedor}"),
+                (f"FECHA RECEPCION: {fechas_txt}", f"PALLETS: {datos.get('pallets') or 0} de {datos.get('pallets_oc') or 0} de la OC"),
+                (f"ESTADO OC: {str(datos.get('estado_oc') or '-').replace('_', ' ')}" + (f" - {estado_ns}" if estado_ns else ""),
+                 f"AVANCE OC (todos los cont.): {avance}"),
+            ]
+            pdf.set_fill_color(241, 245, 249)
+            pdf.set_draw_color(203, 213, 225)
+            pdf.rect(10, 34, 190, 26, style="DF")
+            pdf.set_font("Helvetica", "B", 8.6)
+            y = 36
+            for a, b in info:
+                pdf.set_xy(13, y)
+                pdf.cell(92, 5, txt=_txt_latin(a)[:58])
+                pdf.cell(95, 5, txt=_txt_latin(b)[:62])
+                y += 5.6
+
+            pdf.set_xy(10, 63)
+            pdf.set_font("Helvetica", "B", 9.5)
+            pdf.cell(190, 6, txt="DETALLE POR SKU, LOTE Y VENCIMIENTO  -  CONCILIACION PARCIAL CONTRA LA OC", ln=True)
+            W = (18, 37, 16, 15, 14, 14, 11, 15, 15, 14, 21)
+            TIT = ("SKU", "DESCRIPCION", "LOTE", "VENC.", "UNI OC", "UNI PL" if hay_pl else "PL", "CAJAS",
+                   "REC. CONT.", "ACUM. OC", "PEND. OC", "ESTATUS")
+            pdf.set_fill_color(30, 58, 138)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("Helvetica", "B", 7)
+            for w_, t_ in zip(W, TIT):
+                pdf.cell(w_, 7, t_, border=1, align="L" if t_ in ("SKU", "DESCRIPCION") else "C", fill=True)
+            pdf.ln(7)
+            COL = {"rojo": (254, 226, 226), "verde": (220, 252, 231), "gris": (241, 245, 249), "normal": (255, 255, 255)}
+
+            def fila(vals, tono):
+                pdf.set_fill_color(*COL[tono])
+                pdf.set_text_color(100, 116, 139) if tono == "gris" else pdf.set_text_color(0, 0, 0)
+                largos = (11, 22, 10, 10, 9, 9, 7, 9, 9, 9, 14)
+                for i_c, (w_, v_) in enumerate(zip(W, vals)):
+                    pdf.cell(w_, 5.6, _txt_latin(str(v_))[:largos[i_c]], border=1, align="L" if i_c in (0, 1) else "C", fill=True)
+                pdf.ln(5.6)
+
+            pdf.set_font("Helvetica", "", 7.2)
+            impresos = set()
+            tot_cajas = tot_rec = 0
+            obs = []
+            for (sku_k, lote_k, venc_k), a in sorted(lotes.items()):
+                o = oc_sku.get(sku_k, {})
+                est, tono = estatus(sku_k)
+                primera = sku_k not in impresos
+                impresos.add(sku_k)
+                pend = int(o.get("unidades_oc") or 0) - int(o.get("unidades_rec_oc") or 0) if o else None
+                fila((sku_k, o.get("descripcion") or a["desc"] or "", lote_k, venc_k,
+                      n_fmt(o.get("unidades_oc")) if primera and o else ("" if not primera else "-"),
+                      (n_fmt(o.get("unidades_pl")) if hay_pl else "-") if primera else "",
+                      n_fmt(a["cajas"]), n_fmt(a["unidades"]),
+                      n_fmt(o.get("unidades_rec_oc")) if primera and o else "",
+                      (n_fmt(max(pend, 0)) if pend is not None else "-") if primera else "",
+                      est if primera else ""), tono)
+                tot_cajas += a["cajas"]
+                tot_rec += a["unidades"]
+                if primera and tono == "rojo":
+                    obs.append(f"- {sku_k}: {est} (recibido en este contenedor {n_fmt(rec_cont.get(sku_k))} UN"
+                               + (f", OC {n_fmt(o.get('unidades_oc'))} UN, acumulado {n_fmt(o.get('unidades_rec_oc'))} UN)" if o else ")"))
+            # SKU de la OC que no vinieron en este contenedor (para ver la OC completa)
+            for sku_k, o in sorted(oc_sku.items()):
+                if sku_k in impresos or not int(o.get("unidades_oc") or 0):
+                    continue
+                if hay_pl and int(o.get("unidades_pl") or 0):
+                    est, tono = "FALTA vs PL", "rojo"
+                    obs.append(f"- {sku_k}: venia en el PL del contenedor ({n_fmt(o.get('unidades_pl'))} UN) y no se recibio")
+                else:
+                    est, tono = estatus(sku_k)
+                pend = int(o.get("unidades_oc") or 0) - int(o.get("unidades_rec_oc") or 0)
+                fila((sku_k, o.get("descripcion") or "", "-", "-", n_fmt(o.get("unidades_oc")),
+                      n_fmt(o.get("unidades_pl")) if hay_pl else "-", 0, 0, n_fmt(o.get("unidades_rec_oc")),
+                      n_fmt(max(pend, 0)), est), tono)
+
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Helvetica", "B", 7.4)
+            pdf.set_fill_color(226, 232, 240)
+            pdf.cell(sum(W[:4]), 6.2, "TOTAL", border=1, align="R", fill=True)
+            tot_pl = sum(int(o.get("unidades_pl") or 0) for o in oc_sku.values())
+            for w_, v_ in zip(W[4:], (n_fmt(tot_oc), n_fmt(tot_pl) if hay_pl else "-", n_fmt(tot_cajas), n_fmt(tot_rec),
+                                     n_fmt(tot_acum), n_fmt(pend_total), "")):
+                pdf.cell(w_, 6.2, v_, border=1, align="C", fill=True)
+            pdf.ln(9)
+
+            pdf.set_font("Helvetica", "B", 8.4)
+            pdf.cell(190, 5, txt="RESUMEN", ln=True)
+            pdf.set_font("Helvetica", "", 8)
+            resumen = [
+                f"Este documento corresponde solo a lo recibido en el contenedor / guia {contenedor}: {n_fmt(tot_rec)} UN en {datos.get('pallets') or 0} pallets.",
+                f"Acumulado de la OC {oc_num} considerando todos sus contenedores: {avance}.",
+                (f"La OC sigue abierta: quedan {n_fmt(pend_total)} UN pendientes de recibir en proximos contenedores."
+                 if pend_total else "Con lo recibido hasta ahora la OC queda completa."),
+            ]
+            if not hay_pl:
+                resumen.append("No se cargo packing list para este contenedor: no se compara contra PL.")
+            for t_ in resumen:
+                pdf.multi_cell(190, 4.4, txt=_txt_latin(t_))
+            if obs:
+                pdf.ln(2)
+                pdf.set_font("Helvetica", "B", 8.4)
+                pdf.set_text_color(185, 28, 28)
+                pdf.cell(190, 5, txt="OBSERVACIONES (FUERA DE OC / SOBRANTES / DIFERENCIAS CONTRA PL):", ln=True)
+                pdf.set_font("Helvetica", "", 7.8)
+                for t_ in obs[:10]:
+                    pdf.multi_cell(190, 4.2, txt=_txt_latin(t_))
+                pdf.set_text_color(0, 0, 0)
+
+            pdf.ln(14)
+            y_f = pdf.get_y()
+            if y_f > 255:
+                pdf.add_page()
+                y_f = 40
+            pdf.set_draw_color(0, 0, 0)
+            pdf.line(20, y_f + 14, 85, y_f + 14)
+            pdf.line(125, y_f + 14, 190, y_f + 14)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_xy(20, y_f + 16)
+            pdf.cell(65, 5, "RECEPCION BODEGA", align="C")
+            pdf.set_xy(125, y_f + 16)
+            pdf.cell(65, 5, "CONTROL DE CALIDAD / SUPERVISION", align="C")
+
+            os.makedirs("reportes_recepcion", exist_ok=True)
+            ruta = os.path.join("reportes_recepcion", nombre_reporte_desde_datos(datos, extension="pdf"))
+            pdf.output(ruta)
+            return ruta
+
+        def actas_parciales_por_contenedor(grupos: list) -> int:
+            """grupos: [(asn_id, contenedor)]. Genera y descarga un acta parcial por cada uno. Devuelve cuántas salieron."""
+            hechas = 0
+            for asn_id_g, cont_g in grupos:
+                try:
+                    datos_a = supabase.rpc("wms_reporte_recepcion", {
+                        "p_bodega": obtener_bodega_activa(page), "p_numero_oc": None,
+                        "p_clave": f"ASN:{asn_id_g}", "p_contenedor": cont_g or "SIN CONTENEDOR",
+                    }).execute().data or {}
+                    if not datos_a.get("lineas"):
+                        notificar(f"No hay recepciones del contenedor {cont_g} en esta OC.", "#D97706")
+                        continue
+                    ruta = generar_acta_parcial_pdf(datos_a)
+                    descargar_archivo_web(ruta, f"Acta parcial OC {datos_a.get('numero_oc') or ''} - {cont_g}")
+                    hechas += 1
+                except Exception as ex:
+                    msg = str(getattr(ex, "message", None) or ex)
+                    if "PGRST202" in msg or "p_contenedor" in msg:
+                        msg = "falta ejecutar 57_contenedor_lpn_recibidos.sql en Supabase"
+                    notificar(f"No se pudo generar el acta del contenedor {cont_g}: {msg}", "#B91C1C")
+            return hechas
+
         def reimprimir_desde_fila(lpn_cod: str):
             """Genera y descarga en el navegador la etiqueta 15x10 cm de un LPN específico."""
             try:
@@ -1714,8 +1948,22 @@ class RecepcionModulo:
             if not regs_sel:
                 notificar("No hay recepciones seleccionadas para descargar en PDF.", "#D97706")
                 return
-            dia_lbl = dd_fecha_hist_rec.value if (dd_fecha_hist_rec.value and dd_fecha_hist_rec.value != "TODAS") else datetime.now().strftime("%d-%m-%Y")
-            descargar_pdf_historico_grupo(regs_sel, dia_lbl, "SELECCION")
+            # LPN con OC: acta parcial por contenedor con los datos reales de la OC (script 57)
+            grupos = []
+            for r in regs_sel:
+                if r.get("asn_id"):
+                    g = (r.get("asn_id"), _contenedor_lpn(r) or "SIN CONTENEDOR")
+                    if g not in grupos:
+                        grupos.append(g)
+            if len(grupos) > 6:
+                notificar(f"Hay {len(grupos)} combinaciones OC/contenedor marcadas; filtre por OC o marque menos LPN.", "#D97706")
+                return
+            if grupos:
+                actas_parciales_por_contenedor(grupos)
+            sin_oc = [r for r in regs_sel if not r.get("asn_id")]
+            if sin_oc:   # recepciones libres (sin OC): acta simple como antes
+                dia_lbl = dd_fecha_hist_rec.value if (dd_fecha_hist_rec.value and dd_fecha_hist_rec.value != "TODAS") else datetime.now().strftime("%d-%m-%Y")
+                descargar_pdf_historico_grupo(sin_oc, dia_lbl, "SIN OC")
 
         def _contenedor_lpn(reg: dict) -> str:
             """Contenedor real escrito en el LPN (vacío si quedó el valor automático PO-xx / SIN-CONTENEDOR)."""
@@ -3845,7 +4093,63 @@ class RecepcionModulo:
             ("Packing list del proveedor (PDF, IA)", ft.Icons.UPLOAD_FILE_ROUNDED, seleccionar_y_procesar_packing_ia),
             ("Certificado de análisis CoA (PDF, IA)", ft.Icons.VERIFIED_OUTLINED, anexar_certificado_coa_ia),
         ])
+        def elegir_contenedor_acta_parcial(e=None):
+            if not asn_actual_id:
+                notificar("Elija primero una OC.", "#D97706")
+                return
+            try:
+                conts = supabase.rpc("wms_recepcion_contenedores", {
+                    "p_bodega": obtener_bodega_activa(page),
+                    "p_numero_oc": str(cabecera_asn_actual.get("numero_oc") or ""),
+                }).execute().data or []
+            except Exception as ex:
+                msg = str(getattr(ex, "message", None) or ex)
+                notificar("Falta ejecutar 57_contenedor_lpn_recibidos.sql en Supabase." if "PGRST202" in msg else f"Error: {msg}", "#B91C1C")
+                return
+            if not cabecera_asn_actual.get("numero_oc"):
+                conts = []
+            if not conts:
+                notificar("Esta OC todavía no tiene recepciones (o no tiene N° de OC).", "#D97706")
+                return
+
+            def generar(ev, c):
+                page.pop_dialog()
+                actas_parciales_por_contenedor([(asn_actual_id, c)])
+
+            filas = []
+            for c in conts:
+                nombre_c = str(c.get("contenedor") or "SIN CONTENEDOR")
+                d_txt = str(c.get("desde") or "")[:10]
+                filas.append(ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=8), border_radius=8, ink=True,
+                    border=ft.Border.all(1, UI["borde"]),
+                    on_click=lambda ev, c=nombre_c: generar(ev, c),
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, color=ACCENT_CYAN, size=20),
+                        ft.Column([
+                            ft.Text(nombre_c, size=13, weight=ft.FontWeight.W_600, color=TEXT_WHITE),
+                            ft.Text(f"{c.get('lpns') or 0} LPN · {int(c.get('unidades') or 0):,} UN · desde {d_txt}".replace(",", "."),
+                                    size=11, color=UI["texto_2"]),
+                        ], spacing=0, tight=True, expand=True),
+                        ft.Icon(ft.Icons.PICTURE_AS_PDF_OUTLINED, color=ACCENT_CYAN, size=18),
+                    ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ))
+            dlg = ft.AlertDialog(
+                modal=True, bgcolor=UI["card"],
+                title=ft.Text("Acta parcial por contenedor", size=16, weight=ft.FontWeight.W_600, color=TEXT_WHITE),
+                content=ft.Container(width=460, content=ft.Column([
+                    ft.Text("Elija el contenedor o guía. El acta muestra lo pedido en la OC, lo recibido en ese contenedor, "
+                            "el acumulado de toda la OC y lo pendiente.", size=11.5, color=UI["texto_2"]),
+                    *filas,
+                ], spacing=8, tight=True, scroll=ft.ScrollMode.AUTO)),
+                actions=[ui_boton("Cerrar", None, lambda ev: page.pop_dialog(), "texto")],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+            page.show_dialog(dlg)
+            page.update()
+
         menu_documentos = ui_menu("Documentos", ft.Icons.DESCRIPTION_OUTLINED, [
+            ("Acta parcial por contenedor (PDF)", ft.Icons.LOCAL_SHIPPING_OUTLINED, elegir_contenedor_acta_parcial),
             ("Acta de recepción (PDF)", ft.Icons.PICTURE_AS_PDF_OUTLINED, click_exportar_pdf_recepcion),
             ("Enviar acta por correo", ft.Icons.EMAIL_OUTLINED, enviar_correo_acta_po),
             ("Conciliación a Excel", ft.Icons.TABLE_VIEW_OUTLINED, click_exportar_excel_recepcion),
@@ -4099,7 +4403,7 @@ class RecepcionModulo:
                         ], spacing=4),
                         ui_menu("Con los marcados", ft.Icons.CHECKLIST_ROUNDED, [
                             ("Imprimir etiquetas LPN (15x10)", ft.Icons.PRINT_ROUNDED, imprimir_lpns_seleccionados_hist),
-                            ("Acta de recepción (PDF)", ft.Icons.PICTURE_AS_PDF_OUTLINED, descargar_pdf_historico_filtrado),
+                            ("Acta parcial por contenedor (PDF)", ft.Icons.PICTURE_AS_PDF_OUTLINED, descargar_pdf_historico_filtrado),
                             ("Exportar a Excel", ft.Icons.TABLE_VIEW_OUTLINED, exportar_excel_seleccionados_hist),
                             ("Asignar contenedor…", ft.Icons.LOCAL_SHIPPING_OUTLINED, asignar_contenedor_marcados_hist),
                             ("Resumen Excel por contenedor", ft.Icons.SUMMARIZE_OUTLINED, resumen_excel_por_contenedor_hist),
