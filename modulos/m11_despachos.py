@@ -74,12 +74,12 @@ def _t(v, size=12, color=None, peso=None):
 
 def _empaque_txt(emp: dict) -> str:
     emp = emp or {}
-    partes = [f"{_miles(emp.get('cajas'))} cj"]
+    partes = [f"{_miles(emp.get('cajas'))} cj"] if _n(emp.get("cajas")) else []
     if _n(emp.get("displays")):
         partes.append(f"{_miles(emp.get('displays'))} dsp")
     if _n(emp.get("sueltas")):
         partes.append(f"{_miles(emp.get('sueltas'))} un sueltas")
-    return " + ".join(partes)
+    return " + ".join(partes) or "0 cj"
 
 
 def leer_pedido_excel(ruta: str) -> list:
@@ -184,8 +184,8 @@ class DespachosModulo:
                                       on_click=lambda e: self.sel_sub_despachos(0)),
                         ft.Column([ft.Row([self.lbl_titulo, self.chip_estado], spacing=12, wrap=True), self.lbl_meta],
                                   spacing=4, tight=True, expand=True),
-                        self.fila_acciones,
-                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True),
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    self.fila_acciones,
                     self.barra,
                     self.lbl_avance,
                 ], spacing=10, tight=True)),
@@ -370,8 +370,10 @@ class DespachosModulo:
                 ft.DataCell(_t(_miles(pedido) if pedido is not None else "—", 12)),
                 ft.DataCell(_t(f"{_n(s.get('pallets'))}" + (f" / {float(s.get('pedido_pallets')):g}" if s.get("pedido_pallets") else ""), 12)),
                 ft.DataCell(_t(_miles(s.get("unidades")), 12.5, peso=ft.FontWeight.W_600)),
-                ft.DataCell(_t(_empaque_txt(s.get("empaque")) + f"  (caja x{s.get('multiplo_caja')}"
-                               + (f", display x{s.get('multiplo_display')}" if 1 < _n(s.get("multiplo_display")) < _n(s.get("multiplo_caja")) else "") + ")", 11.5)),
+                ft.DataCell(_t(_empaque_txt(s.get("empaque")) + (
+                    f"  (solo display x{s.get('multiplo_display')})" if _n(s.get("multiplo_caja")) == 0 else
+                    f"  (caja x{s.get('multiplo_caja')}"
+                    + (f", display x{s.get('multiplo_display')}" if 1 < _n(s.get("multiplo_display")) < _n(s.get("multiplo_caja")) else "") + ")"), 11.5)),
                 ft.DataCell(_t(lotes, 11, UI["texto_2"])),
                 ft.DataCell(_t(f"{float(s.get('peso_kg') or 0):,.0f}".replace(",", "."), 12)),
                 ft.DataCell(_t(est, 12, col, ft.FontWeight.W_600)),
