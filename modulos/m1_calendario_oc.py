@@ -302,6 +302,67 @@ class PanelCalendarioOc:
             if vieja or (self.anio, self.mes) not in self._meses_leidos:
                 self.sincronizar(silencioso=True)
 
+    # Formas de saber si una OC tiene recepción en NetSuite, de la más completa a la más simple.
+    # Se recuerda la que funcionó (NetSuite responde distinto según la cuenta y los permisos).
+    _forma_recepcion_ns = None
+
+    def _revisar_recepciones_ns(self, ids: list) -> list:
+        """[{ns_id, recepciones, fecha}] para cada OC de `ids` (0 recepciones si no tiene)."""
+        consultas = {
+            # 1) recepciones de artículos enlazadas a la OC desde su línea principal (trae la fecha)
+            "ENLACE_LINEA": """
+                SELECT tl.createdfrom AS po_id, COUNT(DISTINCT t.id) AS recepciones,
+                       TO_CHAR(MIN(t.trandate), 'YYYY-MM-DD') AS fecha
+                FROM transaction t INNER JOIN transactionline tl ON tl.transaction = t.id
+                WHERE t.type = 'ItemRcpt' AND tl.mainline = 'T' AND tl.createdfrom IN ({ids})
+                GROUP BY tl.createdfrom""",
+            # 2) cantidad recibida en las líneas de la OC (sin fecha)
+            "CANTIDAD_RECIBIDA": """
+                SELECT tl.transaction AS po_id,
+                       CASE WHEN SUM(NVL(tl.quantityshiprecv, 0)) > 0 THEN 1 ELSE 0 END AS recepciones
+                FROM transactionline tl
+                WHERE tl.transaction IN ({ids}) AND tl.mainline = 'F' AND tl.item IS NOT NULL
+                GROUP BY tl.transaction""",
+            # 3) enlace en la cabecera
+            "ENLACE_CABECERA": """
+                SELECT t.createdfrom AS po_id, COUNT(*) AS recepciones, MIN(t.trandate) AS fecha
+                FROM transaction t
+                WHERE t.type = 'ItemRcpt' AND t.createdfrom IN ({ids})
+                GROUP BY t.createdfrom""",
+        }
+        orden = list(consultas)
+        if PanelCalendarioOc._forma_recepcion_ns in consultas:
+            orden.remove(PanelCalendarioOc._forma_recepcion_ns)
+            orden.insert(0, PanelCalendarioOc._forma_recepcion_ns)
+        marcas, ultimo_error = [], ""
+        for i in range(0, len(ids), 100):
+            lote = ids[i:i + 100]
+            dfr = None
+            for forma in list(orden):
+                dfr = consultar_netsuite(consultas[forma].format(ids=",".join(lote)))
+                if dfr is not None:
+                    PanelCalendarioOc._forma_recepcion_ns = forma
+                    orden.remove(forma)
+                    orden.insert(0, forma)
+                    break
+                ultimo_error = getattr(conexion_erp, "ULTIMO_ERROR_NETSUITE", "") or "sin respuesta"
+                orden.remove(forma)          # esa forma no sirve en esta cuenta: no se reintenta
+                if not orden:
+                    break
+            if dfr is None:
+                raise RuntimeError(ultimo_error)
+            por_po = {_valor(r.get("po_id")): r for r in dfr.to_dict("records")} if len(dfr) else {}
+            for pid in lote:
+                r = por_po.get(pid) or {}
+                fecha = _valor(r.get("fecha"))
+                if fecha:
+                    try:      # solo AAAA-MM-DD (dd/mm o mm/dd depende de la cuenta: mejor sin fecha que una equivocada)
+                        fecha = date.fromisoformat(fecha[:10]).isoformat()
+                    except ValueError:
+                        fecha = None
+                marcas.append({"ns_id": pid, "recepciones": _valor(r.get("recepciones")) or "0", "fecha": fecha})
+        return marcas
+
     def _consulta_ns(self, ini: date, fin: date, completa: bool, filtro: str = None) -> str:
         extra = ("TO_CHAR(t.createddate, 'YYYY-MM-DD HH24:MI:SS') AS creada_en, "
                  "TO_CHAR(t.duedate, 'YYYY-MM-DD') AS fecha_esperada, "
@@ -408,31 +469,21 @@ class PanelCalendarioOc:
                         msg_ab = f" {res_ab.get('abiertas', 0)} OC abiertas."
                     except Exception as ex_ab:
                         print(f"[CALENDARIO OC] marcar abiertas (¿falta el script 48?): {ex_ab}")
+                        msg_ab = " (OC abiertas: falta ejecutar 48_oc_por_marca_contenedores.sql)"
+                elif abiertas is None:
+                    msg_ab = " (no se pudo leer la lista de OC abiertas en NetSuite)"
                 self._meses_leidos.add((ini.year, ini.month))
                 # ¿Cada OC ya tiene su recepción de artículos (Item Receipt) en NetSuite?
                 msg_r = ""
                 try:
                     ids = sorted({_valor(f.get("ns_id")) for f in filas if (_valor(f.get("ns_id")) or "").isdigit()})
-                    marcas = []
-                    for i in range(0, len(ids), 200):
-                        lote = ids[i:i + 200]
-                        dfr = consultar_netsuite(f"""
-                            SELECT t.createdfrom AS po_id, COUNT(*) AS recepciones, TO_CHAR(MIN(t.trandate), 'YYYY-MM-DD') AS fecha
-                            FROM transaction t
-                            WHERE t.type = 'ItemRcpt' AND t.createdfrom IN ({",".join(lote)})
-                            GROUP BY t.createdfrom""")
-                        if dfr is None:
-                            raise RuntimeError(getattr(conexion_erp, "ULTIMO_ERROR_NETSUITE", "") or "sin respuesta")
-                        por_po = {_valor(r.get("po_id")): r for r in dfr.to_dict("records")} if len(dfr) else {}
-                        for pid in lote:
-                            r = por_po.get(pid) or {}
-                            marcas.append({"ns_id": pid, "recepciones": _valor(r.get("recepciones")) or "0", "fecha": _valor(r.get("fecha"))})
+                    marcas = self._revisar_recepciones_ns(ids)
                     if marcas:
                         supabase.rpc("wms_oc_marcar_recepcion_ns", {"p_filas": marcas}).execute()
                         msg_r = f" Recepción en NetSuite revisada en {len(marcas)} OC."
                 except Exception as ex_r:
-                    msg_r = f" (no se pudo revisar las recepciones en NetSuite: {ex_r})"
-                    print(f"[CALENDARIO OC] {msg_r}")
+                    msg_r = f" (no se pudo revisar las recepciones en NetSuite: {str(ex_r)[:160]})"
+                    print(f"[CALENDARIO OC] {ex_r}")
                 msg = f"NetSuite: {res.get('leidas', 0)} OC leídas, {res.get('nuevas', 0)} nuevas.{msg_ab}{msg_r}"
             except Exception as ex:
                 msg, color = f"No se pudo leer NetSuite: {getattr(ex, 'message', None) or ex}", "#B91C1C"
