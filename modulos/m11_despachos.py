@@ -146,13 +146,13 @@ class DespachosModulo:
         self.tabla_lista = ft.DataTable(
             heading_row_height=38, data_row_min_height=44, data_row_max_height=56,
             columns=[_col("Despacho"), _col("Destino"), _col("Referencia"), _col("Contenedor"), _col("Estado"),
-                     _col("Pallets", True), _col("Unidades / pedido"), _col("Creado"), _col("Cerrado")],
+                     _col("Pallets", True), _col("Unidades / pedido"), _col("Creado"), _col("Cerrado"), _col("")],
             rows=[])
         self.txt_vacio = _t("No hay despachos. Cree uno con «Nuevo despacho».", 12.5, UI["texto_2"])
         self.sub_lista = ft.Column([
             ui_tarjeta(ft.Column([ui_tabla(self.tabla_lista, 420), self.txt_vacio], spacing=8, tight=True),
                        titulo="Despachos de exportación",
-                       subtitulo="Clic en un despacho para ver el avance por SKU, los LPN y exportar el packing list",
+                       subtitulo="Presione «Abrir» para cargar el pedido (Excel), ver el avance por SKU, los LPN y el resumen Excel",
                        icono=ft.Icons.FLIGHT_TAKEOFF_ROUNDED,
                        acciones=[ui_boton("Nuevo despacho", ft.Icons.ADD_ROUNDED, lambda e: self._dialogo_nuevo())]),
         ], spacing=14, tight=True)
@@ -262,7 +262,8 @@ class DespachosModulo:
             rows.append(ft.DataRow(
                 on_select_change=lambda e, i=d.get("id"): self.abrir(i),
                 cells=[
-                    ft.DataCell(_t(d.get("numero"), 12.5, UI["acento"], ft.FontWeight.W_700)),
+                    ft.DataCell(ft.TextButton(d.get("numero"), on_click=lambda e, i=d.get("id"): self.abrir(i),
+                                              tooltip="Abrir: cargar pedido, ver avance y exportar")),
                     ft.DataCell(_t(d.get("destino"), 12)),
                     ft.DataCell(_t(str(d.get("referencia") or "—")[:40], 12)),
                     ft.DataCell(_t(d.get("contenedor") or "—", 12)),
@@ -271,6 +272,8 @@ class DespachosModulo:
                     ft.DataCell(_t(f"{_miles(d.get('unidades'))} / {_miles(d.get('pedido_unidades'))}", 12)),
                     ft.DataCell(_t(f"{_fh(d.get('creado_en'))} · {d.get('creado_por') or ''}", 11.5, UI["texto_2"])),
                     ft.DataCell(_t(_fh(d.get("cerrado_en")) if d.get("cerrado_en") else "—", 11.5, UI["texto_2"])),
+                    ft.DataCell(ui_boton("Abrir" + (" y cargar pedido" if d.get("estado") == "ABIERTO" and not _n(d.get("skus_pedido")) else ""),
+                                         ft.Icons.OPEN_IN_FULL_ROUNDED, lambda e, i=d.get("id"): self.abrir(i), "secundario")),
                 ]))
         self.tabla_lista.rows = rows
         self.txt_vacio.visible = not rows
