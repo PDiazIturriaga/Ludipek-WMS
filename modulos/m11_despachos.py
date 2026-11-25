@@ -349,7 +349,9 @@ class DespachosModulo:
         for s in d.get("sku") or []:
             pedido = s.get("pedido_unidades")
             falta, sobra = _n(s.get("falta")), _n(s.get("sobra"))
-            if not s.get("en_pedido"):
+            if not _n(tot.get("pedido_unidades")):
+                est, col = "Sin pedido cargado", UI["texto_2"]
+            elif not s.get("en_pedido"):
                 est, col = "Fuera del pedido", UI["alerta"]
             elif falta:
                 est, col = f"Faltan {_miles(falta)}", UI["peligro"] if not _n(s.get("unidades")) else UI["alerta"]
@@ -366,7 +368,7 @@ class DespachosModulo:
                 ft.DataCell(_t(f"{_n(s.get('pallets'))}" + (f" / {float(s.get('pedido_pallets')):g}" if s.get("pedido_pallets") else ""), 12)),
                 ft.DataCell(_t(_miles(s.get("unidades")), 12.5, peso=ft.FontWeight.W_600)),
                 ft.DataCell(_t(_empaque_txt(s.get("empaque")) + f"  (caja x{s.get('multiplo_caja')}"
-                               + (f", display x{s.get('multiplo_display')}" if _n(s.get("multiplo_display")) > 1 else "") + ")", 11.5)),
+                               + (f", display x{s.get('multiplo_display')}" if 1 < _n(s.get("multiplo_display")) < _n(s.get("multiplo_caja")) else "") + ")", 11.5)),
                 ft.DataCell(_t(lotes, 11, UI["texto_2"])),
                 ft.DataCell(_t(f"{float(s.get('peso_kg') or 0):,.0f}".replace(",", "."), 12)),
                 ft.DataCell(_t(est, 12, col, ft.FontWeight.W_600)),

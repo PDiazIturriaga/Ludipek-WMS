@@ -448,7 +448,9 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
         r = c0 + j
         lotes = s.get("lotes") or []
         vencs = sorted({_txt_fecha(x.get("vencimiento")) for x in lotes})
-        if not s.get("en_pedido"):
+        if not _n(tot.get("pedido_unidades")):
+            est = "SIN PEDIDO CARGADO"
+        elif not s.get("en_pedido"):
             est = "FUERA DEL PEDIDO"
         elif _n(s.get("falta")):
             est = f"FALTAN {_n(s.get('falta')):,}".replace(",", ".")
