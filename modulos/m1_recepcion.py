@@ -2042,6 +2042,33 @@ class RecepcionModulo:
             def descargar_acta(ev=None):
                 descargar_archivo_web(ruta, f"Acta de recepción OC {cod_po_str}")
 
+            resumen_xlsx = {"ruta": None}
+
+            def _generar_resumen():
+                """Resumen ejecutivo en Excel de toda la OC (todas sus recepciones). Script 51."""
+                if resumen_xlsx["ruta"] and os.path.exists(resumen_xlsx["ruta"]):
+                    return resumen_xlsx["ruta"]
+                from servicios.reporte_ejecutivo import reporte_recepcion
+                datos_r = supabase.rpc("wms_reporte_recepcion", {
+                    "p_bodega": obtener_bodega_activa(self.page),
+                    "p_numero_oc": str(cabecera_asn_actual.get("numero_oc") or "") or None,
+                    "p_clave": None if cabecera_asn_actual.get("numero_oc") else (f"ASN:{asn_actual_id}" if asn_actual_id else None),
+                }).execute().data or {}
+                carpeta_r = os.path.join(os.getcwd(), "reportes_recepcion")
+                os.makedirs(carpeta_r, exist_ok=True)
+                resumen_xlsx["ruta"] = reporte_recepcion(datos_r, os.path.join(
+                    carpeta_r, f"Resumen_Recepcion_OC_{_nombre_archivo_seguro_local(cod_po_str)}.xlsx"))
+                return resumen_xlsx["ruta"]
+
+            def descargar_resumen(ev=None):
+                try:
+                    descargar_archivo_web(_generar_resumen(), f"Resumen ejecutivo OC {cod_po_str}")
+                except Exception as ex_r:
+                    msg_r = str(ex_r)
+                    if "PGRST202" in msg_r or "Could not find" in msg_r:
+                        msg_r = "falta ejecutar 51_reporte_recepcion.sql en Supabase"
+                    notificar(f"No se pudo armar el resumen Excel: {msg_r}", "#B91C1C")
+
             def _url_outlook():
                 """mailto con lo escrito en el diálogo (Outlook u otro programa de correo del equipo)."""
                 para = _lista_correos(txt_para.value)
@@ -2090,6 +2117,14 @@ class RecepcionModulo:
                 msg.set_content(txt_mensaje.value or cuerpo_default)
                 with open(ruta, "rb") as f_pdf:
                     msg.add_attachment(f_pdf.read(), maintype="application", subtype="pdf", filename=nombre_pdf)
+                try:   # también el resumen ejecutivo en Excel (si se puede armar)
+                    ruta_x = _generar_resumen()
+                    with open(ruta_x, "rb") as f_x:
+                        msg.add_attachment(f_x.read(), maintype="application",
+                                           subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                           filename=os.path.basename(ruta_x))
+                except Exception as ex_x:
+                    print(f"[ACTA] resumen Excel no adjuntado: {ex_x}")
                 if port == 465:
                     with smtplib.SMTP_SSL(host, port, timeout=30) as server:
                         server.login(smtp_user, smtp_pass)
@@ -2160,6 +2195,8 @@ class RecepcionModulo:
                 actions=[
                     ui_boton("Cancelar", None, lambda ev: page.pop_dialog(), "texto"),
                     ui_boton("Descargar acta", ft.Icons.DOWNLOAD_ROUNDED, descargar_acta, "secundario"),
+                    ui_boton("Resumen Excel", ft.Icons.TABLE_VIEW_ROUNDED, descargar_resumen, "secundario",
+                             tooltip="Resumen ejecutivo de toda la OC: por fecha, por vencimiento y por SKU"),
                     *([btn_outlook] if smtp_listo else []),
                     btn_enviar,
                 ],

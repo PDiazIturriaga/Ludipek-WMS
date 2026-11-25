@@ -364,11 +364,32 @@ class PanelOcPorProveedor:
         except Exception:
             pass
 
-    def _dialogo(self, titulo, contenido, ancho=820):
+    def _dialogo(self, titulo, contenido, ancho=820, acciones=None):
         self.page.show_dialog(ft.AlertDialog(
             bgcolor=UI["card"], title=_t(titulo, 18, peso=ft.FontWeight.W_700),
             content=ft.Container(width=ancho, content=contenido),
-            actions=[ui_boton("Cerrar", None, self._cerrar, "texto")], actions_alignment=ft.MainAxisAlignment.END))
+            actions=(acciones or []) + [ui_boton("Cerrar", None, self._cerrar, "texto")],
+            actions_alignment=ft.MainAxisAlignment.END))
+
+    def _resumen_excel(self, numero_oc):
+        """Resumen ejecutivo en Excel de todo lo recibido de la OC (script 51)."""
+        try:
+            import os
+            from servicios.reporte_ejecutivo import reporte_recepcion
+            datos = supabase.rpc("wms_reporte_recepcion", {"p_bodega": obtener_bodega_activa(self.page),
+                                                           "p_numero_oc": str(numero_oc), "p_clave": None}).execute().data or {}
+            if not (datos.get("lineas") or datos.get("oc")):
+                self._notificar("Esta OC todavía no tiene recepciones en el WMS.", "#D97706")
+                return
+            carpeta = os.path.join(os.getcwd(), "reportes_recepcion")
+            os.makedirs(carpeta, exist_ok=True)
+            ruta = reporte_recepcion(datos, os.path.join(carpeta, f"Resumen_Recepcion_OC_{numero_oc}_{datetime.now():%Y%m%d_%H%M}.xlsx"))
+            descargar_o_abrir_archivo(self.page, ruta)
+        except Exception as ex:
+            msg = _err(ex)
+            if "wms_reporte_recepcion" in msg or "falta ejecutar 48" in msg:
+                msg = "falta ejecutar 51_reporte_recepcion.sql en Supabase"
+            self._notificar(f"No se pudo armar el resumen: {msg}", "#B91C1C")
 
     def _dialogo_oc(self, o):
         try:
@@ -428,7 +449,9 @@ class PanelOcPorProveedor:
             _t("Líneas de la OC en NetSuite", 13, peso=ft.FontWeight.W_700),
             lineas_ns,
         ], spacing=10, tight=True, scroll=ft.ScrollMode.AUTO, height=560)
-        self._dialogo(f"OC {oc.get('tranid') or o.get('numero_oc')}", contenido)
+        self._dialogo(f"OC {oc.get('tranid') or o.get('numero_oc')}", contenido, acciones=[
+            ui_boton("Resumen Excel", ft.Icons.TABLE_VIEW_ROUNDED, lambda e: self._resumen_excel(o.get("numero_oc")), "secundario")]
+            if o.get("recibido_fisico") in ("SI", "PARCIAL") else None)
         self._cargar_lineas_ns(oc.get("ns_id") or o.get("ns_id"), lineas_ns)
 
     def _cargar_lineas_ns(self, ns_id, destino: ft.Column):

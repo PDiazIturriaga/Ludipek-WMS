@@ -42,6 +42,7 @@ class MaestraModulo:
             ("PC_RUTEO", "Ruteo y Facturación"),
             ("PC_IMPRESION", "Etiquetas & Impresión"),
             ("PC_CARGAS", "Cargas de camión (OT)"),
+            ("PC_DESPACHOS", "Despachos de exportación"),
             ("PC_RECEPCION_CCP", "Recepción Traslados Concepción"),
         ]
 
@@ -78,6 +79,7 @@ class MaestraModulo:
         columnas_reales_usuarios = set()
         id_usuario_editando = None
         sku_original_editando = None
+        fila_original_editando = None     # fila de maestra_sku que se edita (sku + código de barras + unidad)
         subvista_activa_idx = 0
 
         # --- 4. PERSISTENCIA AUXILIAR LOCAL (RESPALDO INMEDIATO) ---
@@ -433,6 +435,7 @@ class MaestraModulo:
                 "APP_PICKING": "RF_PICKING", "APP_PICKING_FARMACIA": "RF_PICKING", "APP_PACKING": "RF_PICKING",
                 "APP_STOCK_CONTEO": "RF_CONSULTA", "APP_VACIAS": "RF_INVENTARIO", "APP_CICLICO_SKU": "RF_INVENTARIO",
                 "APP_PICKING_OT": "RF_PICKING", "APP_CARGA_CAMION": "RF_PICKING",
+                "APP_DESPACHO_EXPORT": "RF_PICKING",
             }
             if any(k.startswith("APP_") for k in rf_sel):
                 rf_sel = rf_sel + sorted({LEGADO_RF[k] for k in rf_sel if k in LEGADO_RF} - set(rf_sel))
@@ -506,6 +509,10 @@ class MaestraModulo:
         txt_sku_cajas_pallet = texto_dark("Cajas x Pallet", width=135, value="40", icon=ft.Icons.LAYERS_OUTLINED)
         txt_sku_peso = texto_dark("Peso (Kg)", width=120, value="1.0", icon=ft.Icons.SCALE_OUTLINED)
         txt_sku_ubic_pick = texto_dark("Ubic. Picking (Ej: A-01-01)", width=165, icon=ft.Icons.PLACE_OUTLINED)
+        dd_sku_um = dropdown_dark(
+            label="Unidad de medida", width=150, value="CAJA",
+            options=[opt_w("UNIDAD", "UNIDAD"), opt_w("DISPLAY", "DISPLAY"), opt_w("CAJA", "CAJA")],
+        )
         dd_sku_categoria = dropdown_dark(
             label="Categoría / Marca / Canal", width=175, value="ESTANDAR",
             options=[
@@ -604,8 +611,18 @@ class MaestraModulo:
             }
 
         def cargar_sku_en_formulario(info_s: dict):
-            nonlocal sku_original_editando
+            nonlocal sku_original_editando, fila_original_editando
             sku_original_editando = info_s["sku"]
+            raw = info_s.get("raw") or {}
+            fila_original_editando = {"sku": raw.get("sku"), "codigo_barras": raw.get("codigo_barras"),
+                                      "unidad_medida": raw.get("unidad_medida")}
+            um = str(raw.get("unidad_medida") or "").strip().upper()
+            if um:
+                if um not in [o.key for o in dd_sku_um.options]:
+                    dd_sku_um.options.append(opt_w(um, um))
+                dd_sku_um.value = um
+            else:
+                dd_sku_um.value = "UNIDAD" if int(float(info_s.get("multiplo") or 1)) <= 1 else "CAJA"
             lbl_modo_form_sku.value = f"MODO: EDITANDO SKU [{info_s['sku']}]"
             lbl_modo_form_sku.color = ACCENT_AMBER
             txt_sku_codigo.value = info_s["sku"]
@@ -622,8 +639,10 @@ class MaestraModulo:
             page.update()
 
         def limpiar_formulario_sku(e=None):
-            nonlocal sku_original_editando
+            nonlocal sku_original_editando, fila_original_editando
             sku_original_editando = None
+            fila_original_editando = None
+            dd_sku_um.value = "CAJA"
             lbl_modo_form_sku.value = "MODO: CREAR / MODIFICAR FICHA MAESTRA DE SKU"
             lbl_modo_form_sku.color = ACCENT_CYAN
             txt_sku_codigo.value = ""
@@ -789,26 +808,34 @@ class MaestraModulo:
                 "peso_kg": peso_val,
             }
 
+            # Un SKU tiene varias filas en maestra_sku (UNIDAD / DISPLAY / CAJA): la fila se identifica por
+            # SKU + código de barras + unidad de medida. Se actualiza la fila editada o se crea una nueva.
+            payload_supa["unidad_medida"] = (dd_sku_um.value or ("UNIDAD" if mult_val <= 1 else "CAJA")).strip().upper()
+
+            def _filtrar(q, fila):
+                q = q.eq("sku", fila.get("sku")).eq("codigo_barras", fila.get("codigo_barras"))
+                um = fila.get("unidad_medida")
+                return q.eq("unidad_medida", um) if um not in (None, "") else q.is_("unidad_medida", "null")
+
             guardado_ok = False
             try:
-                supabase.table("maestra_sku").upsert(payload_supa, on_conflict="sku").execute()
+                filas_act = []
+                original = fila_original_editando if sku_original_editando else None
+                if original and original.get("sku"):
+                    filas_act = _filtrar(supabase.table("maestra_sku").update(payload_supa), original).execute().data or []
+                if not filas_act:
+                    misma = {"sku": sku_c, "codigo_barras": payload_supa["codigo_barras"], "unidad_medida": payload_supa["unidad_medida"]}
+                    filas_act = _filtrar(supabase.table("maestra_sku").update(payload_supa), misma).execute().data or []
+                if not filas_act:
+                    supabase.table("maestra_sku").insert(payload_supa).execute()
                 guardado_ok = True
             except Exception as ex_up:
-                # Intento de respaldo con nombres alternativos de columnas si la BD es mixta
-                try:
-                    payload_alt = {
-                        "sku": sku_c,
-                        "descripcion": desc_c,
-                        "ean": ean_c if ean_c else sku_c,
-                        "unidades_por_caja": mult_val,
-                        "categoria": cat_c,
-                        "ubicacion_picking": ubic_p,
-                    }
-                    supabase.table("maestra_sku").upsert(payload_alt, on_conflict="sku").execute()
-                    guardado_ok = True
-                except Exception as ex_alt:
-                    notificar(f"Error guardando en Supabase: {ex_up}", "#B91C1C")
-                    return
+                msg_up = str(getattr(ex_up, "message", None) or ex_up)
+                if "duplicate key" in msg_up or "23505" in msg_up:
+                    msg_up = ("ya existe otra fila con ese SKU, código de barras y unidad de medida. "
+                              "Edite esa fila o cambie el código de barras / la unidad.")
+                notificar(f"Error guardando en Supabase: {msg_up}", "#B91C1C")
+                return
 
             if guardado_ok:
                 notificar(f"Ficha Maestra de SKU [{sku_c}] guardada y sincronizada.", "#047857")
@@ -859,6 +886,7 @@ class MaestraModulo:
                                             txt_sku_desc,
                                             txt_sku_ean,
                                             txt_sku_multiplo,
+                                            dd_sku_um,
                                             txt_sku_cajas_pallet,
                                             txt_sku_peso,
                                             dd_sku_categoria,

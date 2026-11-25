@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 
 import flet as ft
 from dependencias import (supabase, UI, ui_boton, ui_tarjeta, ui_tabla, ui_kpi, notificar_global,
-                          obtener_bodega_activa, formatear_fecha_hora_chile)
+                          obtener_bodega_activa, formatear_fecha_hora_chile, descargar_o_abrir_archivo)
 
 ESTADO_NS = {
     "SI": ("#0ca30c", "Sí"),
@@ -267,7 +267,10 @@ class PanelRecepciones:
                 ft.DataCell(_t(_miles(r.get("unidades")), 12.5)),
                 ft.DataCell(_t(_fecha_txt(r.get("inicio")), 11.5, UI["texto_2"])),
                 ft.DataCell(_t(r.get("cita") or "—", 11.5, UI["texto_2"])),
-                ft.DataCell(celda_rep),
+                ft.DataCell(ft.Row([celda_rep, ft.IconButton(icon=ft.Icons.TABLE_VIEW_ROUNDED, icon_size=18, icon_color=UI["acento"],
+                                                             tooltip="Resumen ejecutivo en Excel",
+                                                             on_click=lambda e, x=r: self._resumen_excel(x))],
+                                   spacing=2, tight=True)),
             ]))
         self.tabla_rec.rows = filas
         self.txt_vacio_rec.visible = not filas
@@ -315,6 +318,24 @@ class PanelRecepciones:
         self._notificar(f"Reporte en cola ({res.get('pallets')} pallets). Se envía a {res.get('destinatarios')} destinatario(s).",
                         "#047857" if res.get("destinatarios") else "#B45309")
         self.refrescar()
+
+    def _resumen_excel(self, r):
+        try:
+            import os
+            from servicios.reporte_ejecutivo import reporte_recepcion
+            datos = supabase.rpc("wms_reporte_recepcion", {
+                "p_bodega": self._bodega(), "p_numero_oc": r.get("numero_oc") or None,
+                "p_clave": None if r.get("numero_oc") else r.get("clave")}).execute().data or {}
+            carpeta = os.path.join(os.getcwd(), "reportes_recepcion")
+            os.makedirs(carpeta, exist_ok=True)
+            nombre = re.sub(r"[^A-Za-z0-9_-]+", "_", str(r.get("numero_oc") or r.get("contenedor") or r.get("clave")))[:40]
+            ruta = reporte_recepcion(datos, os.path.join(carpeta, f"Resumen_Recepcion_{nombre}_{datetime.now():%Y%m%d_%H%M}.xlsx"))
+            descargar_o_abrir_archivo(self.page, ruta)
+        except Exception as ex:
+            msg = self._error(ex)
+            if "46_panel" in msg:
+                msg = "falta ejecutar 51_reporte_recepcion.sql en Supabase"
+            self._notificar(f"No se pudo armar el resumen: {msg}", "#B91C1C")
 
     def _cancelar_cita(self, id_cita):
         try:

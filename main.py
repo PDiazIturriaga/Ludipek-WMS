@@ -8,7 +8,7 @@ import traceback
 import flet as ft
 from datetime import datetime
 from dependencias import *
-from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion, m8_recepcion_ccp, m9_desarrollador, m10_cargas
+from modulos import m0_dashboard, m1_recepcion, m2_putaway, m3_picking, m4_inventario, m5_maestra, m6_impresion, m7_ruteo_facturacion, m8_recepcion_ccp, m9_desarrollador, m10_cargas, m11_despachos
 os.environ["TZ"] = "America/Santiago"
 if hasattr(time, "tzset"):
     time.tzset()
@@ -1160,6 +1160,7 @@ def main(page: ft.Page):
         imp = m6_impresion.ImpresionModulo(page, tarjetas_adaptables, kpis_adaptables)
         ruteo = m7_ruteo_facturacion.RuteoFacturacionModulo(page, tarjetas_adaptables, kpis_adaptables)
         cargas = m10_cargas.CargasCamionModulo(page, tarjetas_adaptables, kpis_adaptables)
+        despachos = m11_despachos.DespachosModulo(page, tarjetas_adaptables, kpis_adaptables)
         bodega_sesion_normalizada = str(getattr(page, "bodega_actual", "") or "").upper().replace("Ó", "O")
         es_bodega_concepcion = "CONCEPCION" in bodega_sesion_normalizada
         recep_ccp = (
@@ -1309,6 +1310,20 @@ def main(page: ft.Page):
             )
         )
 
+        # Despachos de exportación (script 50): ej. traslado Chile → Perú
+        vistas_mapa.append(
+            (
+                "Despachos de\nexportación",
+                _ico("FLIGHT_TAKEOFF_ROUNDED", "PUBLIC_ROUNDED", "LOCAL_SHIPPING_OUTLINED"),
+                despachos.vista,
+                despachos.refrescar,
+                despachos.sel_sub_despachos,
+                [
+                    ("Despachos y packing list", _ico("FLIGHT_TAKEOFF_ROUNDED", "LIST_ALT_ROUNDED")),
+                ],
+            )
+        )
+
         if es_bodega_concepcion and recep_ccp is not None:
             vistas_mapa.append(
                 (
@@ -1442,6 +1457,7 @@ def main(page: ft.Page):
             "PC_RUTEO",
             "PC_IMPRESION",
             "PC_CARGAS",
+            "PC_DESPACHOS",
         ]
         if es_bodega_concepcion:
             codigos_mod.append("PC_RECEPCION_CCP")
@@ -1542,6 +1558,8 @@ def main(page: ft.Page):
             "Usuarios y productos",
             "Facturación, rutas y SLA",
             "Etiquetas e impresión",
+            "Camiones y ajustes de OT",
+            "Exportación: LPN y packing list",
             "Recepción de traslados en CCP",
         ]
         if dev is not None:
