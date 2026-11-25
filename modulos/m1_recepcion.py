@@ -2510,6 +2510,77 @@ class RecepcionModulo:
                 + "\nSaludos,\nLudipek - WMS"
             )
 
+            # ---- OC todavía con pendientes: correo PARCIAL, solo con lo que ingresó en el contenedor ----
+            # (el detalle de diferencias por SKU se envía cuando la OC está completa)
+            pendiente_oc = any(int(f.get("unidades_recibidas") or 0) < int(f.get("unidades_esperadas") or 0)
+                               for f in filas_conciliacion_export)
+            estado_mail = {"parcial": False, "contenedor": None}
+            conts_oc = []
+            if pendiente_oc and cabecera_asn_actual.get("numero_oc") and asn_actual_id:
+                try:
+                    conts_oc = supabase.rpc("wms_recepcion_contenedores", {
+                        "p_bodega": obtener_bodega_activa(page),
+                        "p_numero_oc": str(cabecera_asn_actual.get("numero_oc")),
+                    }).execute().data or []
+                except Exception as ex_c:
+                    print(f"[ACTA] sin lista de contenedores (¿falta 57a?): {ex_c}")
+                    conts_oc = []
+            conts_oc.sort(key=lambda c: str(c.get("hasta") or ""), reverse=True)   # el más reciente primero
+
+            def _texto_parcial(datos_c: dict):
+                def n_f(v):
+                    return f"{int(v or 0):,}".replace(",", ".")
+                cont_c = str(datos_c.get("contenedor") or "SIN CONTENEDOR")
+                por_sku = {}
+                for l_c in (datos_c.get("lineas") or []):
+                    k_c = str(l_c.get("sku") or "").upper()
+                    a_c = por_sku.setdefault(k_c, {"desc": l_c.get("descripcion") or "", "cajas": 0, "unidades": 0})
+                    a_c["cajas"] += int(l_c.get("cajas") or 0)
+                    a_c["unidades"] += int(l_c.get("unidades") or 0)
+                oc_c = [o for o in (datos_c.get("oc") or []) if int(o.get("unidades_oc") or 0)]
+                tot_oc_c = sum(int(o.get("unidades_oc") or 0) for o in oc_c)
+                acum_c = sum(int(o.get("unidades_rec_oc") or 0) for o in oc_c)
+                tot_c = sum(a["unidades"] for a in por_sku.values())
+                try:
+                    fecha_c = datetime.fromisoformat(str(datos_c.get("fecha_hasta")).replace("Z", "+00:00")).strftime("%d-%m-%Y")
+                except Exception:
+                    fecha_c = datetime.now().strftime("%d-%m-%Y")
+                asunto_c = f"Recepción parcial OC {cod_po_str} · contenedor {cont_c} - {prov_str}"
+                cuerpo_c = (
+                    "Estimados:\n\n"
+                    f"Informamos la recepción del contenedor / guía {cont_c} de la OC {cod_po_str} ({prov_str}), "
+                    f"recibido el {fecha_c}.\n\n"
+                    "Ingresado en este contenedor:\n"
+                    + "\n".join(f"  - {k}  {str(a['desc'])[:40]}: {n_f(a['unidades'])} UN ({n_f(a['cajas'])} cajas)"
+                                for k, a in sorted(por_sku.items()))
+                    + f"\n\nTotal: {n_f(tot_c)} UN en {datos_c.get('pallets') or 0} pallets.\n"
+                    + (f"Avance de la OC: {n_f(acum_c)} de {n_f(tot_oc_c)} UN ({acum_c * 100 / tot_oc_c:.0f}%). "
+                       "La OC sigue abierta; el detalle de diferencias se enviará al completar la recepción.\n" if tot_oc_c else "")
+                    + "\nAdjuntamos el acta parcial del contenedor.\n\nSaludos,\nLudipek - WMS"
+                )
+                return asunto_c, cuerpo_c
+
+            def _preparar_parcial(cont_c: str):
+                """Genera el acta parcial del contenedor y deja listo asunto/cuerpo. Devuelve (ruta, nombre, asunto, cuerpo)."""
+                datos_c = supabase.rpc("wms_reporte_recepcion", {
+                    "p_bodega": obtener_bodega_activa(page), "p_numero_oc": None,
+                    "p_clave": f"ASN:{asn_actual_id}", "p_contenedor": cont_c,
+                }).execute().data or {}
+                if not datos_c.get("lineas"):
+                    raise ValueError(f"el contenedor {cont_c} no tiene recepciones")
+                ruta_c = generar_acta_parcial_pdf(datos_c)
+                asunto_c, cuerpo_c = _texto_parcial(datos_c)
+                estado_mail.update(parcial=True, contenedor=cont_c)
+                return ruta_c, os.path.basename(ruta_c), asunto_c, cuerpo_c
+
+            if conts_oc:
+                try:
+                    ruta, nombre_pdf_parcial, asunto_default, cuerpo_default = _preparar_parcial(
+                        str(conts_oc[0].get("contenedor") or "SIN CONTENEDOR"))
+                except Exception as ex_p:
+                    print(f"[ACTA] acta parcial no disponible, se usa la completa: {ex_p}")
+                    estado_mail["parcial"] = False
+
             smtp_user = os.getenv("SMTP_USER", "").strip()
             smtp_pass = os.getenv("SMTP_PASS", "").strip()
             smtp_listo = bool(smtp_user and smtp_pass)
@@ -2518,6 +2589,8 @@ class RecepcionModulo:
             nombre_pdf = nombre_reporte_recepcion(cabecera_asn_actual.get("numero_oc"), cabecera_asn_actual.get("codigo_asn"),
                                                   prov_str, None if cabecera_asn_actual.get("numero_oc") else cont_ref,
                                                   extension="pdf")
+            if estado_mail["parcial"]:
+                nombre_pdf = nombre_pdf_parcial
 
             txt_para = texto_dark("Para (separe con coma)", value=destinatarios_default)
             txt_cc = texto_dark("CC (opcional)")
@@ -2565,6 +2638,7 @@ class RecepcionModulo:
                     "p_bodega": obtener_bodega_activa(self.page),
                     "p_numero_oc": str(cabecera_asn_actual.get("numero_oc") or "") or None,
                     "p_clave": None if cabecera_asn_actual.get("numero_oc") else (f"ASN:{asn_actual_id}" if asn_actual_id else None),
+                    **({"p_contenedor": estado_mail["contenedor"]} if estado_mail["parcial"] else {}),
                 }).execute().data or {}
                 carpeta_r = os.path.join(os.getcwd(), "reportes_recepcion")
                 os.makedirs(carpeta_r, exist_ok=True)
@@ -2693,16 +2767,48 @@ class RecepcionModulo:
                 campo_mail.on_change = _actualizar_url_outlook
             _actualizar_url_outlook()
 
+            def cambiar_contenedor_mail(ev=None):
+                nonlocal ruta, nombre_pdf
+                try:
+                    ruta, nombre_pdf, asunto_n, cuerpo_n = _preparar_parcial(dd_cont_mail.value)
+                except Exception as ex_cc:
+                    lbl_estado.value, lbl_estado.color = f"No se pudo armar el acta de ese contenedor: {ex_cc}", "#F87171"
+                    page.update()
+                    return
+                resumen_xlsx["ruta"] = None
+                txt_asunto.value, txt_mensaje.value = asunto_n, cuerpo_n
+                lbl_estado.value = f"Adjunto: {nombre_pdf}" if smtp_listo else lbl_estado.value
+                _actualizar_url_outlook()
+                page.update()
+
+            dd_cont_mail = dropdown_dark(
+                "Contenedor / guía que se informa", value=estado_mail["contenedor"],
+                options=[ft.DropdownOption(key=str(c.get("contenedor")),
+                                           text=f"{c.get('contenedor')}  ·  {int(c.get('unidades') or 0):,} UN".replace(",", "."))
+                         for c in conts_oc])
+            dd_cont_mail.visible = estado_mail["parcial"] and len(conts_oc) > 1
+            dd_cont_mail.on_change = cambiar_contenedor_mail
+            if hasattr(dd_cont_mail, "on_select"):
+                dd_cont_mail.on_select = cambiar_contenedor_mail
+            lbl_modo_mail = ft.Text(
+                "OC con pendientes: se envía el acta PARCIAL del contenedor, solo con lo ingresado. "
+                "El detalle de diferencias va cuando la OC esté completa." if estado_mail["parcial"] else
+                "OC completa: se envía el acta con el detalle de diferencias por SKU.",
+                size=11, color="#93C5FD",
+            )
+
             dlg_mail = ft.AlertDialog(
                 modal=True,
                 bgcolor=UI["card"],
                 title=ft.Row([
                     ft.Icon(ft.Icons.EMAIL_OUTLINED, color=ACCENT_CYAN, size=22),
-                    ft.Text(f"Enviar acta · OC {cod_po_str}", size=16, weight=ft.FontWeight.W_600, color=TEXT_WHITE),
+                    ft.Text(f"Enviar acta {'parcial ' if estado_mail['parcial'] else ''}· OC {cod_po_str}", size=16,
+                            weight=ft.FontWeight.W_600, color=TEXT_WHITE),
                 ], spacing=8),
                 content=ft.Container(
                     width=560,
-                    content=ft.Column([txt_para, txt_cc, txt_asunto, txt_mensaje, barra_progreso, lbl_estado],
+                    content=ft.Column([lbl_modo_mail, dd_cont_mail, txt_para, txt_cc, txt_asunto, txt_mensaje,
+                                       barra_progreso, lbl_estado],
                                       spacing=10, tight=True, scroll=ft.ScrollMode.AUTO),
                 ),
                 actions=[
