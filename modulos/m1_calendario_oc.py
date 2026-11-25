@@ -198,7 +198,7 @@ class PanelCalendarioOc:
         self.panel_marca = PanelOcPorProveedor(page, self.traer_oc_proveedor)
         self.btn_modo_marca = ft.Container()
         self.btn_modo_cal = ft.Container()
-        self.selector_modo = ft.Row([self.btn_modo_marca, self.btn_modo_cal], spacing=8)
+        self.selector_modo = ft.Row([self.btn_modo_marca, self.btn_modo_cal], spacing=8, wrap=True, run_spacing=8)
 
         self.vista_calendario = ft.Column([
             ft.Container(
@@ -239,13 +239,31 @@ class PanelCalendarioOc:
             content=ft.Row([ft.Icon(icono, size=18, color=UI["acento"]),
                             ft.Text(texto, size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])], spacing=6, tight=True))
 
+    def agregar_modo(self, clave, texto, icono, vista, al_refrescar=None, despues_de=None):
+        """Suma otra vista al selector (ej. el panel de llegadas, agenda y reportes)."""
+        if not hasattr(self, "modos_extra"):
+            self.modos_extra = []
+        self.modos_extra = [m for m in self.modos_extra if m["clave"] != clave]
+        self.modos_extra.append({"clave": clave, "texto": texto, "icono": icono, "vista": vista,
+                                 "refrescar": al_refrescar, "despues_de": despues_de})
+        if vista not in self.vista.controls:
+            self.vista.controls.append(vista)
+        self._pintar_modo()
+
     def _pintar_modo(self):
-        self.selector_modo.controls = [
-            self._boton_modo("MARCA", "OC por proveedor (listado)", ft.Icons.LIST_ALT_ROUNDED),
-            self._boton_modo("CALENDARIO", "Calendario y tiempos", ft.Icons.CALENDAR_MONTH_OUTLINED),
-        ]
+        extras = getattr(self, "modos_extra", [])
+        base = [("MARCA", "OC por proveedor", ft.Icons.LIST_ALT_ROUNDED),
+                ("CALENDARIO", "Calendario y tiempos", ft.Icons.CALENDAR_MONTH_OUTLINED)]
+        orden = []
+        for b in base:
+            orden.append(b)
+            orden += [(m["clave"], m["texto"], m["icono"]) for m in extras if m["despues_de"] == b[0]]
+        orden += [(m["clave"], m["texto"], m["icono"]) for m in extras if m["despues_de"] not in ("MARCA", "CALENDARIO")]
+        self.selector_modo.controls = [self._boton_modo(*o) for o in orden]
         self.panel_marca.vista.visible = self.modo == "MARCA"
         self.vista_calendario.visible = self.modo == "CALENDARIO"
+        for m in extras:
+            m["vista"].visible = self.modo == m["clave"]
 
     def _cambiar_modo(self, modo):
         self.modo = modo
@@ -267,6 +285,11 @@ class PanelCalendarioOc:
         if self.modo == "MARCA":           # listado por proveedor: trae de NetSuite al elegir el proveedor
             self.panel_marca.refrescar()
             return
+        for m in getattr(self, "modos_extra", []):
+            if self.modo == m["clave"]:
+                if m["refrescar"]:
+                    m["refrescar"]()
+                return
         ini, fin = self._rango_mes()
         self.lbl_mes.value = f"{MESES[self.mes - 1]} {self.anio}"
         try:

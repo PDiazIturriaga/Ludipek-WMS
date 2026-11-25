@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import math
 import time
@@ -1198,8 +1199,7 @@ def main(page: ft.Page):
                     ("Control de calidad", _ico("VERIFIED_USER_OUTLINED", "CENTER_FOCUS_STRONG_OUTLINED")),
                     ("Ajustes de OC y pallets", _ico("EDIT_NOTE_ROUNDED", "CROP_FREE_OUTLINED")),
                     ("Conciliar recepciones sin OC", _ico("LINK_ROUNDED", "COMPARE_ARROWS_ROUNDED")),
-                    ("OC por proveedor", _ico("LIST_ALT_ROUNDED", "CALENDAR_MONTH_OUTLINED")),
-                    ("Panel de recepciones", _ico("DASHBOARD_CUSTOMIZE_OUTLINED", "MOVE_TO_INBOX_ROUNDED")),
+                    ("Seguimiento de OC", _ico("LIST_ALT_ROUNDED", "CALENDAR_MONTH_OUTLINED")),
                 ],
             ),
             (
@@ -1367,83 +1367,176 @@ def main(page: ft.Page):
         COLOR_HEADER = "#141A1B"
 
         contenedor_vista_activa = ft.Container(expand=True)
-        panel_submenus = ft.Container(width=250, visible=False)
+        area_principal = ft.Container(expand=True)
+        rail_colapsado_manual = None          # None = según el ancho de la pantalla
 
         def registrar_visita_reciente(idx_mod: int, sub_idx: int = 0):
-            nombre_m = vistas_mapa[idx_mod][0].replace("\n", " ")
+            nombre_m = nombre_corto(idx_mod)
             sub_items = vistas_mapa[idx_mod][5]
-            nombre_sub = sub_items[sub_idx][0] if 0 <= sub_idx < len(sub_items) else ""
+            nombre_sub = texto_sub(sub_items[sub_idx][0]) if 0 <= sub_idx < len(sub_items) else ""
             hora_actual = time.strftime("%H:%M")
-            etiqueta = f"{nombre_m} • {nombre_sub}"
+            etiqueta = f"{nombre_m} › {nombre_sub}"
             historial_recientes[:] = [h for h in historial_recientes if not (h[0] == idx_mod and h[1] == sub_idx)]
             historial_recientes.insert(0, (idx_mod, sub_idx, etiqueta, hora_actual))
             if len(historial_recientes) > 6:
                 historial_recientes.pop()
 
-        breadcrumb_txt = ft.Text(
-            "Inicio", size=11.5, color="#CBD5E1", weight=ft.FontWeight.W_600,
-            overflow=ft.TextOverflow.ELLIPSIS,
-        )
-        barra_contexto = ft.Container(
-            height=36,
-            padding=ft.Padding.symmetric(horizontal=12, vertical=5),
+        # No se muestra: "Reportar un problema" lo usa para saber en qué pantalla estaba el usuario
+        breadcrumb_txt = ft.Text("Inicio")
+
+        NOMBRE_CORTO = {
+            "Recepción (Ingresos PO)": "Recepción",
+            "Almacenamiento (Mov. LPN)": "Almacenamiento",
+            "Olas (Packing)": "Olas y packing",
+            "Monitor Usuarios & Cola Picking": "Monitor y cola",
+            "Mov. Stock (Inventario)": "Inventario",
+            "Admin & Maestra (Usuarios / SKU)": "Maestra y usuarios",
+            "Ruteo & Fact. (Drivin / SLA)": "Ruteo y facturación",
+            "Etiquetas (Impresión)": "Etiquetas",
+            "Cargas de camión (OT / OV)": "Cargas de camión",
+            "Despachos de exportación": "Exportación",
+            "Recepción Traslados (Concepción)": "Traslados Concepción",
+        }
+        GRUPOS_RAIL = [
+            ("Operación", {"PC_RECEPCION", "PC_RECEPCION_CCP", "PC_ALMACENAMIENTO", "PC_OLAS", "PC_INVENTARIO",
+                           "PC_CARGAS", "PC_DESPACHOS"}),
+            ("Gestión", {"PC_DASHBOARD", "PC_RUTEO", "PC_IMPRESION"}),
+            ("Administración", {"PC_ADMIN_MAESTRA", "PC_DESARROLLADOR"}),
+        ]
+        COLOR_RAIL = "#1F2729"
+
+        def nombre_corto(idx: int) -> str:
+            t = vistas_mapa[idx][0].replace("\n", " ")
+            return NOMBRE_CORTO.get(t, t)
+
+        def texto_sub(t: str) -> str:
+            return re.sub(r"^\d+\.\s*", "", str(t or ""))
+
+        def descripcion_modulo(idx: int) -> str:
+            return DESCRIPCION_MODULOS[idx] if 0 <= idx < len(DESCRIPCION_MODULOS) else ""
+
+        def rail_compacto() -> bool:
+            if rail_colapsado_manual is not None:
+                return rail_colapsado_manual
+            return obtener_perfil_responsive(page)["compacto"]
+
+        def ancho_rail() -> int:
+            return 68 if rail_compacto() else 212
+
+        def perfil_ui() -> dict:
+            """Perfil responsive con el ancho real del menú lateral (para calcular el ancho de cada pantalla)."""
+            return dict(obtener_perfil_responsive(page), menu_width=ancho_rail())
+
+        def item_rail(icono, texto, activo, on_click, tooltip=None, permitido=True, compacto=False):
+            color_ico = "#E0F2FE" if activo else ("#38BDF8" if permitido else "#64748B")
+            if compacto:
+                contenido = ft.Icon(icono, size=21, color=color_ico)
+            else:
+                contenido = ft.Row([
+                    ft.Icon(icono, size=19, color=color_ico),
+                    ft.Text(texto, size=12.5, color="#FFFFFF" if activo else "#CBD5E1",
+                            weight=ft.FontWeight.W_600 if activo else ft.FontWeight.W_500,
+                            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
+                    *([] if permitido else [ft.Icon(ft.Icons.LOCK_ROUNDED, size=13, color="#64748B")]),
+                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            return ft.Container(
+                height=40, border_radius=8,
+                padding=ft.Padding.symmetric(horizontal=0 if compacto else 12),
+                bgcolor="#155E75" if activo else None,
+                border=ft.Border(left=ft.BorderSide(3, "#38BDF8" if activo else "transparent")),
+                ink=True, on_click=on_click, tooltip=tooltip or texto,
+                opacity=1.0 if permitido else 0.45,
+                alignment=ft.Alignment.CENTER if compacto else ft.Alignment.CENTER_LEFT,
+                content=contenido,
+            )
+
+        rail = ft.Container(width=212, bgcolor=COLOR_RAIL, border=ft.Border(right=ft.BorderSide(1, "#334044")))
+
+        def pintar_rail():
+            comp = rail_compacto()
+            rail.width = ancho_rail()
+            rail.padding = ft.Padding.symmetric(horizontal=8 if comp else 10, vertical=12)
+            ctrls = [item_rail(ft.Icons.SPACE_DASHBOARD_ROUNDED, "Inicio", indice_modulo_activo == -1,
+                               volver_al_home, tooltip="Inicio", compacto=comp)]
+            usados = set()
+            grupos = [(t, [i for i in range(len(vistas_mapa))
+                           if (codigos_mod[i] if i < len(codigos_mod) else "PC_RECEPCION_CCP") in cods])
+                      for t, cods in GRUPOS_RAIL]
+            for titulo_g, idxs in grupos:
+                idxs = [i for i in idxs if i not in usados]
+                if not idxs:
+                    continue
+                if comp:
+                    ctrls.append(ft.Container(height=1, bgcolor="#334044", margin=ft.Margin.only(top=8, bottom=8)))
+                else:
+                    ctrls.append(ft.Container(padding=ft.Padding.only(left=12, top=14, bottom=4),
+                                              content=ft.Text(titulo_g.upper(), size=10.5, color="#64748B",
+                                                              weight=ft.FontWeight.W_700)))
+                for i in idxs:
+                    usados.add(i)
+                    perm = modulo_permitido(i)
+                    ctrls.append(item_rail(
+                        vistas_mapa[i][1], nombre_corto(i), i == indice_modulo_activo,
+                        (lambda e, k=i: activar_modulo_principal(k)) if perm else avisar_sin_permiso,
+                        tooltip=f"{nombre_corto(i)} · {descripcion_modulo(i)}" if perm else "No habilitado en tu perfil",
+                        permitido=perm, compacto=comp))
+            rail.content = ft.Column(ctrls, spacing=2, scroll=ft.ScrollMode.AUTO, expand=True)
+
+        # ---- Encabezado de cada módulo: nombre + submódulos como pestañas ----
+        cont_ico_modulo = ft.Container(width=36, height=36, border_radius=9, alignment=ft.Alignment.CENTER,
+                                       bgcolor=ft.Colors.with_opacity(0.15, "#38BDF8"))
+        lbl_modulo_titulo = ft.Text("", size=16, weight=ft.FontWeight.W_700, color="#F1F5F9")
+        lbl_modulo_desc = ft.Text("", size=11.5, color="#94A3B8")
+        fila_tabs_sub = ft.Row(spacing=2, scroll=ft.ScrollMode.AUTO)
+        barra_modulo = ft.Container(
             bgcolor="#202728",
-            border=ft.Border(bottom=ft.BorderSide(1, "#3B484B")),
-            content=ft.Row([
-                ft.Icon(ft.Icons.ROUTE_ROUNDED, size=16, color="#38BDF8"),
-                breadcrumb_txt,
-            ], spacing=7),
+            border=ft.Border(bottom=ft.BorderSide(1, "#334044")),
+            padding=ft.Padding.only(left=18, right=12, top=12),
+            content=ft.Column([
+                ft.Row([cont_ico_modulo, ft.Column([lbl_modulo_titulo, lbl_modulo_desc], spacing=0, tight=True)],
+                       spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                fila_tabs_sub,
+            ], spacing=8, tight=True),
         )
 
-        def generar_menu_lateral(idx_mod: int, sub_activo: int = 0, compacto: bool = False):
-            texto_mod, icono_mod, _, _, fn_sub, sub_items = vistas_mapa[idx_mod]
-            items = []
-            for s_idx, (txt_sub, ico_sub) in enumerate(sub_items):
+        def ir_submodulo(m: int, s: int):
+            nonlocal indice_submodulo_activo
+            cerrar_superficies_transitorias(page)
+            indice_submodulo_activo = s
+            registrar_visita_reciente(m, s)
+            fn = vistas_mapa[m][4]
+            if fn:
+                fn(s)
+            pintar_barra_modulo(m, s)
+            breadcrumb_txt.value = f"{vistas_mapa[m][0].replace(chr(10), ' ')}  ›  {vistas_mapa[m][5][s][0]}"
+            try:
+                CONTEXTO_ERRORES_PC["modulo"] = breadcrumb_txt.value.replace("  ›  ", " › ")[:60]
+            except Exception:
+                pass
+            page.update()
+
+        def pintar_barra_modulo(idx_mod: int, sub_activo: int = 0):
+            cont_ico_modulo.content = ft.Icon(vistas_mapa[idx_mod][1], size=20, color="#38BDF8")
+            lbl_modulo_titulo.value = nombre_corto(idx_mod)
+            lbl_modulo_desc.value = descripcion_modulo(idx_mod)
+            subs = vistas_mapa[idx_mod][5]
+            tabs = []
+            for s_idx, (txt_sub, ico_sub) in enumerate(subs):
                 activo = s_idx == sub_activo
-                def ir_submodulo(e, m=idx_mod, s=s_idx, fn=fn_sub):
-                    nonlocal indice_submodulo_activo
-                    cerrar_superficies_transitorias(page)
-                    indice_submodulo_activo = s
-                    registrar_visita_reciente(m, s)
-                    if fn:
-                        fn(s)
-                    panel_submenus.content = generar_menu_lateral(m, s, panel_submenus.width <= 76)
-                    breadcrumb_txt.value = f"{vistas_mapa[m][0].replace(chr(10), ' ')}  ›  {vistas_mapa[m][5][s][0]}"
-                    page.update()
-                items.append(
-                    ft.Container(
-                        bgcolor="#155E75" if activo else None,
-                        border=ft.Border(left=ft.BorderSide(3, "#38BDF8" if activo else "transparent")),
-                        border_radius=6,
-                        tooltip=txt_sub,
-                        content=ft.ListTile(
-                            leading=ft.Icon(ico_sub, color="#E0F2FE" if activo else "#38BDF8", size=19),
-                            title=None if compacto else ft.Text(txt_sub, size=11.5, color="#FFFFFF", weight=ft.FontWeight.BOLD if activo else ft.FontWeight.W_500),
-                            on_click=ir_submodulo,
-                            hover_color="#3F5657",
-                            dense=True,
-                        ),
-                    )
-                )
-            return ft.Container(
-                # mismo ancho que el panel que lo contiene (antes 215 fijo dentro de un panel de 190 en notebook)
-                width=68 if compacto else (panel_submenus.width or 215),
-                bgcolor="#2F3738",
-                border=ft.Border(right=ft.BorderSide(1, "#3B484B")),
-                content=ft.Column([
-                    ft.Container(
-                        padding=10 if compacto else 15,
-                        bgcolor="#232A2B",
-                        border=ft.Border(bottom=ft.BorderSide(1, "#3B484B")),
-                        tooltip=texto_mod.replace("\n", " "),
-                        content=ft.Row([
-                            ft.Icon(icono_mod, color="#38BDF8", size=22),
-                            *( [] if compacto else [ft.Text(texto_mod.replace("\n", " "), size=12.5, weight=ft.FontWeight.BOLD, color="#FFFFFF", expand=True)] ),
-                        ], spacing=9),
-                    ),
-                    ft.Column(items, spacing=3, scroll=ft.ScrollMode.AUTO, expand=True),
-                ], spacing=0, expand=True),
-            )
+                tabs.append(ft.Container(
+                    padding=ft.Padding.only(left=14, right=14, top=8, bottom=9),
+                    border=ft.Border(bottom=ft.BorderSide(2.5, "#38BDF8" if activo else "transparent")),
+                    ink=True, tooltip=texto_sub(txt_sub),
+                    on_click=lambda e, m=idx_mod, s=s_idx: ir_submodulo(m, s),
+                    content=ft.Row([
+                        ft.Icon(ico_sub, size=16, color="#38BDF8" if activo else "#94A3B8"),
+                        ft.Text(texto_sub(txt_sub), size=12.5, color="#F1F5F9" if activo else "#94A3B8",
+                                weight=ft.FontWeight.W_600 if activo else ft.FontWeight.W_500),
+                    ], spacing=7, tight=True),
+                ))
+            fila_tabs_sub.controls = tabs
+            fila_tabs_sub.visible = len(subs) > 1
+            barra_modulo.padding = ft.Padding.only(left=18, right=12, top=12, bottom=0 if len(subs) > 1 else 12)
 
         # Código de permiso de cada módulo. El orden DEBE coincidir con vistas_mapa (7 = Ruteo, 8 = Etiquetas).
         codigos_mod = [
@@ -1492,6 +1585,7 @@ def main(page: ft.Page):
             if not modulo_permitido(idx_sel):
                 avisar_sin_permiso()
                 return
+            sub_idx = sub_idx if 0 <= sub_idx < len(vistas_mapa[idx_sel][5]) else 0
 
             cerrar_superficies_transitorias(page)
             indice_modulo_activo = idx_sel
@@ -1501,21 +1595,19 @@ def main(page: ft.Page):
                 content=ft.ProgressRing(width=24, height=24, stroke_width=2, color="#38BDF8"),
             )
             registrar_visita_reciente(idx_sel, sub_idx)
+            breadcrumb_txt.value = f"{vistas_mapa[idx_sel][0].replace(chr(10), ' ')}  ›  {vistas_mapa[idx_sel][5][sub_idx][0]}"
             try:
-                CONTEXTO_ERRORES_PC["modulo"] = f"{vistas_mapa[idx_sel][0].replace(chr(10), ' ')} › {vistas_mapa[idx_sel][5][sub_idx][0]}"[:60]
+                CONTEXTO_ERRORES_PC["modulo"] = breadcrumb_txt.value.replace("  ›  ", " › ")[:60]
             except Exception:
                 pass
-            perfil_nav = obtener_perfil_responsive(page)
-            panel_submenus.width = perfil_nav["menu_width"]
-            panel_submenus.content = generar_menu_lateral(idx_sel, sub_idx, perfil_nav["compacto"])
-            panel_submenus.visible = True
+            pintar_rail()
+            pintar_barra_modulo(idx_sel, sub_idx)
             vista_destino = vistas_mapa[idx_sel][2]
-            aplicar_responsive_a_vista(vista_destino, obtener_perfil_responsive(page))
+            aplicar_responsive_a_vista(vista_destino, perfil_ui())
             contenedor_vista_activa.content = ft.Row(
                 [vista_destino], alignment=ft.MainAxisAlignment.CENTER,
                 vertical_alignment=ft.CrossAxisAlignment.START, expand=True,
             )
-            breadcrumb_txt.value = f"{vistas_mapa[idx_sel][0].replace(chr(10), ' ')}  ›  {vistas_mapa[idx_sel][5][sub_idx][0]}"
             accion_recarga = vistas_mapa[idx_sel][3]
             fn_sub = vistas_mapa[idx_sel][4]
             if fn_sub:
@@ -1524,29 +1616,31 @@ def main(page: ft.Page):
                 accion_recarga()
             page.bgcolor = "#1B2122"
             btn_home.visible = True
-            cuerpo_principal.content = ft.Row([
-                panel_submenus,
-                ft.Column([barra_contexto, contenedor_vista_activa], spacing=0, expand=True),
-            ], expand=True, spacing=0)
+            area_principal.content = ft.Column([barra_modulo, contenedor_vista_activa], spacing=0, expand=True)
             adaptar_resolucion_automatica()
             page.update()
 
         def volver_al_home(e=None):
             nonlocal indice_modulo_activo
+            cerrar_superficies_transitorias(page)
             indice_modulo_activo = -1
+            breadcrumb_txt.value = "Inicio"
+            try:
+                CONTEXTO_ERRORES_PC["modulo"] = "Inicio"
+            except Exception:
+                pass
             btn_home.visible = False
             page.bgcolor = COLOR_BG_PORTAL
+            pintar_rail()
             cargar_datos_vivos_panel_izquierdo()
             cargar_indicadores_portal()
-            cuerpo_principal.content = vista_portal_home
+            area_principal.content = vista_portal_home
             page.update()
 
         def toggle_menu_tres_rayas(e=None):
-            if indice_modulo_activo == -1:
-                panel_perfil.visible = not panel_perfil.visible
-            else:
-                panel_submenus.visible = not panel_submenus.visible
-            page.update()
+            nonlocal rail_colapsado_manual
+            rail_colapsado_manual = not rail_compacto()
+            adaptar_resolucion_automatica()
 
         DESCRIPCION_MODULOS = [
             "Indicadores y productividad",
@@ -1564,40 +1658,6 @@ def main(page: ft.Page):
         ]
         if dev is not None:
             DESCRIPCION_MODULOS = DESCRIPCION_MODULOS[:len(vistas_mapa) - 1] + ["Errores, tickets y versiones"]
-        botones_grid = []
-        for idx, (texto_mod, icono_mod, _, _, _, _) in enumerate(vistas_mapa):
-            permitido = modulo_permitido(idx)
-            botones_grid.append(
-                ft.Container(
-                    width=230, height=112,
-                    padding=16,
-                    bgcolor="#232B2D" if permitido else "#1D2426",
-                    border=ft.Border.all(1, "#334044" if permitido else "#2A3335"),
-                    border_radius=12,
-                    ink=permitido,
-                    on_click=(lambda e, i=idx: activar_modulo_principal(i)) if permitido else avisar_sin_permiso,
-                    tooltip=None if permitido else "No habilitado en tu perfil",
-                    # Sin permiso: se ve apagado, con candado, y no abre el módulo
-                    opacity=1.0 if permitido else 0.45,
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Container(
-                                width=40, height=40, border_radius=10,
-                                bgcolor=ft.Colors.with_opacity(0.15, "#38BDF8" if permitido else "#64748B"),
-                                alignment=ft.Alignment.CENTER,
-                                content=ft.Icon(icono_mod, size=22, color="#38BDF8" if permitido else "#64748B"),
-                            ),
-                            ft.Icon(ft.Icons.LOCK_ROUNDED if not permitido else ft.Icons.ARROW_FORWARD_ROUNDED,
-                                    size=18, color="#64748B"),
-                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                        ft.Text(texto_mod.replace("\n", " "), size=14, weight=ft.FontWeight.W_600,
-                                color="#F1F5F9" if permitido else "#94A3B8", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                        ft.Text(DESCRIPCION_MODULOS[idx] if idx < len(DESCRIPCION_MODULOS) else "",
-                                size=11.5, color="#94A3B8", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                    ], spacing=6, tight=True),
-                )
-            )
-
         usuario_logueado = getattr(page, "usuario_actual", "Operador")
         rol_logueado = getattr(page, "rol_actual", "Administrador WMS")
 
@@ -1754,238 +1814,61 @@ def main(page: ft.Page):
                         break
                     time.sleep(0.5)
 
-        tab_activa_izq = "ACTIVITY"
-        lbl_estado_proceso = ft.Text(
-            "Cargando actividad de la bodega…",
-            size=12,
-            color="#E2E8F0",
-        )
-        txt_badge_anuncios = ft.Text("0", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)
-        col_contenido_tab_izq = ft.Column(spacing=6)
-        col_lista_anuncios = ft.Column(spacing=6, visible=True)
+        # ------------------------------------------------------------------
+        # INICIO: accesos recientes (reemplaza el panel izquierdo de LPN y avisos)
+        # ------------------------------------------------------------------
+        ACCESOS_SUGERIDOS = [(1, 0), (2, 0), (3, 2), (5, 0)]
+        col_accesos = ft.Column(spacing=2, tight=True)
+        lbl_titulo_accesos = ft.Text("Accesos rápidos", size=14, weight=ft.FontWeight.W_600, color="#F1F5F9")
 
-        btn_tab_activity = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
-            border_radius=6,
-            bgcolor="#155E75",
-            ink=True,
-            content=ft.Text("Actividad", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=12),
-        )
-        btn_tab_recent = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
-            border_radius=6,
-            bgcolor="transparent",
-            ink=True,
-            content=ft.Text("Recientes", color="#94A3B8", weight=ft.FontWeight.W_500, size=12),
-        )
-        btn_tab_favorites = ft.Container(
-            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
-            border_radius=6,
-            bgcolor="transparent",
-            ink=True,
-            content=ft.Text("Favoritos", color="#94A3B8", weight=ft.FontWeight.W_500, size=12),
-        )
-
-        def crear_item_panel_izq(icono, titulo, subtitulo, color_ico, fn_click):
+        def fila_acceso(idx_m: int, idx_s: int, etiqueta: str, detalle: str):
             return ft.Container(
-                padding=ft.Padding.symmetric(horizontal=10, vertical=7),
-                bgcolor="#232A2B",
-                border_radius=6,
-                border=ft.Border.all(1, "#3B484B"),
-                ink=True,
-                on_click=fn_click,
-                content=ft.Row(
-                    [
-                        ft.Icon(icono, color=color_ico, size=16),
-                        ft.Column(
-                            [
-                                ft.Text(titulo, size=11, weight=ft.FontWeight.BOLD, color="#F8FAFC"),
-                                ft.Text(subtitulo, size=10, color="#94A3B8"),
-                            ],
-                            spacing=1,
-                            expand=True,
-                        ),
-                        ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color="#64748B", size=16),
-                    ],
-                    spacing=8,
-                ),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=8), border_radius=8, ink=True,
+                on_click=lambda e, m=idx_m, s=idx_s: activar_modulo_principal(m, s),
+                content=ft.Row([
+                    ft.Container(width=32, height=32, border_radius=8, alignment=ft.Alignment.CENTER,
+                                 bgcolor=ft.Colors.with_opacity(0.13, "#38BDF8"),
+                                 content=ft.Icon(vistas_mapa[idx_m][1], size=17, color="#38BDF8")),
+                    ft.Column([
+                        ft.Text(etiqueta, size=12.5, weight=ft.FontWeight.W_600, color="#E2E8F0",
+                                max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                        ft.Text(detalle, size=11, color="#94A3B8", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ], spacing=0, tight=True, expand=True),
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, size=18, color="#64748B"),
+                ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             )
 
         def cargar_datos_vivos_panel_izquierdo(e=None):
-            try:
-                bodega_act = str(getattr(page, "bodega_actual", "Bodega Santiago") or "Bodega Santiago").strip()
-                res_pos = supabase.table("asn_cabecera").select("*").neq("estado", "COMPLETADO").order("id", desc=True).limit(15).execute()
-                pos_activas = [
-                    r for r in (res_pos.data or [])
-                    if not r.get("bodega") or str(r.get("bodega")).strip().upper() == bodega_act.upper()
-                ][:5]
+            filas = []
+            if historial_recientes:
+                lbl_titulo_accesos.value = "Visitados recientemente"
+                for m_i, s_i, etiq, h_str in historial_recientes[:5]:
+                    if m_i < len(vistas_mapa) and modulo_permitido(m_i):
+                        filas.append(fila_acceso(m_i, s_i, etiq, f"Hoy a las {h_str}"))
+            else:
+                lbl_titulo_accesos.value = "Accesos rápidos"
+                for m_i, s_i in ACCESOS_SUGERIDOS:
+                    if m_i < len(vistas_mapa) and modulo_permitido(m_i) and s_i < len(vistas_mapa[m_i][5]):
+                        filas.append(fila_acceso(m_i, s_i, f"{nombre_corto(m_i)} › {texto_sub(vistas_mapa[m_i][5][s_i][0])}",
+                                                 descripcion_modulo(m_i)))
+            col_accesos.controls = filas or [ft.Text("Sin módulos habilitados en tu perfil.", size=12, color="#94A3B8")]
 
-                res_lpns = supabase.table("registro_recepcion").select("*").order("id", desc=True).limit(15).execute()
-                ultimos_lpns = [
-                    r for r in (res_lpns.data or [])
-                    if not r.get("bodega") or str(r.get("bodega")).strip().upper() == bodega_act.upper()
-                ][:5]
+        def punto_estado(texto: str, ok: bool):
+            return ft.Row([
+                ft.Container(width=8, height=8, border_radius=4, bgcolor="#10B981" if ok else "#F59E0B"),
+                ft.Text(texto, size=12, color="#CBD5E1"),
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-                lbl_estado_proceso.value = (
-                    f"{bodega_act} • {len(pos_activas)} POs en curso y {len(ultimos_lpns)} LPNs recientes."
-                )
-
-                anuncios_items = []
-                if pos_activas:
-                    po_top = pos_activas[0]
-                    cod_top = po_top.get("numero_oc") or po_top.get("codigo_asn") or "PO"
-                    anuncios_items.append(
-                        crear_item_panel_izq(
-                            _ico("ALL_INBOX_OUTLINED", "LOCAL_SHIPPING_OUTLINED"),
-                            f"{len(pos_activas)} POs en Recepción Activa",
-                            f"Última: {cod_top} ({str(po_top.get('proveedor',''))[:18]})",
-                            "#38BDF8",
-                            lambda ev: activar_modulo_principal(1, 0),
-                        )
-                    )
-                cuarentenas = [r for r in ultimos_lpns if "CUARENTENA" in str(r.get("lote", "")).upper() or "RECHAZADO" in str(r.get("lote", "")).upper()]
-                if cuarentenas:
-                    anuncios_items.append(
-                        crear_item_panel_izq(
-                            ft.Icons.WARNING_AMBER_ROUNDED,
-                            f"{len(cuarentenas)} Lotes en Cuarentena QA",
-                            "Clic para liberar o inspeccionar en QA",
-                            "#FBBF24",
-                            lambda ev: activar_modulo_principal(1, 3),
-                        )
-                    )
-                else:
-                    anuncios_items.append(
-                        crear_item_panel_izq(
-                            ft.Icons.VERIFIED_ROUNDED,
-                            "Control de Calidad QA al día",
-                            f"ERP NetSuite: {'Conectado' if NETSUITE_CONECTADO else 'Modo Cloud'}",
-                            "#34D399",
-                            lambda ev: activar_modulo_principal(0, 0),
-                        )
-                    )
-
-                txt_badge_anuncios.value = str(len(anuncios_items))
-                col_lista_anuncios.controls = anuncios_items
-
-                col_contenido_tab_izq.controls.clear()
-                if tab_activa_izq == "ACTIVITY":
-                    if ultimos_lpns:
-                        for r in ultimos_lpns[:3]:
-                            col_contenido_tab_izq.controls.append(
-                                crear_item_panel_izq(
-                                    _ico("QR_CODE_SCANNER_OUTLINED", "QR_CODE_2_ROUNDED"),
-                                    f"{r.get('lpn', 'LPN')} • {r.get('sku', '')}",
-                                    f"Recibido: {r.get('unidades_totales', 0)} UN en andén",
-                                    "#38BDF8",
-                                    lambda ev: activar_modulo_principal(1, 0),
-                                )
-                            )
-                    else:
-                        col_contenido_tab_izq.controls.append(
-                            ft.Text("Sin recepciones recientes registradas.", size=11, color="#94A3B8")
-                        )
-                elif tab_activa_izq == "RECENT":
-                    if historial_recientes:
-                        for m_i, s_i, etiq, h_str in historial_recientes[:3]:
-                            col_contenido_tab_izq.controls.append(
-                                crear_item_panel_izq(
-                                    ft.Icons.HISTORY_ROUNDED,
-                                    etiq[:28],
-                                    f"Visitado a las {h_str}",
-                                    "#A78BFA",
-                                    lambda ev, mi=m_i, si=s_i: activar_modulo_principal(mi, si),
-                                )
-                            )
-                    else:
-                        col_contenido_tab_izq.controls.append(
-                            ft.Text("Aún no has abierto módulos en esta sesión.", size=11, color="#94A3B8")
-                        )
-                elif tab_activa_izq == "FAVORITES":
-                    favoritos_fijos = [
-                        (_ico("ALL_INBOX_OUTLINED", "FACT_CHECK_OUTLINED"), "Recepción 3-Way Match", "Conciliar PO vs Andén RF", 1, 0),
-                        (_ico("TOKEN_OUTLINED", "VIEW_IN_AR_ROUNDED"), "Gemelo Digital 3D", "Mapa interactivo de Racks", 2, 3),
-                        (_ico("PRECISION_MANUFACTURING_OUTLINED", "HUB_OUTLINED"), "Monitor Usuarios & Cola", "Operadores y OVs en vivo", 4, 0),
-                    ]
-                    for ico_f, tit_f, sub_f, m_f, s_f in favoritos_fijos:
-                        col_contenido_tab_izq.controls.append(
-                            crear_item_panel_izq(
-                                ico_f,
-                                tit_f,
-                                sub_f,
-                                "#34D399",
-                                lambda ev, mf=m_f, sf=s_f: activar_modulo_principal(mf, sf),
-                            )
-                        )
-            except Exception:
-                pass
-
-        def seleccionar_tab_izq(nueva_tab: str):
-            nonlocal tab_activa_izq
-            tab_activa_izq = nueva_tab
-            for cod_t, btn_t in [("ACTIVITY", btn_tab_activity), ("RECENT", btn_tab_recent), ("FAVORITES", btn_tab_favorites)]:
-                activo = cod_t == nueva_tab
-                btn_t.bgcolor = "#155E75" if activo else "transparent"
-                btn_t.content.color = ft.Colors.WHITE if activo else "#94A3B8"
-                btn_t.content.weight = ft.FontWeight.BOLD if activo else ft.FontWeight.W_500
-            cargar_datos_vivos_panel_izquierdo()
-            page.update()
-
-        btn_tab_activity.on_click = lambda e: seleccionar_tab_izq("ACTIVITY")
-        btn_tab_recent.on_click = lambda e: seleccionar_tab_izq("RECENT")
-        btn_tab_favorites.on_click = lambda e: seleccionar_tab_izq("FAVORITES")
-
-        panel_perfil = ft.Container(
-            width=320,
-            bgcolor=COLOR_PANEL_IZQ,
-            padding=ft.Padding.symmetric(horizontal=26, vertical=24),
-            content=ft.Column(
-                [
-                    ft.Container(
-                        alignment=ft.Alignment.CENTER,
-                        margin=ft.Margin.only(top=6, bottom=14),
-                        content=avatar_logo,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Text("Resumen de bodega", size=17, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                            ft.IconButton(
-                                icon=ft.Icons.REFRESH_ROUNDED,
-                                icon_color="#94A3B8",
-                                icon_size=18,
-                                tooltip="Actualizar actividad en vivo",
-                                on_click=lambda e: (cargar_datos_vivos_panel_izquierdo(), page.update()),
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Divider(color="#475569", height=1),
-                    lbl_estado_proceso,
-                    ft.Container(height=8),
-                    ft.Row([btn_tab_activity, btn_tab_recent, btn_tab_favorites], spacing=6),
-                    ft.Divider(color="#475569", height=1),
-                    col_contenido_tab_izq,
-                    ft.Container(height=6),
-                    ft.Container(
-                        ink=True,
-                        on_click=lambda e: (setattr(col_lista_anuncios, "visible", not col_lista_anuncios.visible), page.update()),
-                        content=ft.Row(
-                            [
-                                ft.Container(
-                                    bgcolor="#0284C7", width=22, height=22, border_radius=11,
-                                    alignment=ft.Alignment.CENTER, content=txt_badge_anuncios,
-                                ),
-                                ft.Text("Avisos", color=ft.Colors.WHITE, size=13, weight=ft.FontWeight.BOLD, expand=True),
-                                ft.Icon(ft.Icons.EXPAND_MORE_ROUNDED, color="#94A3B8", size=18),
-                            ],
-                            spacing=8,
-                        ),
-                    ),
-                    col_lista_anuncios,
-                ],
-                spacing=8,
-                horizontal_alignment=ft.CrossAxisAlignment.START,
-            )
+        tarjeta_accesos = ft.Container(
+            padding=16, border_radius=12, bgcolor="#232B2D", border=ft.Border.all(1, "#334044"),
+            content=ft.Column([
+                lbl_titulo_accesos,
+                col_accesos,
+                ft.Divider(height=18, color="#334044"),
+                ft.Text("Conexiones", size=12, weight=ft.FontWeight.W_600, color="#94A3B8"),
+                punto_estado("Base de datos conectada", True),
+                punto_estado("NetSuite conectado" if NETSUITE_CONECTADO else "NetSuite sin conexión directa", bool(NETSUITE_CONECTADO)),
+            ], spacing=8, tight=True),
         )
 
         hora_actual_saludo = datetime.now().hour
@@ -2047,7 +1930,7 @@ def main(page: ft.Page):
             "OLAS": (3, 2), "INVENTARIO": (5, 0), "INVENTARIO_TAREAS": (5, 1), "ALMACENAMIENTO": (2, 0),
             "RUTEO": (7, 0), "MAESTRA": (6, 1), "TRASLADOS": (9, 0), "REABASTECIMIENTO": (2, 1),
         }
-        col_alertas_portal = ft.Column(spacing=8, tight=True)
+        col_alertas_portal = ft.Column(spacing=0, tight=True)
         lbl_resumen_alertas = ft.Text("", size=12, color="#94A3B8")
 
         def destino_de_alerta(modulo: str):
@@ -2145,27 +2028,49 @@ def main(page: ft.Page):
             )
             page.show_dialog(dlg)
 
-        def fila_alerta(alerta: dict):
+        alertas_estado = {"lista": [], "todas": False}
+        MAX_ALERTAS_VISIBLES = 5
+        btn_ver_todas_alertas = ft.TextButton("", visible=False,
+                                              style=ft.ButtonStyle(color="#38BDF8"))
+
+        def fila_alerta(alerta: dict, ultima: bool = False):
             color = COLOR_SEVERIDAD.get(alerta.get("severidad"), "#94A3B8")
             return ft.Container(
-                padding=ft.Padding.symmetric(horizontal=14, vertical=10), border_radius=10, bgcolor="#232B2D",
-                border=ft.Border(left=ft.BorderSide(3, color), top=ft.BorderSide(1, "#334044"),
-                                 right=ft.BorderSide(1, "#334044"), bottom=ft.BorderSide(1, "#334044")),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=9), border_radius=8,
+                border=None if ultima else ft.Border(bottom=ft.BorderSide(0.5, "#334044")),
                 ink=True, on_click=lambda e, a=alerta: abrir_detalle_alerta(a),
                 content=ft.Row([
                     ft.Container(
-                        width=46, height=32, border_radius=8, alignment=ft.Alignment.CENTER,
+                        width=48, height=28, border_radius=7, alignment=ft.Alignment.CENTER,
                         bgcolor=ft.Colors.with_opacity(0.16, color),
-                        content=ft.Text(str(alerta.get("cantidad") or 0), size=14, weight=ft.FontWeight.W_700, color=color),
+                        content=ft.Text(f"{int(alerta.get('cantidad') or 0):,}".replace(",", "."), size=13,
+                                        weight=ft.FontWeight.W_700, color=color),
                     ),
                     ft.Column([
-                        ft.Text(str(alerta.get("titulo") or ""), size=13.5, weight=ft.FontWeight.W_600, color="#F1F5F9"),
+                        ft.Text(str(alerta.get("titulo") or ""), size=13, weight=ft.FontWeight.W_600, color="#F1F5F9",
+                                max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                         ft.Text(str(alerta.get("descripcion") or ""), size=11.5, color="#94A3B8", max_lines=1,
                                 overflow=ft.TextOverflow.ELLIPSIS),
-                    ], spacing=1, tight=True, expand=True),
-                    ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color="#64748B"),
+                    ], spacing=0, tight=True, expand=True),
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, size=18, color="#64748B"),
                 ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             )
+
+        def pintar_alertas():
+            alertas = alertas_estado["lista"]
+            visibles = alertas if alertas_estado["todas"] else alertas[:MAX_ALERTAS_VISIBLES]
+            col_alertas_portal.controls = [fila_alerta(a, i == len(visibles) - 1) for i, a in enumerate(visibles)]
+            ocultas = len(alertas) - MAX_ALERTAS_VISIBLES
+            btn_ver_todas_alertas.visible = ocultas > 0
+            btn_ver_todas_alertas.content = ft.Text("Ver menos" if alertas_estado["todas"] else f"Ver {ocultas} más",
+                                                    size=12, weight=ft.FontWeight.W_600)
+
+        def alternar_alertas(e=None):
+            alertas_estado["todas"] = not alertas_estado["todas"]
+            pintar_alertas()
+            page.update()
+
+        btn_ver_todas_alertas.on_click = alternar_alertas
 
         def cargar_alertas_portal():
             bodega_act = str(getattr(page, "bodega_actual", "Bodega Santiago") or "Bodega Santiago")
@@ -2173,59 +2078,69 @@ def main(page: ft.Page):
                 alertas = supabase.rpc("wms_alertas_operacion", {"p_bodega": bodega_act}).execute().data or []
             except Exception as ex:
                 print(f"[WARN] Alertas del portal: {ex}")
+                alertas_estado["lista"] = []
                 col_alertas_portal.controls = [ft.Text("No se pudieron leer las alertas (¿falta ejecutar 14_alertas_operacion.sql?).",
                                                        size=12, color="#94A3B8")]
+                btn_ver_todas_alertas.visible = False
                 lbl_resumen_alertas.value = ""
                 return
             orden = {"ALTA": 0, "MEDIA": 1, "BAJA": 2}
             alertas.sort(key=lambda a: (orden.get(a.get("severidad"), 3), -int(a.get("cantidad") or 0)))
+            alertas_estado["lista"] = alertas
             if not alertas:
                 col_alertas_portal.controls = [ft.Container(
-                    padding=14, border_radius=10, bgcolor="#1E2B26", border=ft.Border.all(1, "#14532D"),
-                    content=ft.Row([ft.Icon(ft.Icons.VERIFIED_ROUNDED, color="#10B981"),
-                                    ft.Text("Todo en orden: no hay alertas en esta bodega.", size=13, color="#D1FAE5")], spacing=10),
+                    padding=12, border_radius=8, bgcolor="#1E2B26",
+                    content=ft.Row([ft.Icon(ft.Icons.VERIFIED_ROUNDED, color="#10B981", size=18),
+                                    ft.Text("Todo en orden: no hay alertas en esta bodega.", size=12.5, color="#D1FAE5")],
+                                   spacing=10),
                 )]
+                btn_ver_todas_alertas.visible = False
                 lbl_resumen_alertas.value = ""
                 return
             altas = sum(1 for a in alertas if a.get("severidad") == "ALTA")
             lbl_resumen_alertas.value = f"{len(alertas)} tema(s)" + (f" · {altas} prioritario(s)" if altas else "")
-            col_alertas_portal.controls = [
-                ft.ResponsiveRow([ft.Container(col={"xs": 12, "lg": 6}, content=fila_alerta(a)) for a in alertas],
-                                 spacing=10, run_spacing=10)
-            ]
+            pintar_alertas()
 
-        bloque_alertas_portal = ft.Column([
-            ft.Row([ft.Text("Requiere atención", size=15, weight=ft.FontWeight.W_600, color="#CBD5E1"), lbl_resumen_alertas],
-                   spacing=12, vertical_alignment=ft.CrossAxisAlignment.END),
-            col_alertas_portal,
-        ], spacing=10, tight=True)
-
-        vista_portal_home = ft.Row(
-            [
-                panel_perfil,
-                ft.Container(
-                    expand=True,
-                    padding=ft.Padding.only(left=40, top=32, right=40, bottom=24),
-                    alignment=ft.Alignment.TOP_LEFT,
-                    content=ft.Column(
-                        [
-                            ft.Column([
-                                ft.Text(f"{saludo}, {nombre_saludo}", size=24, weight=ft.FontWeight.W_700, color="#F1F5F9"),
-                                ft.Text(f"{fecha_larga}  ·  {getattr(page, 'bodega_actual', 'Bodega Santiago')}", size=13, color="#94A3B8"),
-                            ], spacing=2),
-                            fila_indicadores_portal,
-                            bloque_alertas_portal,
-                            ft.Text("Módulos", size=15, weight=ft.FontWeight.W_600, color="#CBD5E1"),
-                            ft.Row(botones_grid, wrap=True, spacing=14, run_spacing=14, alignment=ft.MainAxisAlignment.START),
-                        ],
-                        spacing=20,
-                        scroll=ft.ScrollMode.AUTO,
-                    ),
-                )
-            ], spacing=0, expand=True
+        bloque_alertas_portal = ft.Container(
+            padding=ft.Padding.only(left=16, right=16, top=14, bottom=8), border_radius=12, bgcolor="#232B2D",
+            border=ft.Border.all(1, "#334044"),
+            content=ft.Column([
+                ft.Row([
+                    ft.Row([ft.Icon(ft.Icons.NOTIFICATIONS_ACTIVE_OUTLINED, size=18, color="#F59E0B"),
+                            ft.Text("Requiere atención", size=14, weight=ft.FontWeight.W_600, color="#F1F5F9"),
+                            lbl_resumen_alertas], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.IconButton(icon=ft.Icons.REFRESH_ROUNDED, icon_size=18, icon_color="#94A3B8", tooltip="Actualizar",
+                                  on_click=lambda e: (cargar_indicadores_portal(), page.update())),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                col_alertas_portal,
+                ft.Row([btn_ver_todas_alertas], alignment=ft.MainAxisAlignment.END),
+            ], spacing=6, tight=True),
         )
 
-        cuerpo_principal = ft.Container(content=vista_portal_home, expand=True)
+        vista_portal_home = ft.Container(
+            expand=True,
+            padding=ft.Padding.only(left=32, top=26, right=32, bottom=24),
+            alignment=ft.Alignment.TOP_LEFT,
+            content=ft.Column(
+                [
+                    ft.Column([
+                        ft.Text(f"{saludo}, {nombre_saludo}", size=24, weight=ft.FontWeight.W_700, color="#F1F5F9"),
+                        ft.Text(f"{fecha_larga}  ·  {getattr(page, 'bodega_actual', 'Bodega Santiago')}", size=13, color="#94A3B8"),
+                    ], spacing=2),
+                    fila_indicadores_portal,
+                    ft.ResponsiveRow([
+                        ft.Container(col={"xs": 12, "lg": 8}, content=bloque_alertas_portal),
+                        ft.Container(col={"xs": 12, "lg": 4}, content=tarjeta_accesos),
+                    ], spacing=16, run_spacing=16, vertical_alignment=ft.CrossAxisAlignment.START),
+                ],
+                spacing=20,
+                scroll=ft.ScrollMode.AUTO,
+                expand=True,
+            ),
+        )
+
+        area_principal.content = vista_portal_home
+        cuerpo_principal = ft.Container(content=ft.Row([rail, area_principal], spacing=0, expand=True), expand=True)
         btn_home = ft.IconButton(icon=ft.Icons.HOME_OUTLINED, icon_color=ft.Colors.WHITE, tooltip="Volver al Portal de Inicio", on_click=volver_al_home, visible=False)
 
         def pantalla_actual() -> str:
@@ -2369,7 +2284,7 @@ def main(page: ft.Page):
                             ft.IconButton(
                                 icon=ft.Icons.MENU,
                                 icon_color=ft.Colors.WHITE,
-                                tooltip="Mostrar / Ocultar Panel Lateral (Modo Pantalla Completa)",
+                                tooltip="Contraer / expandir el menú de módulos",
                                 on_click=toggle_menu_tres_rayas,
                             ),
                             ft.Container(
@@ -2405,20 +2320,15 @@ def main(page: ft.Page):
         )
 
         def adaptar_resolucion_automatica(e=None):
-            perfil = obtener_perfil_responsive(page)
-            ancho_menu = perfil["menu_width"]
-            panel_submenus.width = ancho_menu
-            if indice_modulo_activo >= 0:
-                panel_submenus.content = generar_menu_lateral(
-                    indice_modulo_activo,
-                    indice_submodulo_activo,
-                    perfil["compacto"],
-                )
-            modulos_responsive = [dash, recep, puta, pick, mon_cola, inv, mae, imp, ruteo]
+            perfil = perfil_ui()
+            pintar_rail()
+            modulos_responsive = [dash, recep, puta, pick, mon_cola, inv, mae, imp, ruteo, cargas, despachos]
             if recep_ccp is not None:
                 modulos_responsive.append(recep_ccp)
+            if dev is not None:
+                modulos_responsive.append(dev)
             for mod_obj in modulos_responsive:
-                aplicar_responsive_a_vista(mod_obj.vista, perfil)
+                aplicar_responsive_a_vista(getattr(mod_obj, "vista", None), perfil)
             for cont_tabla, h_base in tablas_scroll_sesion:
                 cont_tabla.height = max(140, int(h_base * perfil["table_factor"]))
             for tarj in tarjetas_adaptables:
@@ -2432,6 +2342,7 @@ def main(page: ft.Page):
                 txt_val.size = 15 if perfil["modo"] in ("compacto", "notebook") else 18
             page.update()
 
+        pintar_rail()
         cargar_datos_vivos_panel_izquierdo()
         cargar_indicadores_portal()
         page.on_resize = adaptar_resolucion_automatica

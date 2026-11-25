@@ -3688,6 +3688,10 @@ class RecepcionModulo:
                 )
                 lbl_resumen_operacion.color = UI["texto"]
             try:
+                actualizar_barra_oc()
+            except Exception:
+                pass
+            try:
                 page.update()
             except Exception:
                 pass
@@ -3724,7 +3728,7 @@ class RecepcionModulo:
                 ("Cerrar o eliminar OCs antiguas", ft.Icons.DELETE_SWEEP_ROUNDED, abrir_gestor_limpieza_ocs_admin, True),
             ]))
 
-        barra_oc = ft.Container(
+        editor_oc = ft.Container(
             padding=ft.Padding.symmetric(horizontal=16, vertical=12),
             bgcolor=UI["card"],
             border_radius=10,
@@ -3753,6 +3757,110 @@ class RecepcionModulo:
                 txt_estado_ia,
             ], spacing=10, tight=True),
         )
+
+        # ---------- Franja compacta "OC en uso" (el editor completo se abre con "Cambiar OC") ----------
+        estado_barra_oc = {"editando": False, "ultima": None}
+        lbl_oc_numero = ft.Text("", size=17, weight=ft.FontWeight.W_700, color=UI["texto"],
+                                max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+        chip_oc_estado = ft.Container()
+        lbl_oc_proveedor = ft.Text("", size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"],
+                                   max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+        lbl_oc_detalle = ft.Text("", size=11.5, color=UI["texto_2"], max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+        COLOR_ESTADO_OC = {"EN_RECEPCION": UI["alerta"], "ACTIVO": UI["acento"], "COMPLETADO": UI["exito"],
+                           "CERRADO": UI["exito"], "LIBRE": UI["texto_2"]}
+
+        def _partes_oc():
+            """Separa el texto de la opción: 'OC 2143 (Nota: X) | Proveedor | ESTADO'."""
+            if str(dd_asn.value or "") == "LIBRES":
+                return "Ingresos libres", "", "Recepciones directas sin orden de compra", "LIBRE"
+            texto = ""
+            for op in (dd_asn.options or []):
+                if str(op.key) == str(dd_asn.value):
+                    texto = str(op.text or "")
+                    break
+            partes = [x.strip() for x in texto.split(" | ")]
+            cab = partes[0] if partes else ""
+            estado = partes[-1] if len(partes) >= 3 else ""
+            proveedor = " | ".join(partes[1:-1]) if len(partes) >= 3 else (partes[1] if len(partes) == 2 else "")
+            nota = ""
+            m = re.match(r"^(.*?)\s*\(Nota:\s*(.*)\)\s*$", cab)
+            if m:
+                cab, nota = m.group(1).strip(), m.group(2).strip()
+            return cab or "OC", nota, proveedor, estado
+
+        def actualizar_barra_oc():
+            valor = dd_asn.value
+            if valor != estado_barra_oc["ultima"]:
+                estado_barra_oc["ultima"] = valor
+                estado_barra_oc["editando"] = False      # al elegir otra OC se vuelve a la franja compacta
+            numero, nota, proveedor, estado = _partes_oc()
+            lbl_oc_numero.value = numero
+            lbl_oc_proveedor.value = proveedor or "—"
+            detalle = []
+            if nota:
+                detalle.append(f"Nota {nota}")
+            if (txt_contenedor.value or "").strip():
+                detalle.append(f"Contenedor {txt_contenedor.value.strip()}")
+            lbl_oc_detalle.value = "  ·  ".join(detalle) or "Sin contenedor asignado"
+            col = COLOR_ESTADO_OC.get(estado, UI["texto_2"])
+            chip_oc_estado.content = ft.Container(
+                padding=ft.Padding.symmetric(horizontal=8, vertical=3), border_radius=6,
+                bgcolor=ft.Colors.with_opacity(0.16, col),
+                content=ft.Text(estado.replace("_", " ") if estado else "", size=10.5, weight=ft.FontWeight.W_700, color=col),
+            ) if estado else None
+            mostrar_editor = estado_barra_oc["editando"] or not valor
+            cont_barra_oc.content = editor_oc if mostrar_editor else franja_oc
+            btn_listo_editor.visible = bool(valor)
+
+        def abrir_editor_oc(e=None):
+            estado_barra_oc["editando"] = True
+            actualizar_barra_oc()
+            page.update()
+
+        def cerrar_editor_oc(e=None):
+            estado_barra_oc["editando"] = False
+            actualizar_barra_oc()
+            page.update()
+
+        btn_listo_editor = ui_boton("Listo", ft.Icons.CHECK_ROUNDED, cerrar_editor_oc, "texto",
+                                    tooltip="Volver a la vista compacta de la OC en uso")
+        editor_oc.content.controls[0].controls.append(btn_listo_editor)
+
+        franja_oc = ft.Container(
+            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
+            bgcolor=UI["card"], border_radius=10, border=ft.Border.all(1, UI["borde"]),
+            content=ft.ResponsiveRow([
+                ft.Container(col={"xs": 12, "lg": 6}, content=ft.Row([
+                    ft.Container(width=38, height=38, border_radius=9, alignment=ft.Alignment.CENTER,
+                                 bgcolor=ft.Colors.with_opacity(0.15, UI["acento"]),
+                                 content=ft.Icon(ft.Icons.RECEIPT_LONG_OUTLINED, size=20, color=UI["acento"])),
+                    ft.Column([
+                        ft.Text("OC EN USO", size=10, weight=ft.FontWeight.W_700, color=UI["texto_3"]),
+                        ft.Row([lbl_oc_numero, chip_oc_estado], spacing=8, tight=True,
+                               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ], spacing=0, tight=True),
+                    ft.Container(width=1, height=34, bgcolor=UI["borde"]),
+                    ft.Column([lbl_oc_proveedor, lbl_oc_detalle], spacing=1, tight=True, expand=True),
+                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)),
+                ft.Container(col={"xs": 12, "lg": 6}, alignment=ft.Alignment.CENTER_RIGHT, content=ft.Row([
+                    ft.IconButton(icon=ft.Icons.REFRESH_ROUNDED, icon_color=UI["acento"],
+                                  tooltip="Actualizar recepción del andén", on_click=lambda e: auditar_asn_seleccionado(e)),
+                    sw_auto_sync_rf,
+                    ui_boton("Cambiar OC", ft.Icons.SWAP_HORIZ_ROUNDED, abrir_editor_oc, "secundario",
+                             tooltip="Elegir otra OC, importar desde NetSuite o editar el contenedor"),
+                    *acciones_barra_oc,
+                ], spacing=8, wrap=True, run_spacing=8, alignment=ft.MainAxisAlignment.END,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER)),
+            ], spacing=10, run_spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        )
+        # En la franja compacta el interruptor "En vivo" y los menús se muestran a la derecha;
+        # en el editor completo se quitan de ahí para no repetirlos (un control no puede estar en dos lugares).
+        editor_oc.content.controls[0].controls = [c for c in editor_oc.content.controls[0].controls if c is not sw_auto_sync_rf]
+        fila_import = editor_oc.content.controls[1]
+        fila_import.controls = [fila_import.controls[0]]
+        editor_oc.content.controls = [c for c in editor_oc.content.controls if c is not txt_estado_ia]
+        cont_barra_oc = ft.Container(content=editor_oc)
+        barra_oc = ft.Container(content=ft.Column([cont_barra_oc, txt_estado_ia], spacing=6, tight=True))
 
         # ---------- PANTALLA 0: RECEPCIÓN Y VALIDACIÓN ----------
         tabla_conciliacion_ui = ui_tabla(tabla_cruce_inbound, 430)
@@ -3971,6 +4079,8 @@ class RecepcionModulo:
         # ---------- PANTALLA 7: PANEL DE RECEPCIONES (agenda, NetSuite y reporte automático) ----------
         panel_recepciones = PanelRecepciones(page, panel_calendario.sincronizar)
         panel_calendario.despues_de_sincronizar = panel_recepciones.refrescar_sin_revisar
+        panel_calendario.agregar_modo("LLEGADAS", "Llegadas, agenda y reportes", ft.Icons.MOVE_TO_INBOX_ROUNDED,
+                                      panel_recepciones.vista, panel_recepciones.refrescar, despues_de="MARCA")
 
         # ---------- Armado del módulo ----------
         contenedor_subvista_inbound = ft.Container(content=subvista_inb_recepcion)
@@ -3987,7 +4097,6 @@ class RecepcionModulo:
             subvista_inb_modificacion,
             panel_conciliacion.vista,
             panel_calendario.vista,
-            panel_recepciones.vista,
         ]
         self.panel_conciliacion = panel_conciliacion
         self.panel_calendario = panel_calendario
@@ -4002,14 +4111,16 @@ class RecepcionModulo:
 
     def sel_sub_inb(self, idx: int):
         """0 Recepción y validación · 1 Indicadores · 2 Historial · 3 Calidad · 4 Ajustes · 5 Conciliar sin OC
-        · 6 Calendario de OC · 7 Panel de recepciones"""
+        · 6 Seguimiento de OC (por proveedor, llegadas/agenda/reportes y calendario). 7 = 6 en "Llegadas" (compatibilidad)."""
+        if idx == 7:
+            self.panel_calendario.modo = "LLEGADAS"
+            self.panel_calendario._pintar_modo()
+            idx = 6
         idx = idx if 0 <= idx < len(self.subvistas) else 0
         self.contenedor.content = self.subvistas[idx]
-        self.barra_oc.visible = idx not in (2, 6, 7)
+        self.barra_oc.visible = idx not in (2, 6)
         if idx == 6:
             self.panel_calendario.refrescar()
-        elif idx == 7:
-            self.panel_recepciones.refrescar()
         elif idx == 2:
             self.cargar_historico_recepciones_func()
         elif idx == 5:
