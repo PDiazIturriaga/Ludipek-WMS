@@ -2013,13 +2013,13 @@ class RecepcionModulo:
                 + (f"Contenedor / guía: {cont_ref}\n" if cont_ref else "")
                 + f"\nUnidades OC: {tot_esp} | Recibidas: {tot_rec} | Diferencia: {tot_rec - tot_esp:+d}\n"
                 + (("\nSKU con diferencia:\n" + "\n".join(lineas_dif) + "\n") if lineas_dif else "\nSin diferencias por SKU.\n")
-                + "\nSaludos,\nLudipek - Bodega"
+                + "\nSaludos,\nLudipek - WMS"
             )
 
             smtp_user = os.getenv("SMTP_USER", "").strip()
             smtp_pass = os.getenv("SMTP_PASS", "").strip()
             smtp_listo = bool(smtp_user and smtp_pass)
-            destinatarios_default = os.getenv("CORREOS_ACTA_RECEPCION", "compras@ludipek.cl, logistica@ludipek.cl")
+            destinatarios_default = os.getenv("CORREOS_ACTA_RECEPCION", "javier.dominguez@ludipek.com, bernardita.lagos@ludipek.com, vanesa.galaz@ludipek.com, mauricio.amenabar@ludipek.com, daniela.medone@ludipek.com, sebastian.oyaneder@ludipek.com, joaquin.bernal@ludipek.com, mery.vargas@ludipek.com, ivan.oyarce@ludipek.com, equipoqa@ludipek.com, marco.falchetti@ludipek.com")
             nombre_pdf = f"Acta_Recepcion_OC_{_nombre_archivo_seguro_local(cod_po_str)}.pdf"
 
             txt_para = texto_dark("Para (separe con coma)", value=destinatarios_default)
@@ -2600,7 +2600,7 @@ class RecepcionModulo:
             """
             # La OC "tal cual" NetSuite: cantidad y unidad de la línea (ej. 2 Caja x48). SuiteQL entrega
             # la cantidad en unidad base; se divide por el factor de la unidad de la línea (unitstypeuom).
-            q_po_uom = (q_po.replace("{COLS_UOM}", ", tl.linesequencenumber AS linea, u.unitname AS unidad_ns, u.conversionrate AS factor_ns")
+            q_po_uom = (q_po.replace("{COLS_UOM}", ", tl.linesequencenumber AS linea, u.unitname AS unidad_ns, u.conversionrate AS factor_ns, i.displayname AS nombre_ns")
                         .replace("{JOIN_UOM}", "\n                LEFT JOIN unitstypeuom u ON u.internalid = tl.units"))
             q_po = q_po.replace("{COLS_UOM}", "").replace("{JOIN_UOM}", "")
             try:
@@ -2656,7 +2656,9 @@ class RecepcionModulo:
                 cant_u = int(round(float(row.get("cantidad") or 0)))
                 if cant_u <= 0:
                     continue
-                desc_ns = str(row.get("descripcion") or "").strip()
+                desc_ns = str(row.get("nombre_ns") or "").strip()
+                if desc_ns.lower() in ("", "none", "nan"):
+                    desc_ns = str(row.get("descripcion") or "").strip()
                 desc_c = desc_ns or mapa_desc_maestra.get(sku_c) or sku_c
                 try:
                     factor_ns = float(row.get("factor_ns")) if row.get("factor_ns") not in (None, "") else 1.0
@@ -2824,8 +2826,20 @@ class RecepcionModulo:
                     dd_asn.value = str(asn_id_nuevo)
                     auditar_asn_seleccionado()
                     txt_nota_notif = f" (Nota/PO: {nota_po_str})" if nota_po_str else ""
+                    # SKU de la OC que no están en la maestra: se traen de NetSuite (nombre, código de barras, caja)
+                    txt_maestra = ""
+                    try:
+                        from servicios.maestra_netsuite import completar_skus_desde_netsuite
+                        r_m = completar_skus_desde_netsuite(supabase, consultar_netsuite,
+                                                            [x["sku"] for x in lista_lineas_po], marca=proveedor_str)
+                        if r_m.get("creados"):
+                            txt_maestra = f" {r_m['creados']} SKU nuevos creados en la maestra desde NetSuite."
+                        if r_m.get("no_encontrados"):
+                            txt_maestra += f" Sin ficha en NetSuite: {', '.join(r_m['no_encontrados'][:5])}."
+                    except Exception as ex_m:
+                        print(f"[OC] maestra desde NetSuite: {ex_m}")
                     notificar(f"Orden de Compra {num_oc_real}{txt_nota_notif} activada para recepción "
-                              f"tal cual NetSuite ({nuevas} líneas nuevas, {actualizadas} actualizadas).", "#047857")
+                              f"tal cual NetSuite ({nuevas} líneas nuevas, {actualizadas} actualizadas).{txt_maestra}", "#047857")
                 except Exception as ex_save:
                     notificar(f"Error al activar OC {num_oc_real}: {ex_save}", "#B91C1C")
 
