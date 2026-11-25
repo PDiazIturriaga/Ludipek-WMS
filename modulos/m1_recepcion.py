@@ -24,6 +24,14 @@ def _entero_o_none(v):
         return None
 
 
+def _cant_txt(v) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{int(round(f)):,}".replace(",", ".") if abs(f - round(f)) < 0.001 else f"{f:.2f}"
+
+
 def _txt_cant(v) -> str:
     return "-" if v is None else str(v)
 
@@ -1348,6 +1356,11 @@ class RecepcionModulo:
                     dif_unid = unid_rec - unid_esp
                     dif_cajas = cajas_rec - cajas_esp
                     es_alerta_fila = False
+                    # El estatus se decide por UNIDADES. Las cajas solo se comparan si la OC y lo recibido
+                    # usan el mismo múltiplo (si no, la diferencia en cajas no significa nada).
+                    mult_rec = (unid_rec // cajas_rec) if cajas_rec else mult_emp
+                    mismo_mult = cajas_rec == 0 or mult_rec == mult_emp
+                    txt_cj = f" ({dif_cajas:+d} Cj)" if mismo_mult else f" (OC x{mult_emp} · recibido x{mult_rec})"
 
                     if es_fuera_oc:
                         txt_dif = f"+{unid_rec} UN (+{cajas_rec} Cj)"
@@ -1356,14 +1369,14 @@ class RecepcionModulo:
                         badge_linea = crear_badge_estado("SKU FUERA DE OC", "#991B1B", "#FEE2E2")
                         es_alerta_fila = True
                         alertas_sobrantes.append(f"{sku_code} (Fuera de OC: +{cajas_rec} Cj)")
-                    elif unid_rec > unid_esp or (cajas_esp > 0 and cajas_rec > cajas_esp):
-                        txt_dif = f"{dif_unid:+d} UN ({dif_cajas:+d} Cj)"
+                    elif unid_rec > unid_esp:
+                        txt_dif = f"{dif_unid:+d} UN{txt_cj}"
                         color_dif = "#F87171"
                         estado_txt = "SOBRANTE"
-                        badge_linea = crear_badge_estado(f"SOBRANTE ({dif_cajas:+d} CJ)", "#991B1B", "#FEE2E2")
+                        badge_linea = crear_badge_estado(f"SOBRANTE (+{dif_unid} UN)", "#991B1B", "#FEE2E2")
                         es_alerta_fila = True
-                        alertas_sobrantes.append(f"{sku_code} (Sobrante: {dif_cajas:+d} Cj / {dif_unid:+d} UN)")
-                    elif dif_unid == 0 and unid_esp > 0 and (cajas_esp == 0 or cajas_rec == cajas_esp):
+                        alertas_sobrantes.append(f"{sku_code} (Sobrante: {dif_unid:+d} UN{txt_cj})")
+                    elif dif_unid == 0 and unid_esp > 0:
                         txt_dif = "0 (OK)"
                         color_dif = "#34D399"
                         estado_txt = "VALIDADA"
@@ -1374,7 +1387,7 @@ class RecepcionModulo:
                         estado_txt = "PENDIENTE"
                         badge_linea = crear_badge_estado("PENDIENTE", "#CBD5E1", "#334155")
                     else:
-                        txt_dif = f"{dif_unid:+d} UN ({dif_cajas:+d} Cj)"
+                        txt_dif = f"{dif_unid:+d} UN{txt_cj}"
                         color_dif = "#FBBF24"
                         estado_txt = "PARCIAL"
                         badge_linea = crear_badge_estado("PARCIAL", "#92400E", "#FEF3C7")
@@ -1409,7 +1422,9 @@ class RecepcionModulo:
                             cells=[
                                 ft.DataCell(ft.Text(sku_code, weight=ft.FontWeight.BOLD, size=11, color="#F87171" if es_alerta_fila else ACCENT_CYAN)),
                                 ft.DataCell(ft.Text(desc_completa[:28], size=11, color=TEXT_WHITE)),
-                                ft.DataCell(ft.Text("NO EN OC (0 Cj)" if es_fuera_oc else f"{cajas_esp} Cj x {mult_emp}", size=11, color="#F87171" if es_fuera_oc else TEXT_MUTED)),
+                                ft.DataCell(ft.Text("NO EN OC (0 Cj)" if es_fuera_oc else (
+                                    f"{_cant_txt(l.get('cantidad_oc_ns'))} {l.get('unidad_oc_ns')} (NS)" if l.get("unidad_oc_ns") and l.get("cantidad_oc_ns") is not None
+                                    else f"{cajas_esp} Cj x {mult_emp}"), size=11, color="#F87171" if es_fuera_oc else TEXT_MUTED)),
                                 ft.DataCell(ft.Text(f"{unid_esp} UN", size=11, color=TEXT_WHITE)),
                                 ft.DataCell(ft.Text(f"{str(l.get('lote_sugerido') or 'S/L')} | {str(l.get('vencimiento_sugerido_cl') or 'S/F')}", size=11, color="#FBBF24" if l.get("lote_sugerido") and l.get("lote_sugerido") not in ("S/L", "NO EN OC") else TEXT_MUTED)),
                                 ft.DataCell(ft.Text(f"{cajas_rec} Cj", weight=ft.FontWeight.BOLD, size=11, color="#F87171" if es_alerta_fila else TEXT_WHITE)),
@@ -2570,10 +2585,10 @@ class RecepcionModulo:
                     BUILTIN.DF(t.status) AS estado_ns,
                     i.itemid AS sku,
                     BUILTIN.DF(tl.item) AS descripcion,
-                    ABS(tl.quantity) AS cantidad
+                    ABS(tl.quantity) AS cantidad{{COLS_UOM}}
                 FROM transaction t
                 INNER JOIN transactionline tl ON t.id = tl.transaction
-                INNER JOIN item i ON tl.item = i.id
+                INNER JOIN item i ON tl.item = i.id{{JOIN_UOM}}
                 WHERE t.type = 'PurchOrd'
                 AND tl.mainline = 'F'
                 AND (
@@ -2583,8 +2598,15 @@ class RecepcionModulo:
                 )
                 ORDER BY i.itemid ASC
             """
+            # La OC "tal cual" NetSuite: cantidad y unidad de la línea (ej. 2 Caja x48). SuiteQL entrega
+            # la cantidad en unidad base; se divide por el factor de la unidad de la línea (unitstypeuom).
+            q_po_uom = (q_po.replace("{COLS_UOM}", ", tl.linesequencenumber AS linea, u.unitname AS unidad_ns, u.conversionrate AS factor_ns")
+                        .replace("{JOIN_UOM}", "\n                LEFT JOIN unitstypeuom u ON u.internalid = tl.units"))
+            q_po = q_po.replace("{COLS_UOM}", "").replace("{JOIN_UOM}", "")
             try:
-                df_po = consultar_netsuite(q_po)
+                df_po = consultar_netsuite(q_po_uom)
+                if df_po is None:
+                    df_po = consultar_netsuite(q_po)     # cuenta sin unidades de medida
             except Exception as ex_ns:
                 notificar(f"Error consultando NetSuite: {ex_ns}", "#B91C1C")
                 return
@@ -2604,13 +2626,25 @@ class RecepcionModulo:
             mapa_multiplos = {}
             mapa_desc_maestra = {}
             try:
-                filas_maestra = leer_tabla_paginada(lambda: supabase.table("maestra_sku").select("sku, multiplo, descripcion"))
+                filas_maestra = leer_tabla_paginada(lambda: supabase.table("maestra_sku").select("sku, multiplo, descripcion, unidad_medida"))
+                # Un SKU tiene varias filas (UNIDAD / DISPLAY / CAJA): la OC se convierte a cajas con la fila CAJA
+                # (si no hay, con el mayor múltiplo). Antes quedaba la última fila leída (a veces la UNIDAD = 1).
+                mult_caja, mult_max = {}, {}
                 for m in filas_maestra:
                     s_k = str(m.get("sku") or "").strip().upper()
-                    if s_k:
-                        mapa_multiplos[s_k] = max(1, int(float(m.get("multiplo") or 1)))
-                        if m.get("descripcion"):
-                            mapa_desc_maestra[s_k] = str(m.get("descripcion")).strip()
+                    if not s_k:
+                        continue
+                    try:
+                        mu = max(1, int(float(m.get("multiplo") or 1)))
+                    except (TypeError, ValueError):
+                        mu = 1
+                    um = str(m.get("unidad_medida") or "").strip().upper().replace(" ", "_")
+                    if um in ("CAJA", "CAJA_MASTER", "MASTER", "CJ"):
+                        mult_caja[s_k] = max(mult_caja.get(s_k, 1), mu)
+                    mult_max[s_k] = max(mult_max.get(s_k, 1), mu)
+                    if m.get("descripcion"):
+                        mapa_desc_maestra[s_k] = str(m.get("descripcion")).strip()
+                mapa_multiplos = {k: mult_caja.get(k, v) for k, v in mult_max.items()}
             except Exception:
                 pass
 
@@ -2619,20 +2653,35 @@ class RecepcionModulo:
                 sku_c = str(row.get("sku") or "").strip().upper()
                 if not sku_c or sku_c in ("NONE", "NULL"):
                     continue
-                cant_u = int(float(row.get("cantidad") or 0))
+                cant_u = int(round(float(row.get("cantidad") or 0)))
                 if cant_u <= 0:
                     continue
-                desc_c = mapa_desc_maestra.get(sku_c) or str(row.get("descripcion") or sku_c).strip()
-                mult_c = mapa_multiplos.get(sku_c, 1)
+                desc_ns = str(row.get("descripcion") or "").strip()
+                desc_c = desc_ns or mapa_desc_maestra.get(sku_c) or sku_c
+                try:
+                    factor_ns = float(row.get("factor_ns")) if row.get("factor_ns") not in (None, "") else 1.0
+                    if factor_ns != factor_ns or factor_ns <= 0:      # NaN
+                        factor_ns = 1.0
+                except (TypeError, ValueError):
+                    factor_ns = 1.0
+                unidad_ns = str(row.get("unidad_ns") or "").strip()
+                if unidad_ns.lower() in ("none", "nan"):
+                    unidad_ns = ""
+                # Si NetSuite compra en cajas (factor > 1) se usa SU factor; si no, la fila CAJA de la maestra
+                mult_c = int(round(factor_ns)) if factor_ns > 1 else mapa_multiplos.get(sku_c, 1)
 
                 if sku_c not in skus_agrupados:
                     skus_agrupados[sku_c] = {
                         "sku": sku_c,
                         "descripcion": desc_c,
                         "unidades_esperadas": 0,
+                        "cantidad_ns": 0.0,
+                        "unidad_ns": unidad_ns or "UN",
+                        "factor_ns": factor_ns,
                         "multiplo": mult_c,
                     }
                 skus_agrupados[sku_c]["unidades_esperadas"] += cant_u
+                skus_agrupados[sku_c]["cantidad_ns"] += cant_u / factor_ns
 
             lista_lineas_po = list(skus_agrupados.values())
             if not lista_lineas_po:
@@ -2643,13 +2692,24 @@ class RecepcionModulo:
             total_unidades = sum(x["unidades_esperadas"] for x in lista_lineas_po)
 
             filas_preview = []
+            def _cajas_de(item_p):
+                if item_p.get("factor_ns", 1) > 1:
+                    return int(round(item_p["cantidad_ns"]))          # tal cual la OC de NetSuite
+                return max(1, -(-item_p["unidades_esperadas"] // max(1, item_p["multiplo"])))
+
+            def _cant_ns_txt(item_p):
+                c = item_p.get("cantidad_ns") or 0
+                c_txt = f"{int(round(c))}" if abs(c - round(c)) < 0.001 else f"{c:.2f}"
+                return f"{c_txt} {item_p.get('unidad_ns') or 'UN'}"
+
             for item_p in lista_lineas_po:
-                cajas_est = max(1, round(item_p["unidades_esperadas"] / item_p["multiplo"]))
+                cajas_est = _cajas_de(item_p)
                 filas_preview.append(
                     ft.DataRow(
                         cells=[
                             ft.DataCell(ft.Text(item_p["sku"], weight=ft.FontWeight.BOLD, size=11, color=ACCENT_CYAN)),
                             ft.DataCell(ft.Text(item_p["descripcion"][:38], size=11, color=TEXT_WHITE)),
+                            ft.DataCell(ft.Text(_cant_ns_txt(item_p), size=11, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)),
                             ft.DataCell(ft.Text(f"x{item_p['multiplo']}", size=11, color=TEXT_MUTED)),
                             ft.DataCell(ft.Text(f"{cajas_est} Cj", size=11, color="#FBBF24")),
                             ft.DataCell(ft.Text(f"{item_p['unidades_esperadas']} UN", weight=ft.FontWeight.BOLD, size=11, color="#34D399")),
@@ -2666,6 +2726,7 @@ class RecepcionModulo:
                 columns=[
                     ft.DataColumn(ft.Text("SKU", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_CYAN)),
                     ft.DataColumn(ft.Text("DESCRIPCIÓN", size=10, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)),
+                    ft.DataColumn(ft.Text("CANTIDAD NETSUITE", size=10, weight=ft.FontWeight.BOLD, color=TEXT_WHITE)),
                     ft.DataColumn(ft.Text("MÚLT.", size=10, weight=ft.FontWeight.BOLD, color=TEXT_MUTED)),
                     ft.DataColumn(ft.Text("CAJAS EST.", size=10, weight=ft.FontWeight.BOLD, color="#FBBF24")),
                     ft.DataColumn(ft.Text("UNIDADES", size=10, weight=ft.FontWeight.BOLD, color="#34D399")),
@@ -2724,30 +2785,47 @@ class RecepcionModulo:
                                 res_ins = supabase.table("asn_cabecera").insert(payload_base).execute()
                         asn_id_nuevo = res_ins.data[0]["id"]
 
-                    res_det_ex = supabase.table("asn_detalle").select("sku").eq("asn_id", asn_id_nuevo).execute()
-                    skus_ya_en_bd = {str(r.get("sku") or "").strip().upper() for r in (res_det_ex.data or [])}
+                    res_det_ex = supabase.table("asn_detalle").select("id, sku").eq("asn_id", asn_id_nuevo).execute()
+                    ids_ya_en_bd = {str(r.get("sku") or "").strip().upper(): r.get("id") for r in (res_det_ex.data or [])}
 
-                    nuevas_lineas_bd = []
+                    def _datos_linea(item_p):
+                        base = {
+                            "descripcion_proveedor": item_p["descripcion"],
+                            "cajas_esperadas": _cajas_de(item_p),
+                            "multiplo_empaque": item_p["multiplo"],
+                            "unidades_esperadas": item_p["unidades_esperadas"],
+                            "unidades_oc": item_p["unidades_esperadas"],
+                            "cajas_oc": int(round(item_p["cantidad_ns"])) if item_p.get("factor_ns", 1) > 1 else None,
+                        }
+                        extra = {"cantidad_oc_ns": round(float(item_p["cantidad_ns"]), 3), "unidad_oc_ns": item_p.get("unidad_ns")}
+                        return base, extra
+
+                    def _guardar(fn, datos, extra):
+                        try:
+                            return fn({**datos, **extra}).execute()
+                        except Exception as ex_c:          # sin el script 53 (columnas de unidad NetSuite)
+                            if "unidad_oc_ns" in str(ex_c) or "cantidad_oc_ns" in str(ex_c) or "PGRST204" in str(ex_c):
+                                return fn(datos).execute()
+                            raise
+
+                    nuevas, actualizadas = 0, 0
                     for item_p in lista_lineas_po:
-                        if item_p["sku"] not in skus_ya_en_bd:
-                            cajas_esp = max(1, round(item_p["unidades_esperadas"] / item_p["multiplo"]))
-                            nuevas_lineas_bd.append({
-                                "asn_id": asn_id_nuevo,
-                                "sku": item_p["sku"],
-                                "descripcion_proveedor": item_p["descripcion"],
-                                "cajas_esperadas": cajas_esp,
-                                "multiplo_empaque": item_p["multiplo"],
-                                "unidades_esperadas": item_p["unidades_esperadas"],
-                                "lote_sugerido": "S/L",
-                            })
-                    if nuevas_lineas_bd:
-                        supabase.table("asn_detalle").insert(nuevas_lineas_bd).execute()
+                        datos_l, extra_l = _datos_linea(item_p)
+                        id_l = ids_ya_en_bd.get(item_p["sku"])
+                        if id_l:     # la OC ya estaba: queda igual a NetSuite (no se toca lo recibido)
+                            _guardar(lambda d: supabase.table("asn_detalle").update(d).eq("id", id_l), datos_l, extra_l)
+                            actualizadas += 1
+                        else:
+                            _guardar(lambda d: supabase.table("asn_detalle").insert(
+                                {"asn_id": asn_id_nuevo, "sku": item_p["sku"], "lote_sugerido": "S/L", **d}), datos_l, extra_l)
+                            nuevas += 1
 
                     cargar_lista_asns()
                     dd_asn.value = str(asn_id_nuevo)
                     auditar_asn_seleccionado()
                     txt_nota_notif = f" (Nota/PO: {nota_po_str})" if nota_po_str else ""
-                    notificar(f"Orden de Compra {num_oc_real}{txt_nota_notif} activada para recepción.", "#047857")
+                    notificar(f"Orden de Compra {num_oc_real}{txt_nota_notif} activada para recepción "
+                              f"tal cual NetSuite ({nuevas} líneas nuevas, {actualizadas} actualizadas).", "#047857")
                 except Exception as ex_save:
                     notificar(f"Error al activar OC {num_oc_real}: {ex_save}", "#B91C1C")
 
