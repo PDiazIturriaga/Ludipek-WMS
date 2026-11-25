@@ -1197,7 +1197,7 @@ def main(page: ft.Page):
                     ("Control de calidad", _ico("VERIFIED_USER_OUTLINED", "CENTER_FOCUS_STRONG_OUTLINED")),
                     ("Ajustes de OC y pallets", _ico("EDIT_NOTE_ROUNDED", "CROP_FREE_OUTLINED")),
                     ("Conciliar recepciones sin OC", _ico("LINK_ROUNDED", "COMPARE_ARROWS_ROUNDED")),
-                    ("Calendario de OC", _ico("CALENDAR_MONTH_OUTLINED", "EVENT_NOTE_OUTLINED")),
+                    ("OC por proveedor", _ico("LIST_ALT_ROUNDED", "CALENDAR_MONTH_OUTLINED")),
                     ("Panel de recepciones", _ico("DASHBOARD_CUSTOMIZE_OUTLINED", "MOVE_TO_INBOX_ROUNDED")),
                 ],
             ),

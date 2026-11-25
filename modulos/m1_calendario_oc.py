@@ -18,7 +18,7 @@ import flet as ft
 import re
 from dependencias import (supabase, UI, ui_boton, ui_tarjeta, ui_tabla, ui_kpi, notificar_global,
                           formatear_fecha_hora_chile, descargar_o_abrir_archivo, obtener_bodega_activa)
-from modulos.m1_oc_marca import PanelOcPorMarca
+from modulos.m1_oc_marca import PanelOcPorProveedor
 
 # OC abiertas en NetSuite: por aprobar, pendiente de recepción, parcialmente recibida, parcial/por facturar
 FILTRO_OC_ABIERTAS = "t.status IN ('PurchOrd:A', 'PurchOrd:B', 'PurchOrd:D', 'PurchOrd:E')"
@@ -195,7 +195,7 @@ class PanelCalendarioOc:
                                  color=UI["texto_2"], visible=False)
 
         self.modo = "MARCA"
-        self.panel_marca = PanelOcPorMarca(page, self.sincronizar)
+        self.panel_marca = PanelOcPorProveedor(page, self.traer_oc_proveedor)
         self.btn_modo_marca = ft.Container()
         self.btn_modo_cal = ft.Container()
         self.selector_modo = ft.Row([self.btn_modo_marca, self.btn_modo_cal], spacing=8)
@@ -241,7 +241,7 @@ class PanelCalendarioOc:
 
     def _pintar_modo(self):
         self.selector_modo.controls = [
-            self._boton_modo("MARCA", "OC abiertas por marca", ft.Icons.LIST_ALT_ROUNDED),
+            self._boton_modo("MARCA", "OC por proveedor (listado)", ft.Icons.LIST_ALT_ROUNDED),
             self._boton_modo("CALENDARIO", "Calendario y tiempos", ft.Icons.CALENDAR_MONTH_OUTLINED),
         ]
         self.panel_marca.vista.visible = self.modo == "MARCA"
@@ -264,6 +264,9 @@ class PanelCalendarioOc:
         return ini, fin
 
     def refrescar(self, forzar: bool = False):
+        if self.modo == "MARCA":           # listado por proveedor: trae de NetSuite al elegir el proveedor
+            self.panel_marca.refrescar()
+            return
         ini, fin = self._rango_mes()
         self.lbl_mes.value = f"{MESES[self.mes - 1]} {self.anio}"
         try:
@@ -288,8 +291,6 @@ class PanelCalendarioOc:
             pass
         self.lbl_sync.value = (f"Última lectura de NetSuite: {formatear_fecha_hora_chile(ultima)}" if ultima
                                else "Todavía no se han leído OC desde NetSuite.")
-        if self.modo == "MARCA":
-            self.panel_marca.refrescar()
         self._pintar()
         # Lectura automática: si la última tiene más de 30 minutos
         if forzar is False and NETSUITE_OK and not self.sincronizando:
@@ -362,6 +363,75 @@ class PanelCalendarioOc:
                         fecha = None
                 marcas.append({"ns_id": pid, "recepciones": _valor(r.get("recepciones")) or "0", "fecha": fecha})
         return marcas
+
+    def traer_oc_proveedor(self, nombre: str, al_terminar):
+        """Trae de NetSuite las OC del proveedor (últimos 24 meses), con unidades y si tienen recepción.
+        Corre en segundo plano y al final llama al_terminar(mensaje, nombre_en_netsuite)."""
+        if not NETSUITE_OK:
+            al_terminar("La conexión con NetSuite no está disponible en este equipo: se muestra lo que tiene el WMS.")
+            return
+
+        def trabajo():
+            q = re.sub(r"\s+", " ", str(nombre or "").strip().upper()).replace("'", "''")
+            desde = (date.today() - timedelta(days=730)).isoformat()
+            rango = f"t.trandate >= TO_DATE('{desde}', 'YYYY-MM-DD')"
+            filtros = [
+                f"UPPER(BUILTIN.DF(t.entity)) LIKE '%{q}%' AND {rango}",
+                f"t.entity IN (SELECT v.id FROM vendor v WHERE UPPER(v.companyname) LIKE '%{q}%' "
+                f"OR UPPER(v.entityid) LIKE '%{q}%') AND {rango}",
+            ]
+            df = None
+            for filtro in filtros:
+                for completa in (True, False):
+                    df = consultar_netsuite(self._consulta_ns(date.today(), date.today(), completa, filtro))
+                    if df is not None:
+                        break
+                if df is not None:
+                    break
+            if df is None:
+                err = getattr(conexion_erp, "ULTIMO_ERROR_NETSUITE", "") or "sin respuesta"
+                al_terminar(f"No se pudo leer NetSuite ({str(err)[:140]}). Se muestra lo que tiene el WMS.")
+                return
+            filas = df.where(pd.notna(df), None).to_dict("records") if len(df) else []
+            if not filas:
+                al_terminar(f"NetSuite no tiene OC de «{nombre}» en los últimos 24 meses.")
+                return
+            ids = sorted({_valor(f.get("ns_id")) for f in filas if (_valor(f.get("ns_id")) or "").isdigit()})
+            try:
+                por_id = {}
+                for i in range(0, len(ids), 200):
+                    dfu = consultar_netsuite(f"""
+                        SELECT tl.transaction AS ns_id, SUM(ABS(tl.quantity)) AS unidades, COUNT(*) AS lineas
+                        FROM transactionline tl
+                        WHERE tl.mainline = 'F' AND tl.item IS NOT NULL AND tl.transaction IN ({",".join(ids[i:i + 200])})
+                        GROUP BY tl.transaction""")
+                    if dfu is not None and len(dfu):
+                        por_id.update({_valor(r.get("ns_id")): r for r in dfu.to_dict("records")})
+                for f in filas:
+                    r = por_id.get(_valor(f.get("ns_id")))
+                    if r:
+                        f["unidades"], f["lineas"] = r.get("unidades"), r.get("lineas")
+            except Exception:
+                pass
+            try:
+                limpio = [{k: _valor(v) for k, v in f.items()} for f in filas]
+                res = supabase.rpc("wms_oc_sincronizar", {"p_filas": limpio}).execute().data or {}
+            except Exception as ex:
+                al_terminar(f"No se pudieron guardar las OC: {getattr(ex, 'message', None) or ex}")
+                return
+            msg_r = ""
+            try:
+                marcas = self._revisar_recepciones_ns(ids)
+                if marcas:
+                    supabase.rpc("wms_oc_marcar_recepcion_ns", {"p_filas": marcas}).execute()
+            except Exception as ex_r:
+                msg_r = f" (no se pudo revisar la recepción en NetSuite: {str(ex_r)[:120]})"
+            nombres = [str(f.get("proveedor") or "").strip().upper() for f in filas if f.get("proveedor")]
+            principal = max(set(nombres), key=nombres.count) if nombres else None
+            al_terminar(f"NetSuite: {res.get('leidas', 0)} OC de {principal or nombre} ({res.get('nuevas', 0)} nuevas) · "
+                        f"{datetime.now():%H:%M}.{msg_r}", re.sub(r"\s+", " ", principal) if principal else None)
+
+        threading.Thread(target=trabajo, daemon=True).start()
 
     def _consulta_ns(self, ini: date, fin: date, completa: bool, filtro: str = None) -> str:
         extra = ("TO_CHAR(t.createddate, 'YYYY-MM-DD HH24:MI:SS') AS creada_en, "
