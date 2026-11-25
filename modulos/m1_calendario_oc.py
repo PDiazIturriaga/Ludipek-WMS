@@ -4,6 +4,9 @@ Muestra en un calendario las órdenes de compra que van cayendo en NetSuite y mi
 creada en NetSuite -> llegó (primer pallet recibido) -> cerrada en el WMS, y contra la fecha
 esperada de NetSuite. Las OC se traen solas de NetSuite (al abrir, si la última lectura tiene más
 de 30 minutos) o con "Actualizar desde NetSuite". Requiere 45_calendario_oc.sql.
+
+Vista «Por marca» (m1_oc_marca, script 48): todas las OC abiertas de una marca, sin importar la fecha
+de creación, con sus contenedores (un PL por contenedor) y el detalle de cada uno.
 """
 import calendar
 import os
@@ -15,6 +18,10 @@ import flet as ft
 import re
 from dependencias import (supabase, UI, ui_boton, ui_tarjeta, ui_tabla, ui_kpi, notificar_global,
                           formatear_fecha_hora_chile, descargar_o_abrir_archivo, obtener_bodega_activa)
+from modulos.m1_oc_marca import PanelOcPorMarca
+
+# OC abiertas en NetSuite: por aprobar, pendiente de recepción, parcialmente recibida, parcial/por facturar
+FILTRO_OC_ABIERTAS = "t.status IN ('PurchOrd:A', 'PurchOrd:B', 'PurchOrd:D', 'PurchOrd:E')"
 
 try:
     from conexion_erp import consultar_netsuite
@@ -187,7 +194,13 @@ class PanelCalendarioOc:
         self.txt_vacio = ft.Text("No hay OC en este mes. Presione «Actualizar desde NetSuite».", size=12.5,
                                  color=UI["texto_2"], visible=False)
 
-        self.vista = ft.Column([
+        self.modo = "MARCA"
+        self.panel_marca = PanelOcPorMarca(page, self.sincronizar)
+        self.btn_modo_marca = ft.Container()
+        self.btn_modo_cal = ft.Container()
+        self.selector_modo = ft.Row([self.btn_modo_marca, self.btn_modo_cal], spacing=8)
+
+        self.vista_calendario = ft.Column([
             ft.Container(
                 padding=14, border_radius=10, bgcolor=UI["card"], border=ft.Border.all(1, UI["borde"]),
                 content=ft.Row([
@@ -212,7 +225,32 @@ class PanelCalendarioOc:
                        icono=ft.Icons.CALENDAR_MONTH_OUTLINED),
             ui_tarjeta(ft.Column([ui_tabla(self.tabla, 420), self.txt_vacio], spacing=8, tight=True),
                        titulo="OC del mes y sus tiempos", icono=ft.Icons.TIMER_OUTLINED),
-        ], spacing=14, tight=True)
+        ], spacing=14, tight=True, visible=False)
+        self.vista = ft.Column([self.selector_modo, self.panel_marca.vista, self.vista_calendario], spacing=14, tight=True)
+        self._pintar_modo()
+
+    def _boton_modo(self, clave, texto, icono):
+        activo = self.modo == clave
+        return ft.Container(
+            padding=ft.Padding.symmetric(horizontal=14, vertical=8), border_radius=8, ink=True,
+            bgcolor=ft.Colors.with_opacity(0.18, UI["acento"]) if activo else UI["card_alt"],
+            border=ft.Border.all(1, UI["acento"] if activo else UI["borde"]),
+            on_click=lambda e: self._cambiar_modo(clave),
+            content=ft.Row([ft.Icon(icono, size=18, color=UI["acento"]),
+                            ft.Text(texto, size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])], spacing=6, tight=True))
+
+    def _pintar_modo(self):
+        self.selector_modo.controls = [
+            self._boton_modo("MARCA", "OC abiertas por marca", ft.Icons.LIST_ALT_ROUNDED),
+            self._boton_modo("CALENDARIO", "Calendario y tiempos", ft.Icons.CALENDAR_MONTH_OUTLINED),
+        ]
+        self.panel_marca.vista.visible = self.modo == "MARCA"
+        self.vista_calendario.visible = self.modo == "CALENDARIO"
+
+    def _cambiar_modo(self, modo):
+        self.modo = modo
+        self._pintar_modo()
+        self.refrescar(forzar=True)
 
     # ==================================================================
     # Datos
@@ -250,6 +288,8 @@ class PanelCalendarioOc:
             pass
         self.lbl_sync.value = (f"Última lectura de NetSuite: {formatear_fecha_hora_chile(ultima)}" if ultima
                                else "Todavía no se han leído OC desde NetSuite.")
+        if self.modo == "MARCA":
+            self.panel_marca.refrescar()
         self._pintar()
         # Lectura automática: si la última tiene más de 30 minutos
         if forzar is False and NETSUITE_OK and not self.sincronizando:
@@ -303,6 +343,18 @@ class PanelCalendarioOc:
                 if df is None:
                     raise RuntimeError(getattr(conexion_erp, "ULTIMO_ERROR_NETSUITE", "") or "sin respuesta de NetSuite")
                 filas = df.where(pd.notna(df), None).to_dict("records") if len(df) else []
+                # TODAS las OC abiertas (pueden ser de hace meses): quedan marcadas como abiertas
+                abiertas = None
+                try:
+                    dfa = consultar_netsuite(self._consulta_ns(ini, fin, True, FILTRO_OC_ABIERTAS))
+                    if dfa is None:
+                        dfa = consultar_netsuite(self._consulta_ns(ini, fin, False, FILTRO_OC_ABIERTAS))
+                    if dfa is not None:
+                        abiertas = dfa.where(pd.notna(dfa), None).to_dict("records") if len(dfa) else []
+                        ids_ventana = {_valor(f.get("ns_id")) for f in filas}
+                        filas += [f for f in abiertas if _valor(f.get("ns_id")) not in ids_ventana]
+                except Exception as ex_a:
+                    print(f"[CALENDARIO OC] OC abiertas: {ex_a}")
                 # Unidades y líneas por OC
                 try:
                     dfl = consultar_netsuite(f"""
@@ -312,12 +364,22 @@ class PanelCalendarioOc:
                           AND t.trandate >= TO_DATE('{desde.isoformat()}', 'YYYY-MM-DD')
                           AND t.trandate <= TO_DATE('{fin.isoformat()}', 'YYYY-MM-DD')
                         GROUP BY tl.transaction""")
-                    if dfl is not None and len(dfl):
-                        por_id = {_valor(r.get("ns_id")): r for r in dfl.to_dict("records")}
-                        for f in filas:
-                            r = por_id.get(_valor(f.get("ns_id")))
-                            if r:
-                                f["unidades"], f["lineas"] = r.get("unidades"), r.get("lineas")
+                    por_id = {_valor(r.get("ns_id")): r for r in dfl.to_dict("records")} if dfl is not None and len(dfl) else {}
+                    # las abiertas fuera de la ventana: unidades por id
+                    faltan_u = sorted({_valor(f.get("ns_id")) for f in filas
+                                       if _valor(f.get("ns_id")) not in por_id and (_valor(f.get("ns_id")) or "").isdigit()})
+                    for i in range(0, len(faltan_u), 200):
+                        dfu = consultar_netsuite(f"""
+                            SELECT tl.transaction AS ns_id, SUM(ABS(tl.quantity)) AS unidades, COUNT(*) AS lineas
+                            FROM transactionline tl
+                            WHERE tl.mainline = 'F' AND tl.item IS NOT NULL AND tl.transaction IN ({",".join(faltan_u[i:i + 200])})
+                            GROUP BY tl.transaction""")
+                        if dfu is not None and len(dfu):
+                            por_id.update({_valor(r.get("ns_id")): r for r in dfu.to_dict("records")})
+                    for f in filas:
+                        r = por_id.get(_valor(f.get("ns_id")))
+                        if r:
+                            f["unidades"], f["lineas"] = r.get("unidades"), r.get("lineas")
                 except Exception:
                     pass
                 # OC que el WMS tiene (últimos 150 días) y no vinieron en la ventana: se traen por número
@@ -337,6 +399,15 @@ class PanelCalendarioOc:
                     pass
                 limpio = [{k: _valor(v) for k, v in f.items()} for f in filas]
                 res = supabase.rpc("wms_oc_sincronizar", {"p_filas": limpio}).execute().data or {}
+                msg_ab = ""
+                if abiertas:      # si NetSuite no respondió (o vino vacío) no se cierra nada
+                    ids_ab = {_valor(a.get("ns_id")) for a in abiertas}
+                    try:
+                        res_ab = supabase.rpc("wms_oc_sincronizar_abiertas", {
+                            "p_filas": [f for f in limpio if f.get("ns_id") in ids_ab]}).execute().data or {}
+                        msg_ab = f" {res_ab.get('abiertas', 0)} OC abiertas."
+                    except Exception as ex_ab:
+                        print(f"[CALENDARIO OC] marcar abiertas (¿falta el script 48?): {ex_ab}")
                 self._meses_leidos.add((ini.year, ini.month))
                 # ¿Cada OC ya tiene su recepción de artículos (Item Receipt) en NetSuite?
                 msg_r = ""
@@ -362,7 +433,7 @@ class PanelCalendarioOc:
                 except Exception as ex_r:
                     msg_r = f" (no se pudo revisar las recepciones en NetSuite: {ex_r})"
                     print(f"[CALENDARIO OC] {msg_r}")
-                msg = f"NetSuite: {res.get('leidas', 0)} OC leídas, {res.get('nuevas', 0)} nuevas.{msg_r}"
+                msg = f"NetSuite: {res.get('leidas', 0)} OC leídas, {res.get('nuevas', 0)} nuevas.{msg_ab}{msg_r}"
             except Exception as ex:
                 msg, color = f"No se pudo leer NetSuite: {getattr(ex, 'message', None) or ex}", "#B91C1C"
             finally:

@@ -2994,7 +2994,7 @@ class RecepcionModulo:
                     "unidades_esperadas": max(1, int(txt_edit_unid_esp.value.strip() or str(cajas_n * mult_n))),
                     "lote_sugerido": (txt_edit_lote_sug.value or "S/L").strip().upper(),
                     "vencimiento_sugerido_cl": normalizar_fecha_sql(txt_edit_venc_sug.value),
-                    "bodega": obtener_bodega_activa(self.page)
+                    # asn_detalle no tiene bodega: la bodega es la de la cabecera de la OC
                 }
                 if linea_existente:
                     supabase.table("asn_detalle").update(datos_linea).eq("id", linea_existente["id"]).execute()
@@ -3164,7 +3164,9 @@ class RecepcionModulo:
                     + "REGLAS IMPORTANTES: "
                     "1. Si el documento NO trae un código de lote alfanumérico explícito (ej. solo trae fechas de expiración), pon 'S/L' en 'lote_sugerido' y pon las fechas únicamente en 'vencimiento_sugerido_cl' en formato DD-MM-YYYY. NUNCA pongas una fecha dentro de 'lote_sugerido'. "
                     "2. Si un mismo SKU tiene múltiples filas con distintos lotes o fechas de vencimiento, suma sus cajas/unidades y une todos sus lotes y fechas separados por coma en la misma línea. "
-                    'Formato estricto: {"proveedor": "Nombre proveedor", "orden": "Numero orden", "contenedor_referencia": "Codigo", "fecha_documento": "DD-MM-YYYY", "pallets_esperados": 1, "lineas": [{"sku": "USA603", "descripcion": "Nombre", "cajas_esperadas": 10, "multiplo_empaque": 48, "unidades_esperadas": 480, "lote_sugerido": "S/L", "vencimiento_sugerido_cl": "DD-MM-YYYY"}]}'
+                    "3. En 'nota' copia las observaciones, notas o comentarios escritos en el documento (vacío si no hay). "
+                    "4. En 'referencia_pl' pon el número del packing list o invoice si aparece. "
+                    'Formato estricto: {"proveedor": "Nombre proveedor", "orden": "Numero orden", "contenedor_referencia": "Codigo", "referencia_pl": "Numero PL", "nota": "Observaciones", "fecha_documento": "DD-MM-YYYY", "pallets_esperados": 1, "lineas": [{"sku": "USA603", "descripcion": "Nombre", "cajas_esperadas": 10, "multiplo_empaque": 48, "unidades_esperadas": 480, "lote_sugerido": "S/L", "vencimiento_sugerido_cl": "DD-MM-YYYY"}]}'
                 )
 
                 texto_ia = await asyncio.to_thread(_llamar_gemini_rest_sincrono, ruta_pdf, prompt)
@@ -3214,6 +3216,36 @@ class RecepcionModulo:
                         if v_norm and v_norm.upper() not in ("NONE", "NULL", "S/F", ""):
                             mapa_skus[sku_limpio]["vencimientos"].add(v_norm)
 
+                def _guardar_pl_por_contenedor(numero_oc_pl, asn_pl, mapeo_sku=None):
+                    """Una OC puede traer varios contenedores: cada PL queda guardado por contenedor (script 48)."""
+                    cont_pl = str(datos.get("contenedor_referencia") or (txt_contenedor.value or "")).strip().upper()
+                    if cont_pl in ("NONE", "NULL", "CODIGO"):
+                        cont_pl = ""
+                    if not numero_oc_pl or not cont_pl:
+                        return " (PL no guardado por contenedor: falta el N° de contenedor; escríbalo en «Contenedor / Guía» y vuelva a cargar)"
+                    lineas_pl = []
+                    for sku_ia, info in mapa_skus.items():
+                        clave_n = sku_ia.replace("-", "").replace(" ", "")
+                        lineas_pl.append({
+                            "sku": (mapeo_sku or {}).get(clave_n, sku_ia),
+                            "descripcion": info["descripcion"],
+                            "lote": ", ".join(sorted(info["lotes"])) or "S/L",
+                            "vencimiento": ", ".join(sorted(info["vencimientos"])) or None,
+                            "cajas": info["cajas"], "multiplo": info["multiplo"], "unidades": info["unidades"],
+                        })
+                    try:
+                        supabase.rpc("wms_pl_guardar", {
+                            "p_numero_oc": str(numero_oc_pl), "p_contenedor": cont_pl, "p_lineas": lineas_pl,
+                            "p_referencia": str(datos.get("referencia_pl") or "").strip() or None,
+                            "p_proveedor": str(datos.get("proveedor") or "").strip() or None,
+                            "p_asn_id": asn_pl, "p_nota": str(datos.get("nota") or "").strip() or None,
+                            "p_archivo": nombre_archivo, "p_usuario": str(getattr(self.page, "usuario_actual", "") or "PC"),
+                        }).execute()
+                        return f" PL del contenedor {cont_pl} guardado."
+                    except Exception as ex_pl:
+                        print(f"[PL CONTENEDOR] {ex_pl}")
+                        return " (PL no guardado por contenedor: falta ejecutar 48_oc_por_marca_contenedores.sql)"
+
                 if asn_actual_id is not None and dd_asn.value != "LIBRES":
                     mapa_sku_real_oc = {
                         str(lin.get("sku") or "").strip().upper().replace("-", "").replace(" ", ""): str(lin.get("sku") or "").strip()
@@ -3253,7 +3285,9 @@ class RecepcionModulo:
                     except Exception:
                         pass
 
-                    txt_estado_ia.value = f"Documento procesado: {skus_actualizados} SKUs enriquecidos con Vencimiento."
+                    txt_estado_ia.value = (f"Documento procesado: {skus_actualizados} SKUs enriquecidos con Vencimiento."
+                                           + _guardar_pl_por_contenedor(cabecera_asn_actual.get("numero_oc") or "",
+                                                                        asn_actual_id, mapa_sku_real_oc))
                     notificar(f"¡Éxito! {skus_actualizados} SKUs actualizados en la OC.", "#047857")
                 else:
                     orden_str = str(datos.get("orden") or datetime.now().strftime("%H%M%S")).strip()
@@ -3289,7 +3323,8 @@ class RecepcionModulo:
                     if detalles:
                         supabase.table("asn_detalle").insert(detalles).execute()
 
-                    txt_estado_ia.value = f"OC creada desde PDF: {len(detalles)} SKUs habilitados."
+                    txt_estado_ia.value = (f"OC creada desde PDF: {len(detalles)} SKUs habilitados."
+                                           + _guardar_pl_por_contenedor(orden_str, nuevo_id))
                     notificar(f"OC creada desde PDF con {len(detalles)} SKUs.", "#047857")
                     dd_asn.value = str(nuevo_id)
 

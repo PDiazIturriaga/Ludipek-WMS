@@ -463,6 +463,13 @@ class CargasCamionModulo:
 
     def _abrir_url(self, url):
         import inspect
+        if getattr(self.page, "launch_url", None) is None:
+            # Flet nuevo (sin page.launch_url): la foto se muestra aquí, con enlace para abrirla aparte
+            self._dialogo("Foto de la caja", ft.Column([
+                ft.Image(src=url, width=640, height=480),
+                ft.TextButton("Abrir en pestaña nueva", icon=ft.Icons.OPEN_IN_NEW_ROUNDED, url=url),
+            ], spacing=8, tight=True), [ui_boton("Cerrar", None, self._cerrar_dialogo, "texto")], ancho=660)
+            return
         try:
             if inspect.iscoroutinefunction(self.page.launch_url):
                 async def _ir():
