@@ -460,17 +460,21 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     # ---------------- Detalle ----------------
     cols_d = ["N°", "Despacho", "Destino", "Contenedor", "LPN", "Ubicación origen", "SKU", "Descripción", "Lote",
               "Vencimiento", "Fecha Escaneo", "Cajas", "Displays", "Unid. sueltas", "Unidades", "Unid. / Caja", "Peso neto kg",
-              "Escaneado por"]
-    _titulo(wd, "R", f"LUDIPEK WMS — DETALLE DEL DESPACHO ({cab.get('numero')})",
+              "Peso bruto pallet kg", "m³ pallet", "Escaneado por"]
+    _titulo(wd, "T", f"LUDIPEK WMS — DETALLE DEL DESPACHO ({cab.get('numero')})",
             f"Destino: {destino} | Contenedor: {contenedor} | Referencia: {cab.get('referencia') or '—'}")
     _cabecera_tabla(wd, 4, cols_d)
     f0, i = 5, 0
     for l in sorted(lpns, key=lambda x: str(x.get("escaneado_en") or "")):
-        for c in l.get("contenido") or []:
+        for k_c, c in enumerate(l.get("contenido") or []):
             r = f0 + i
             s = str(c.get("sku")).upper()
             emp = c.get("empaque") or {}
             peso_un = (float(info.get(s, {}).get("peso_kg") or 0) / max(1, _n(info.get(s, {}).get("unidades")))) if info.get(s) else 0
+            peso_linea = float(c["peso_kg"]) if c.get("peso_kg") is not None else round(_n(c.get("unidades")) * peso_un, 2)
+            # peso bruto y m³ son del pallet completo: van solo en su primera línea (así las sumas no se duplican)
+            bruto = float(l.get("peso_bruto_kg") or 0) if k_c == 0 and l.get("peso_bruto_kg") is not None else None
+            m3 = float(l.get("m3")) if k_c == 0 and l.get("m3") is not None else None
             esc = l.get("escaneado_en")
             try:
                 esc = datetime.fromisoformat(str(esc).replace("Z", "+00:00")).astimezone().replace(tzinfo=None) if esc else None
@@ -479,25 +483,29 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
             _fila(wd, r, [i + 1, cab.get("numero"), destino, contenedor, l.get("lpn"), l.get("ubicacion"), s,
                           str(info.get(s, {}).get("descripcion") or "")[:40], c.get("lote"), _fecha(c.get("vencimiento")),
                           esc, _n(emp.get("cajas")), _n(emp.get("displays")), _n(emp.get("sueltas")), _n(c.get("unidades")),
-                          _n(info.get(s, {}).get("multiplo_caja")) or "-", round(_n(c.get("unidades")) * peso_un, 2),
+                          _n(info.get(s, {}).get("multiplo_caja")) or "-", peso_linea, bruto, m3,
                           l.get("escaneado_por")],
-                 {9: FMT_FECHA, 10: FMT_FECHA_HORA, 11: FMT_MILES, 12: FMT_MILES, 13: FMT_MILES, 14: FMT_MILES, 16: "#,##0.0"})
+                 {9: FMT_FECHA, 10: FMT_FECHA_HORA, 11: FMT_MILES, 12: FMT_MILES, 13: FMT_MILES, 14: FMT_MILES, 16: "#,##0.0",
+                  17: "#,##0.0", 18: "0.000"})
             i += 1
     fin = f0 + max(i, 1) - 1
     rt = fin + 1
     _fila(wd, rt, ["", "", "", "", f'=SUMPRODUCT((E{f0}:E{fin}<>"")/COUNTIF(E{f0}:E{fin},E{f0}:E{fin}&""))', "",
                    "TOTAL GENERAL", f'=COUNTA(G{f0}:G{fin})&" líneas"', "", "", "", f"=SUM(L{f0}:L{fin})",
-                   f"=SUM(M{f0}:M{fin})", f"=SUM(N{f0}:N{fin})", f"=SUM(O{f0}:O{fin})", "", f"=SUM(Q{f0}:Q{fin})", ""],
-         {4: FMT_MILES, 11: FMT_MILES, 12: FMT_MILES, 13: FMT_MILES, 14: FMT_MILES, 16: "#,##0.0"}, total=True)
-    _anchos(wd, [5, 18, 10, 16, 16, 14, 15, 34, 12, 13, 17, 9, 10, 11, 12, 11, 12, 16])
+                   f"=SUM(M{f0}:M{fin})", f"=SUM(N{f0}:N{fin})", f"=SUM(O{f0}:O{fin})", "", f"=SUM(Q{f0}:Q{fin})",
+                   f"=SUM(R{f0}:R{fin})", f"=SUM(S{f0}:S{fin})", ""],
+         {4: FMT_MILES, 11: FMT_MILES, 12: FMT_MILES, 13: FMT_MILES, 14: FMT_MILES, 16: "#,##0.0", 17: "#,##0.0", 18: "0.00"},
+         total=True)
+    _anchos(wd, [5, 18, 10, 16, 16, 14, 15, 34, 12, 13, 17, 9, 10, 11, 12, 11, 12, 14, 11, 16])
     wd.freeze_panes = "A5"
-    wd.auto_filter.ref = f"A4:R{fin}"
+    wd.auto_filter.ref = f"A4:T{fin}"
     rng = lambda col: f"'Detalle por LPN'!${col}${f0}:${col}${fin}"
 
     # ---------------- Consolidado ----------------
-    cols_c = ["SKU", "Descripción", "Lote(s)", "Vencimiento(s)", "Pallets", "Cajas", "Displays", "Unid. sueltas",
-              "Total Unidades", "Pedido UN", "Diferencia", "% Avance", "Peso neto kg", "Estatus"]
-    _titulo(wc, "N", f"CONSOLIDADO POR SKU — {doc}", f"Destino {destino} | contra el pedido cargado")
+    cols_c = ["SKU", "Descripción", "Lote(s)", "Vencimiento(s)", "Pallets", "Pallets pedidos", "Cajas", "Displays",
+              "Unid. sueltas", "Total Unidades", "Pedido UN", "Diferencia", "% Avance", "Peso neto kg", "Peso bruto kg", "m³",
+              "Estatus"]
+    _titulo(wc, "Q", f"CONSOLIDADO POR SKU — {doc}", f"Destino {destino} | contra el pedido cargado")
     _cabecera_tabla(wc, 4, cols_c)
     c0 = 5
     for j, s in enumerate(skus):
@@ -514,23 +522,29 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
             est = f"SOBRAN {_n(s.get('sobra')):,}".replace(",", ".")
         else:
             est = "COMPLETO"
+        pp = s.get("pedido_pallets")
+        if pp is not None and s.get("en_pedido") and _n(s.get("pallets")) != round(float(pp)):
+            est += f" · {_n(s.get('pallets'))} de {float(pp):g} pallets"
         _fila(wc, r, [s.get("sku"), str(s.get("descripcion") or "")[:40], ", ".join(str(x.get("lote")) for x in lotes) or "—",
                       vencs[0] if len(vencs) == 1 else (", ".join(vencs) or "—"), _n(s.get("pallets")),
+                      float(pp) if pp is not None else "-",
                       f"=SUMIF({rng('G')},A{r},{rng('L')})", f"=SUMIF({rng('G')},A{r},{rng('M')})",
                       f"=SUMIF({rng('G')},A{r},{rng('N')})", f"=SUMIF({rng('G')},A{r},{rng('O')})",
                       _n(s.get("pedido_unidades")) if s.get("pedido_unidades") is not None else "-",
-                      f"=IF(ISNUMBER(J{r}),I{r}-J{r},\"-\")", f"=IF(AND(ISNUMBER(J{r}),J{r}>0),I{r}/J{r},\"-\")",
-                      f"=SUMIF({rng('G')},A{r},{rng('Q')})", est],
-             {4: FMT_MILES, 5: FMT_MILES, 6: FMT_MILES, 7: FMT_MILES, 8: FMT_MILES, 9: FMT_MILES, 10: '+#,##0;-#,##0;0',
-              11: FMT_PCT, 12: "#,##0.0"})
+                      f"=IF(ISNUMBER(K{r}),J{r}-K{r},\"-\")", f"=IF(AND(ISNUMBER(K{r}),K{r}>0),J{r}/K{r},\"-\")",
+                      f"=SUMIF({rng('G')},A{r},{rng('Q')})",
+                      float(s.get("peso_bruto_kg") or 0), float(s.get("m3")) if s.get("m3") is not None else "-", est],
+             {4: FMT_MILES, 5: "#,##0.##", 6: FMT_MILES, 7: FMT_MILES, 8: FMT_MILES, 9: FMT_MILES, 10: FMT_MILES,
+              11: '+#,##0;-#,##0;0', 12: FMT_PCT, 13: "#,##0.0", 14: "#,##0.0", 15: "0.00"})
     cfin = c0 + max(len(skus), 1) - 1
     ct = cfin + 1
     _fila(wc, ct, ["TOTAL", f'=COUNTA(A{c0}:A{cfin})&" SKUs"', "", "", f"=SUM(E{c0}:E{cfin})", f"=SUM(F{c0}:F{cfin})",
                    f"=SUM(G{c0}:G{cfin})", f"=SUM(H{c0}:H{cfin})", f"=SUM(I{c0}:I{cfin})", f"=SUM(J{c0}:J{cfin})",
-                   f"=I{ct}-J{ct}", f"=IF(J{ct}>0,I{ct}/J{ct},0)", f"=SUM(M{c0}:M{cfin})", ""],
-         {4: FMT_MILES, 5: FMT_MILES, 6: FMT_MILES, 7: FMT_MILES, 8: FMT_MILES, 9: FMT_MILES, 10: '+#,##0;-#,##0;0',
-          11: FMT_PCT, 12: "#,##0.0"}, total=True)
-    _anchos(wc, [15, 34, 20, 16, 9, 11, 10, 11, 14, 12, 12, 10, 13, 18])
+                   f"=SUM(K{c0}:K{cfin})", f"=J{ct}-K{ct}", f"=IF(K{ct}>0,J{ct}/K{ct},0)", f"=SUM(N{c0}:N{cfin})",
+                   f"=SUM(O{c0}:O{cfin})", f"=SUM(P{c0}:P{cfin})", ""],
+         {4: FMT_MILES, 5: "#,##0.##", 6: FMT_MILES, 7: FMT_MILES, 8: FMT_MILES, 9: FMT_MILES, 10: FMT_MILES,
+          11: '+#,##0;-#,##0;0', 12: FMT_PCT, 13: "#,##0.0", 14: "#,##0.0", 15: "0.00"}, total=True)
+    _anchos(wc, [15, 34, 18, 16, 9, 10, 10, 10, 11, 13, 12, 12, 10, 12, 12, 9, 26])
     wc.freeze_panes = "A5"
 
     # ---------------- Resumen ----------------
@@ -539,14 +553,24 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     _kpis(ws, 4, [("TOTAL UNIDADES DESPACHADAS", f"='Detalle por LPN'!O{rt}", FMT_MILES),
                   ("TOTAL CAJAS", f"='Detalle por LPN'!L{rt}", FMT_MILES),
                   ("PALLETS (LPN)", len(lpns), FMT_MILES),
-                  ("AVANCE SOBRE PEDIDO", f"='Consolidado por SKU'!L{ct}", FMT_PCT)])
-    _seccion(ws, 7, "H", "1. DATOS GENERALES DEL DESPACHO")
-    fila = _datos_generales(ws, 8, [
+                  ("AVANCE SOBRE PEDIDO", f"='Consolidado por SKU'!M{ct}", FMT_PCT)])
+    _kpis(ws, 6, [("PESO NETO (KG)", f"='Detalle por LPN'!Q{rt}", "#,##0"),
+                  ("PESO BRUTO (KG)", f"='Detalle por LPN'!R{rt}", "#,##0"),
+                  ("VOLUMEN (M³)", f"='Detalle por LPN'!S{rt}", "#,##0.00"),
+                  ("PALLETS PEDIDOS", float(tot.get("pedido_pallets")) if tot.get("pedido_pallets") is not None else "—", "#,##0.##")])
+    medidas = (f"{float(tot['pallet_largo_m']):g} x {float(tot['pallet_ancho_m']):g} x {float(tot['pallet_alto_m']):g} m".replace(".", ",")
+               if tot.get("pallet_alto_m") and tot.get("pallet_largo_m") and tot.get("pallet_ancho_m") else "Sin alto informado")
+    _seccion(ws, 9, "H", "1. DATOS GENERALES DEL DESPACHO")
+    fila = _datos_generales(ws, 10, [
         ("Despacho:", cab.get("numero")), ("Destino:", destino),
         ("Referencia / pedido:", cab.get("referencia")), ("Contenedor:", contenedor),
         ("Estado:", cab.get("estado")), ("Stock descontado:", "Sí" if cab.get("stock_descontado") else "No"),
         ("Pedido (unidades):", _n(tot.get("pedido_unidades"))), ("Pallets pedidos:", tot.get("pedido_pallets") or "—"),
-        ("Displays:", _n(tot.get("displays"))), ("Peso neto aprox. (kg):", float(tot.get("peso_kg") or 0)),
+        ("Displays:", _n(tot.get("displays"))), ("Medidas pallet (L x A x H):", medidas),
+        ("Peso neto (kg):", f"{float(tot.get('peso_kg') or 0):,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")),
+        ("Peso bruto (kg):", f"{float(tot.get('peso_bruto_kg') or 0):,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+         + f" (tara {float(tot.get('tara_pallet_kg') or 0):g} kg/pallet)"),
+        ("Volumen (m³):", f"{float(tot['m3']):.2f}".replace(".", ",") if tot.get("m3") is not None else "Falta el alto de los pallets"),
         ("Creado:", f"{_txt_fecha(cab.get('creado_en'))} por {cab.get('creado_por') or ''}"),
         ("Cerrado:", f"{_txt_fecha(cab.get('cerrado_en'))} por {cab.get('cerrado_por') or ''}" if cab.get("cerrado_en") else "—"),
     ])
@@ -555,19 +579,19 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     fila += 1
     _seccion(ws, fila, "H", "2. RESUMEN POR PALLET (LPN)")
     fila += 1
-    _cabecera_tabla(ws, fila, ["LPN", "Ubicación origen", "SKU(s)", "Lote(s)", "Líneas", "Cajas", "Unidades", "% Unidades"])
+    _cabecera_tabla(ws, fila, ["LPN", "Ubicación origen", "SKU(s)", "Lote(s)", "Cajas", "Unidades", "Peso bruto kg", "m³"])
     fila += 1
     p0 = fila
     for l in sorted(lpns, key=lambda x: str(x.get("escaneado_en") or "")) or [{}]:
         cont = l.get("contenido") or []
         _fila(ws, fila, [l.get("lpn") or "—", l.get("ubicacion") or "", ", ".join(sorted({str(c.get("sku")) for c in cont}))[:40],
-                         ", ".join(sorted({str(c.get("lote")) for c in cont}))[:30], f"=COUNTIF({rng('E')},A{fila})",
+                         ", ".join(sorted({str(c.get("lote")) for c in cont}))[:30],
                          f"=SUMIF({rng('E')},A{fila},{rng('L')})", f"=SUMIF({rng('E')},A{fila},{rng('O')})",
-                         f"=IF($G${p0 + max(len(lpns), 1)}>0,G{fila}/$G${p0 + max(len(lpns), 1)},0)"],
-             {4: FMT_MILES, 5: FMT_MILES, 6: FMT_MILES, 7: FMT_PCT})
+                         f"=SUMIF({rng('E')},A{fila},{rng('R')})", f"=SUMIF({rng('E')},A{fila},{rng('S')})"],
+             {4: FMT_MILES, 5: FMT_MILES, 6: "#,##0.0", 7: "0.000"})
         fila += 1
     _fila(ws, fila, ["TOTAL", "", "", "", f"=SUM(E{p0}:E{fila - 1})", f"=SUM(F{p0}:F{fila - 1})", f"=SUM(G{p0}:G{fila - 1})",
-                     f"=SUM(H{p0}:H{fila - 1})"], {4: FMT_MILES, 5: FMT_MILES, 6: FMT_MILES, 7: FMT_PCT}, total=True)
+                     f"=SUM(H{p0}:H{fila - 1})"], {4: FMT_MILES, 5: FMT_MILES, 6: "#,##0.0", 7: "0.00"}, total=True)
 
     # 3. por vencimiento
     fila += 2
@@ -600,7 +624,7 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
 
     fila += 2
     _seccion(ws, fila, "H", "4. UNIDADES DESPACHADAS POR SKU CONTRA EL PEDIDO")
-    _grafico_sku(ws, f"A{fila + 1}", wc, 1, 9, c0, cfin, "Despachado vs pedido por SKU", col_val2=10)
+    _grafico_sku(ws, f"A{fila + 1}", wc, 1, 10, c0, cfin, "Despachado vs pedido por SKU", col_val2=11)
     _anchos(ws, [18, 26, 30, 30, 10, 13, 16, 13])
     wb.save(ruta)
     return ruta

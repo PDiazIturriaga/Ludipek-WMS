@@ -167,14 +167,14 @@ class CargasCamionModulo:
         self.chip_carga = ft.Container()
         self.lbl_carga_meta = ft.Text("", size=12, color=UI["texto_2"])
         self.barra_carga = ft.ProgressBar(value=0, color=UI["exito"], bgcolor=UI["borde"], height=8)
-        self.txt_agregar = _campo("Agregar OT u OV", 220, on_submit=lambda e: self._agregar_orden())
+        self.txt_agregar = _campo("Agregar OT, OV o despacho EXP-…", 250, on_submit=lambda e: self._agregar_orden())
         self.txt_scan = _campo("Escanear / escribir LPN o bulto", 260, on_submit=lambda e: self._marcar_cargado())
         self.fila_acciones_carga = ft.Row([], spacing=8, wrap=True)
         self.tabla_items = ft.DataTable(
             heading_row_height=38, data_row_min_height=40, data_row_max_height=52,
             columns=[ft.DataColumn(ft.Text(t, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"]), numeric=num)
                      for t, num in [("Orden", False), ("Pallet / bulto", False), ("Código", False), ("Cajas", True),
-                                    ("UN", True), ("Estado", False), ("Quién / cuándo", False), ("Motivo", False), ("", False)]],
+                                    ("UN · kg · m³", True), ("Estado", False), ("Quién / cuándo", False), ("Motivo", False), ("", False)]],
             rows=[],
         )
         self.sub_carga = ft.Column([
@@ -684,6 +684,8 @@ class CargasCamionModulo:
                               f"Chofer {c.get('chofer')}" if c.get("chofer") else "",
                               str(c.get("destino") or ""),
                               f"{hechos} de {total} cargados",
+                              (f"Peso bruto {_miles(round(float(c.get('peso_kg'))))} kg" if c.get("peso_kg") else ""),
+                              (f"{float(c.get('m3')):.2f} m³".replace(".", ",") if c.get("m3") else ""),
                               f"{_n(c.get('quitados'))} para otro camión" if _n(c.get("quitados")) else "",
                               f"Creada {_fh(c.get('creado_en'))} · {c.get('creado_por') or ''}",
                               f"Cerrada {_fh(c.get('cerrado_en'))} · {c.get('cerrado_por') or ''}" if c.get("cerrado_en") else "",
@@ -725,7 +727,10 @@ class CargasCamionModulo:
                                         size=12.5, color=UI["texto"])),
                     ft.DataCell(ft.Text(str(i.get("codigo") or ""), size=12, color=UI["texto_2"])),
                     ft.DataCell(ft.Text(_miles(i.get("cajas")) if i.get("cajas") else "—", size=12, color=UI["texto_2"])),
-                    ft.DataCell(ft.Text(_miles(i.get("unidades")) if i.get("unidades") else "—", size=12, color=UI["texto_2"])),
+                    ft.DataCell(ft.Text((_miles(i.get("unidades")) if i.get("unidades") else "—")
+                                        + (f"  ·  {_miles(round(float(i.get('peso_kg'))))} kg" if i.get("peso_kg") else "")
+                                        + (f"  ·  {float(i.get('m3')):.2f} m³".replace(".", ",") if i.get("m3") else ""),
+                                        size=12, color=UI["texto_2"])),
                     ft.DataCell(_chip(NOMBRE_ITEM.get(ie, ie), color)),
                     ft.DataCell(ft.Text(f"{i.get('cargado_por') or ''} {_fh(i.get('cargado_en')) if i.get('cargado_en') else ''}".strip() or "—",
                                         size=11.5, color=UI["texto_3"])),
@@ -738,7 +743,7 @@ class CargasCamionModulo:
     def _agregar_orden(self):
         num = (self.txt_agregar.value or "").strip()
         if not num or not self.carga:
-            self._notificar("Escriba el número de la OT u OV.", "#D97706")
+            self._notificar("Escriba el número de la OT, OV o despacho EXP-….", "#D97706")
             return
         self._accion_carga("wms_carga_agregar_orden", {"p_carga_id": int(self.carga.get("id")), "p_numero": num},
                            f"{num} agregada a la carga.")
@@ -793,7 +798,7 @@ class CargasCamionModulo:
 
         self._dialogo(f"Cerrar carga {c.get('numero')}", ft.Column([
             ft.Text(f"Patente {c.get('patente')} · {_n(c.get('cargados'))} de {_n(c.get('total'))} cargados.", size=12.5, color=UI["texto"]),
-            ft.Text("Las OT pasan a EN TRÁNSITO a Concepción. Las OV quedan registradas (siguen su facturación y ruteo).",
+            ft.Text("Las OT pasan a EN TRÁNSITO a Concepción. Las OV y los despachos de exportación quedan registrados.",
                     size=12, color=UI["texto_2"]),
             *([ft.Text(f"Faltan {pend} por subir.", size=12.5, weight=ft.FontWeight.W_600, color=UI["alerta"]), txt] if pend else []),
         ], spacing=8, tight=True), [ui_boton("Cancelar", None, self._cerrar_dialogo, "texto"),
@@ -860,7 +865,10 @@ class CargasCamionModulo:
                     "Carga": c.get("numero"), "Patente": c.get("patente"), "Contenedor": c.get("contenedor"),
                     "Chofer": c.get("chofer"), "Destino": c.get("destino"), "Orden": o.get("numero_ov"), "Tipo": o.get("tipo"),
                     "Cliente": o.get("cliente"), "Pallet / bulto": f"{i.get('n')}/{i.get('total')}", "Código": i.get("codigo"),
-                    "Cajas": i.get("cajas"), "Unidades": i.get("unidades"), "Estado": NOMBRE_ITEM.get(i.get("estado"), i.get("estado")),
+                    "Cajas": i.get("cajas"), "Unidades": i.get("unidades"),
+                    "Peso bruto kg": float(i["peso_kg"]) if i.get("peso_kg") is not None else None,
+                    "m³": float(i["m3"]) if i.get("m3") is not None else None,
+                    "Estado": NOMBRE_ITEM.get(i.get("estado"), i.get("estado")),
                     "Cargado por": i.get("cargado_por"), "Fecha": _fh(i.get("cargado_en")) if i.get("cargado_en") else "",
                     "Motivo": i.get("motivo"),
                 })

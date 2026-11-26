@@ -20,6 +20,25 @@ COLOR_ESTADO = {"ABIERTO": "#38BDF8", "CERRADO": "#10B981", "ANULADO": "#64748B"
 COLUMNAS_UNIDADES = ["units", "unidades", "aplicado (un)", "solicitado (un)", "cantidad", "un"]
 COLUMNAS_PALLETS = ["pallets", "pallets a enviar", "pallet"]
 COLUMNAS_DESC = ["descripcion", "descripción", "description"]
+COLUMNAS_KG_UN = ["kg/un", "kg / un", "kg por unidad", "peso unitario (kg)", "kg un"]
+COLUMNAS_UN_PALLET = ["unidades/pallet", "unidades / pallet", "unidades por pallet", "un/pallet"]
+
+
+def _num(v):
+    """Número desde Excel: acepta 1.200 / 1,5 / espacios duros. None si no es número."""
+    if v is None or (not isinstance(v, str) and pd.isna(v)):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = str(v).replace("\xa0", "").replace("$", "").strip()
+    if not t or t == "-":
+        return None
+    if "," in t:
+        t = t.replace(".", "").replace(",", ".")
+    try:
+        return float(t)
+    except ValueError:
+        return None
 
 
 def _n(v) -> int:
@@ -72,6 +91,10 @@ def _t(v, size=12, color=None, peso=None):
     return ft.Text("" if v is None else str(v), size=size, color=color or UI["texto"], weight=peso)
 
 
+def _kg(v) -> str:
+    return f"{float(v or 0):,.0f}".replace(",", ".")
+
+
 def _empaque_txt(emp: dict) -> str:
     emp = emp or {}
     partes = [f"{_miles(emp.get('cajas'))} cj"] if _n(emp.get("cajas")) else []
@@ -99,6 +122,8 @@ def leer_pedido_excel(ruta: str) -> list:
                 continue
             c_pal = next((cab.index(c) for c in COLUMNAS_PALLETS if c in cab), None)
             c_desc = next((cab.index(c) for c in COLUMNAS_DESC if c in cab), None)
+            c_kg = next((cab.index(c) for c in COLUMNAS_KG_UN if c in cab), None)
+            c_upp = next((cab.index(c) for c in COLUMNAS_UN_PALLET if c in cab), None)
             lineas = []
             for _, fila in df.iloc[i + 1:].iterrows():
                 sku = fila.iloc[c_sku]
@@ -116,9 +141,16 @@ def leer_pedido_excel(ruta: str) -> list:
                     pal = float(pal) if pal is not None and pd.notna(pal) else None
                 except (TypeError, ValueError):
                     pal = None
+                kg_un = _num(fila.iloc[c_kg]) if c_kg is not None else None
+                upp = _num(fila.iloc[c_upp]) if c_upp is not None else None
+                un_archivo = int(round(un))
+                # Si el Excel trae Pallets y Unidades/pallet, las unidades deben ser Pallets x Unidades/pallet:
+                # cuando no cuadran se corrigen (los pallets son el dato confiable del pedido)
+                un_final = int(round(pal * upp)) if pal and upp and abs(pal * upp - un) > 0.5 else un_archivo
                 lineas.append({"sku": str(sku).strip().upper(),
                                "descripcion": str(fila.iloc[c_desc]).strip() if c_desc is not None and pd.notna(fila.iloc[c_desc]) else None,
-                               "unidades": int(round(un)), "pallets": pal})
+                               "unidades": un_final, "pallets": pal, "kg_un": kg_un, "unidades_pallet": upp,
+                               "unidades_archivo": un_archivo if un_final != un_archivo else None})
             if lineas:
                 return lineas
     return []
@@ -173,7 +205,7 @@ class DespachosModulo:
         self.tabla_lpn = ft.DataTable(
             heading_row_height=38, data_row_min_height=40, data_row_max_height=70, column_spacing=16,
             columns=[_col("LPN"), _col("Ubicación"), _col("Contenido (SKU · lote · venc. · empaque)"), _col("UN", True),
-                     _col("Escaneado"), _col("")],
+                     _col("Peso bruto kg", True), _col("Alto · m³"), _col("Escaneado"), _col("")],
             rows=[])
         self.sub_detalle = ft.Column([
             ft.Container(
@@ -333,9 +365,15 @@ class DespachosModulo:
                                  f"{_miles(tot.get('displays'))} displays · {_miles(un)} UN"
                                  + (f" de {_miles(ped)} pedidas ({un * 100 // ped}%)" if ped else " (sin pedido cargado)")
                                  + (f" · pallets pedidos {float(tot.get('pedido_pallets')):g}" if tot.get("pedido_pallets") else "")
-                                 + " · peso neto aprox. " + f"{float(tot.get('peso_kg') or 0):,.0f}".replace(",", ".") + " kg")
+                                 + f" · peso neto {_kg(tot.get('peso_kg'))} kg · peso bruto {_kg(tot.get('peso_bruto_kg'))} kg"
+                                 + (f" · {float(tot.get('m3')):.2f} m³".replace(".", ",") if tot.get("m3") is not None and not _n(tot.get("pallets_sin_alto"))
+                                    else " · m³: falta el alto de los pallets (Medidas y peso)")
+                                 + (f" · {tot.get('skus_sin_peso')} SKU sin peso (cargue el pedido con Kg/un o complete la maestra)"
+                                    if _n(tot.get("skus_sin_peso")) else ""))
 
-        acciones = [ui_boton("Resumen Excel", ft.Icons.TABLE_VIEW_ROUNDED, lambda e: self._exportar(), "secundario",
+        acciones = [ui_boton("Medidas y peso", ft.Icons.STRAIGHTEN_ROUNDED, lambda e: self._dialogo_medidas(), "secundario",
+                             tooltip="Medidas del pallet (largo x ancho x alto) y tara, para el peso bruto y los m³"),
+                    ui_boton("Resumen Excel", ft.Icons.TABLE_VIEW_ROUNDED, lambda e: self._exportar(), "secundario",
                              tooltip="Resumen ejecutivo: por pallet, por vencimiento y por SKU contra el pedido")]
         if abierto:
             acciones = [ui_boton("Cargar pedido (Excel)", ft.Icons.UPLOAD_FILE_ROUNDED, self._elegir_excel, "secundario"),
@@ -389,15 +427,92 @@ class DespachosModulo:
                 ft.DataCell(_t(l.get("ubicacion") or "—", 12)),
                 ft.DataCell(_t(cont, 11.5)),
                 ft.DataCell(_t(_miles(l.get("unidades")), 12)),
+                ft.DataCell(_t(_kg(l.get("peso_bruto_kg")) + (" (balanza)" if l.get("peso_balanza") else ""), 12,
+                               UI["exito"] if l.get("peso_balanza") else None)),
+                ft.DataCell(_t(f"{float(l.get('alto_m')):.2f} m · {float(l.get('m3') or 0):.2f} m³".replace(".", ",") if l.get("alto_m") else "Falta alto",
+                               12, None if l.get("alto_m") else UI["alerta"])),
                 ft.DataCell(_t(f"{_fh(l.get('escaneado_en'))} · {l.get('escaneado_por') or ''}", 11, UI["texto_2"])),
-                ft.DataCell(ft.IconButton(icon=ft.Icons.DELETE_OUTLINE_ROUNDED, icon_color=UI["peligro"], icon_size=18,
-                                          tooltip="Quitar del despacho", disabled=not abierto,
-                                          on_click=lambda e, x=l.get("lpn"): self._quitar(x))),
+                ft.DataCell(ft.Row([
+                    ft.IconButton(icon=ft.Icons.STRAIGHTEN_ROUNDED, icon_color=UI["acento"], icon_size=18,
+                                  tooltip="Alto / peso de balanza de este pallet", disabled=cab.get("estado") == "ANULADO",
+                                  on_click=lambda e, x=l: self._dialogo_medida_lpn(x)),
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE_ROUNDED, icon_color=UI["peligro"], icon_size=18,
+                                  tooltip="Quitar del despacho", disabled=not abierto,
+                                  on_click=lambda e, x=l.get("lpn"): self._quitar(x)),
+                ], spacing=0, tight=True)),
             ]))
         self.tabla_lpn.rows = rows_l
 
     def _id(self):
         return int(((self.d or {}).get("despacho") or {}).get("id"))
+
+    @staticmethod
+    def _dec(texto):
+        t = str(texto or "").strip().replace(",", ".")
+        if not t:
+            return None
+        try:
+            return float(t)
+        except ValueError:
+            raise ValueError(f"'{texto}' no es un número")
+
+    def _dialogo_medidas(self):
+        cab = (self.d or {}).get("despacho") or {}
+        f = lambda v: "" if v is None else f"{float(v):g}".replace(".", ",")
+        t_largo = _campo("Largo (m)", 120, value=f(cab.get("pallet_largo_m") or 1.2))
+        t_ancho = _campo("Ancho (m)", 120, value=f(cab.get("pallet_ancho_m") or 0.8))
+        t_alto = _campo("Alto total (m)", 160, value=f(cab.get("pallet_alto_m")), hint_text="piso a tope, ej. 1,60")
+        t_tara = _campo("Tara pallet (kg)", 140, value=f(cab.get("tara_pallet_kg") if cab.get("tara_pallet_kg") is not None else 25))
+
+        def guardar(e=None):
+            try:
+                vals = [self._dec(x.value) for x in (t_largo, t_ancho, t_alto, t_tara)]
+            except ValueError as ex:
+                self._notificar(str(ex), "#B91C1C")
+                return
+            if not vals[2]:
+                self._notificar("Indique el alto del pallet con carga (en metros).", "#D97706")
+                return
+            self._cerrar_dialogo()
+            self._accion("wms_despacho_medidas", {"p_largo": vals[0], "p_ancho": vals[1], "p_alto": vals[2], "p_tara": vals[3]},
+                         "Medidas guardadas: peso bruto y m³ recalculados.")
+
+        self._dialogo("Medidas y peso de los pallets", ft.Column([
+            _t("Pallet europeo: 1,20 x 0,80 m. Mida el alto desde el piso hasta lo más alto de la carga "
+               "(incluye los 14,4 cm del pallet de madera). La tara es el peso del pallet vacío (EPAL ≈ 25 kg).",
+               12, UI["texto_2"]),
+            _t("Se aplican a todos los pallets del despacho. Si un pallet se midió o se pesó en balanza, use el ícono "
+               "de regla en su fila.", 12, UI["texto_2"]),
+            ft.Row([t_largo, t_ancho, t_alto], spacing=10, wrap=True),
+            t_tara,
+            _t("Peso neto = unidades x kg por unidad (maestra o Kg/un del pedido). Peso bruto = neto + tara. "
+               "m³ = largo x ancho x alto.", 11.5, UI["texto_3"]),
+        ], spacing=10, tight=True), [ui_boton("Cancelar", None, self._cerrar_dialogo, "texto"),
+                                     ui_boton("Guardar", ft.Icons.CHECK_ROUNDED, guardar)], ancho=520)
+
+    def _dialogo_medida_lpn(self, l: dict):
+        t_alto = _campo("Alto total de este pallet (m)", 200, value=f"{float(l['alto_m']):g}".replace(".", ",") if l.get("alto_propio") else "",
+                        hint_text="vacío = alto general")
+        t_peso = _campo("Peso de balanza (kg)", 200,
+                        value=f"{float(l['peso_bruto_kg']):g}".replace(".", ",") if l.get("peso_balanza") else "",
+                        hint_text="vacío = neto + tara")
+
+        def guardar(e=None):
+            try:
+                alto, peso = self._dec(t_alto.value), self._dec(t_peso.value)
+            except ValueError as ex:
+                self._notificar(str(ex), "#B91C1C")
+                return
+            self._cerrar_dialogo()
+            self._accion("wms_despacho_lpn_medida", {"p_lpn": l.get("lpn"), "p_alto": alto, "p_peso_bruto": peso},
+                         f"Medidas de {l.get('lpn')} guardadas.")
+
+        self._dialogo(f"Pallet {l.get('lpn')}", ft.Column([
+            _t(f"{_miles(l.get('unidades'))} UN · peso neto {_kg(l.get('peso_neto_kg'))} kg", 12.5),
+            ft.Row([t_alto, t_peso], spacing=10, wrap=True),
+            _t("Deje en blanco para usar las medidas generales del despacho.", 11.5, UI["texto_3"]),
+        ], spacing=10, tight=True), [ui_boton("Cancelar", None, self._cerrar_dialogo, "texto"),
+                                     ui_boton("Guardar", ft.Icons.CHECK_ROUNDED, guardar)], ancho=480)
 
     def _accion(self, funcion: str, params: dict, ok: str = None):
         try:
@@ -583,19 +698,28 @@ class DespachosModulo:
             return
         total = sum(l["unidades"] for l in lineas)
         pallets = sum(l["pallets"] or 0 for l in lineas)
+        corregidas = [l for l in lineas if l.get("unidades_archivo")]
         tabla = ft.DataTable(
             heading_row_height=34, data_row_min_height=30, data_row_max_height=36,
-            columns=[_col("SKU"), _col("Descripción"), _col("Unidades", True), _col("Pallets", True)],
-            rows=[ft.DataRow(cells=[ft.DataCell(_t(l["sku"], 12)), ft.DataCell(_t(str(l["descripcion"] or "")[:36], 11.5, UI["texto_2"])),
-                                    ft.DataCell(_t(_miles(l["unidades"]), 12)),
-                                    ft.DataCell(_t(f"{l['pallets']:g}" if l["pallets"] else "—", 12))]) for l in lineas])
+            columns=[_col("SKU"), _col("Descripción"), _col("Unidades", True), _col("Pallets", True), _col("Kg/un", True)],
+            rows=[ft.DataRow(cells=[
+                ft.DataCell(_t(l["sku"], 12)), ft.DataCell(_t(str(l["descripcion"] or "")[:34], 11.5, UI["texto_2"])),
+                ft.DataCell(_t(_miles(l["unidades"]) + (f"  (Excel: {_miles(l['unidades_archivo'])})" if l.get("unidades_archivo") else ""),
+                               12, UI["alerta"] if l.get("unidades_archivo") else None)),
+                ft.DataCell(_t(f"{l['pallets']:g}" if l["pallets"] else "—", 12)),
+                ft.DataCell(_t(f"{l['kg_un']:g}" if l.get("kg_un") else "—", 12))]) for l in lineas])
 
         def confirmar(e=None):
             self._cerrar_dialogo()
-            self._accion("wms_despacho_pedido_cargar", {"p_lineas": lineas}, f"Pedido cargado: {len(lineas)} SKU.")
+            self._accion("wms_despacho_pedido_cargar",
+                         {"p_lineas": [{k: v for k, v in l.items() if k != "unidades_archivo"} for l in lineas]},
+                         f"Pedido cargado: {len(lineas)} SKU.")
 
         self._dialogo("Pedido leído del Excel", ft.Column([
             _t(f"{len(lineas)} SKU · {_miles(total)} unidades" + (f" · {pallets:g} pallets" if pallets else ""), 13, peso=ft.FontWeight.W_600),
+            *([_t(f"Se corrigieron las unidades de {len(corregidas)} SKU: la columna de unidades no cuadraba con "
+                  "Pallets x Unidades/pallet (se usa esa cuenta; en amarillo lo que decía el Excel).", 11.5, UI["alerta"])]
+              if corregidas else []),
             ft.Container(height=320, content=ft.Column([tabla], scroll=ft.ScrollMode.AUTO)),
             _t("Reemplaza el pedido que tenía el despacho. Los LPN escaneados no cambian.", 11.5, UI["texto_3"]),
         ], spacing=8, tight=True), [ui_boton("Cancelar", None, self._cerrar_dialogo, "texto"),
