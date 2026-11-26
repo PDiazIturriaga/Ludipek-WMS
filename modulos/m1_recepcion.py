@@ -2529,10 +2529,16 @@ class RecepcionModulo:
             if len(con_diferencia) > 15:
                 lineas_dif.append(f"  ... y {len(con_diferencia) - 15} SKU más (ver acta adjunta)")
 
-            asunto_default = f"Acta de recepción OC {cod_po_str} - {prov_str}"
+            from servicios.reporte_ejecutivo import asunto_recepcion, extraer_po
+            po_str = extraer_po(cabecera_asn_actual.get("codigo_asn"), cabecera_asn_actual.get("nota"))
+            oc_po_str = f"{cod_po_str} ({po_str})" if po_str and po_str.upper() != str(cod_po_str).upper() else str(cod_po_str)
+            pendiente_total = any(int(f.get("unidades_recibidas") or 0) < int(f.get("unidades_esperadas") or 0)
+                                  for f in filas_conciliacion_export)
+            asunto_default = asunto_recepcion("parcial" if pendiente_total else "total", cod_po_str,
+                                              cabecera_asn_actual.get("codigo_asn"), cont_ref, prov_str)
             cuerpo_default = (
                 f"Estimados:\n\n"
-                f"Adjuntamos el acta de recepción de la OC {cod_po_str} ({prov_str}).\n"
+                f"Adjuntamos el acta de recepción {'parcial ' if pendiente_total else ''}de la OC {oc_po_str} - {prov_str}.\n"
                 + (f"Contenedor / guía: {cont_ref}\n" if cont_ref else "")
                 + f"\nUnidades OC: {tot_esp} | Recibidas: {tot_rec} | Diferencia: {tot_rec - tot_esp:+d}\n"
                 + (("\nSKU con diferencia:\n" + "\n".join(lineas_dif) + "\n") if lineas_dif else "\nSin diferencias por SKU.\n")
@@ -2574,10 +2580,14 @@ class RecepcionModulo:
                     fecha_c = datetime.fromisoformat(str(datos_c.get("fecha_hasta")).replace("Z", "+00:00")).strftime("%d-%m-%Y")
                 except Exception:
                     fecha_c = datetime.now().strftime("%d-%m-%Y")
-                asunto_c = f"Recepción parcial OC {cod_po_str} · contenedor {cont_c} - {prov_str}"
+                notas_c = " ".join(str(x or "") for x in (datos_c.get("codigo_asn"), datos_c.get("nota_oc"),
+                                                          cabecera_asn_actual.get("codigo_asn")))
+                asunto_c = asunto_recepcion("parcial", cod_po_str, notas_c, cont_c, prov_str)
+                po_c = extraer_po(notas_c)
+                oc_po_c = f"{cod_po_str} ({po_c})" if po_c and po_c.upper() != str(cod_po_str).upper() else str(cod_po_str)
                 cuerpo_c = (
                     "Estimados:\n\n"
-                    f"Informamos la recepción del contenedor / guía {cont_c} de la OC {cod_po_str} ({prov_str}), "
+                    f"Informamos la recepción del contenedor / guía {cont_c} de la OC {oc_po_c} - {prov_str}, "
                     f"recibido el {fecha_c}.\n\n"
                     "Ingresado en este contenedor:\n"
                     + "\n".join(f"  - {k}  {str(a['desc'])[:40]}: {n_f(a['unidades'])} UN ({n_f(a['cajas'])} cajas)"
@@ -2841,7 +2851,7 @@ class RecepcionModulo:
                 bgcolor=UI["card"],
                 title=ft.Row([
                     ft.Icon(ft.Icons.EMAIL_OUTLINED, color=ACCENT_CYAN, size=22),
-                    ft.Text(f"Enviar acta {'parcial ' if estado_mail['parcial'] else ''}· OC {cod_po_str}", size=16,
+                    ft.Text(f"Enviar acta {'parcial ' if estado_mail['parcial'] else ''}· OC {oc_po_str}", size=16,
                             weight=ft.FontWeight.W_600, color=TEXT_WHITE),
                 ], spacing=8),
                 content=ft.Container(

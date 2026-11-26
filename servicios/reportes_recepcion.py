@@ -57,7 +57,9 @@ def armar_correo(rep: dict):
     cont = d.get("contenedor") or rep.get("contenedor") or "SIN CONTENEDOR"
     oc = d.get("numero_oc")
     estado_ns = {"SI": "Sí", "PARCIAL": "Parcial", "NO": "No", "SIN_DATO": "Sin dato", "NO_APLICA": "No aplica (sin OC)"}
-    asunto = f"Recepción física · {cont} · " + (f"OC {oc}" if oc else "SIN OC") + (f" · {d.get('proveedor')}" if d.get("proveedor") else "")
+    from servicios.reporte_ejecutivo import asunto_recepcion
+    asunto = asunto_recepcion("física", oc, " ".join(str(d.get(k) or "") for k in ("codigo_asn", "nota", "nota_oc")),
+                              cont, d.get("proveedor"))
     lineas = d.get("lineas") or []
     cruce = d.get("cruce_oc") or []
     dif = [c for c in cruce if int(c.get("recibido") or 0) != int(c.get("esperado") or 0)]
@@ -144,6 +146,15 @@ def procesar_cola(cliente, equipo: str, enviar=_enviar, maximo: int = 10) -> int
                     "p_bodega": rep.get("bodega"), "p_numero_oc": d.get("numero_oc") or None,
                     "p_clave": None if d.get("numero_oc") else rep.get("clave")}).execute().data or {}
                 if datos_r.get("lineas"):
+                    # asunto con OC y PO, parcial o total según lo que falta recibir de la OC
+                    from servicios.reporte_ejecutivo import asunto_recepcion
+                    oc_r = [o for o in (datos_r.get("oc") or []) if int(o.get("unidades_oc") or 0)]
+                    if datos_r.get("numero_oc") and oc_r:
+                        falta = any(int(o.get("unidades_rec_oc") if o.get("unidades_rec_oc") is not None else 0)
+                                    < int(o.get("unidades_oc") or 0) for o in oc_r)
+                        asunto = asunto_recepcion("parcial" if falta else "total", datos_r.get("numero_oc"),
+                                                  " ".join(str(datos_r.get(k) or "") for k in ("codigo_asn", "nota_oc")),
+                                                  d.get("contenedor") or rep.get("contenedor"), datos_r.get("proveedor"))
                     if not datos_r.get("numero_oc") and d.get("contenedor"):
                         datos_r = dict(datos_r, solo_contenedor=True, contenedor=d.get("contenedor"))
                     nombre = nombre_reporte_desde_datos(datos_r)

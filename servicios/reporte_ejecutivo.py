@@ -69,6 +69,22 @@ def nombre_reporte_recepcion(numero_oc=None, nota=None, proveedor=None, contened
     return f"{prefijo}{'_'.join(p for p in partes if p)}.{extension}"
 
 
+def asunto_recepcion(tipo: str, numero_oc=None, nota=None, contenedor=None, proveedor=None) -> str:
+    """Asunto de los correos de recepción. Ej.:
+    Recepción parcial OC 2141 (PO1082) · contenedor MSNU880758-1 - Kind Pet Products Co."""
+    oc = re.sub(r"^OC[\s\-_#:]*", "", str(numero_oc or "").strip(), flags=re.I)
+    po = extraer_po(nota)
+    txt = f"Recepción {tipo} " + (f"OC {oc}" if oc and oc.upper() not in ("S/OC", "S/N", "LIBRE") else "SIN OC")
+    if po and po.upper() != oc.upper():
+        txt += f" ({po})"
+    cont = str(contenedor or "").strip()
+    if cont and cont.upper() not in ("SIN CONTENEDOR", "SIN-CONTENEDOR") and not cont.upper().startswith("PO-"):
+        txt += f" · contenedor {cont}"
+    if str(proveedor or "").strip():
+        txt += f" - {str(proveedor).strip()}"
+    return txt
+
+
 def nombre_reporte_desde_datos(datos: dict, extension="xlsx", prefijo="") -> str:
     """Nombre a partir de lo que devuelve wms_reporte_recepcion (agrega el contenedor si el reporte es de uno solo)."""
     datos = datos or {}
