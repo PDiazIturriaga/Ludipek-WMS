@@ -560,6 +560,9 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
                   ("PALLETS PEDIDOS", float(tot.get("pedido_pallets")) if tot.get("pedido_pallets") is not None else "—", "#,##0.##")])
     medidas = (f"{float(tot['pallet_largo_m']):g} x {float(tot['pallet_ancho_m']):g} x {float(tot['pallet_alto_m']):g} m".replace(".", ",")
                if tot.get("pallet_alto_m") and tot.get("pallet_largo_m") and tot.get("pallet_ancho_m") else "Sin alto informado")
+    if _n(tot.get("pallets_con_ficha")):
+        medidas = (f"Ficha logística por SKU ({_n(tot.get('pallets_con_ficha'))} de {len(lpns)} pallets)"
+                   + (f"; resto {medidas}" if _n(tot.get("pallets_con_ficha")) < len(lpns) and tot.get("pallet_alto_m") else ""))
     _seccion(ws, 9, "H", "1. DATOS GENERALES DEL DESPACHO")
     fila = _datos_generales(ws, 10, [
         ("Despacho:", cab.get("numero")), ("Destino:", destino),

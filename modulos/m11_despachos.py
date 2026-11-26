@@ -367,7 +367,9 @@ class DespachosModulo:
                                  + (f" · pallets pedidos {float(tot.get('pedido_pallets')):g}" if tot.get("pedido_pallets") else "")
                                  + f" · peso neto {_kg(tot.get('peso_kg'))} kg · peso bruto {_kg(tot.get('peso_bruto_kg'))} kg"
                                  + (f" · {float(tot.get('m3')):.2f} m³".replace(".", ",") if tot.get("m3") is not None and not _n(tot.get("pallets_sin_alto"))
-                                    else " · m³: falta el alto de los pallets (Medidas y peso)")
+                                    else f" · m³: falta el alto de {_n(tot.get('pallets_sin_alto'))} pallet(s) sin ficha logística (Medidas y peso)")
+                                 + (f" · {_n(tot.get('pallets_con_ficha'))} pallets medidos con la ficha logística del SKU"
+                                    if _n(tot.get("pallets_con_ficha")) else "")
                                  + (f" · {tot.get('skus_sin_peso')} SKU sin peso (cargue el pedido con Kg/un o complete la maestra)"
                                     if _n(tot.get("skus_sin_peso")) else ""))
 
@@ -427,9 +429,12 @@ class DespachosModulo:
                 ft.DataCell(_t(l.get("ubicacion") or "—", 12)),
                 ft.DataCell(_t(cont, 11.5)),
                 ft.DataCell(_t(_miles(l.get("unidades")), 12)),
-                ft.DataCell(_t(_kg(l.get("peso_bruto_kg")) + (" (balanza)" if l.get("peso_balanza") else ""), 12,
+                ft.DataCell(_t(_kg(l.get("peso_bruto_kg")) + (" (balanza)" if l.get("peso_balanza") else
+                                                            " (ficha)" if l.get("origen_peso") == "FICHA" else ""), 12,
                                UI["exito"] if l.get("peso_balanza") else None)),
-                ft.DataCell(_t(f"{float(l.get('alto_m')):.2f} m · {float(l.get('m3') or 0):.2f} m³".replace(".", ",") if l.get("alto_m") else "Falta alto",
+                ft.DataCell(_t((f"{float(l.get('alto_m')):.2f} m · {float(l.get('m3') or 0):.2f} m³".replace(".", ",")
+                                + {"FICHA": " (ficha)", "MEDIDO": " (medido)", "GENERAL": " (general)"}.get(l.get("origen_medida"), ""))
+                               if l.get("alto_m") else "Falta alto",
                                12, None if l.get("alto_m") else UI["alerta"])),
                 ft.DataCell(_t(f"{_fh(l.get('escaneado_en'))} · {l.get('escaneado_por') or ''}", 11, UI["texto_2"])),
                 ft.DataCell(ft.Row([
@@ -481,6 +486,8 @@ class DespachosModulo:
             _t("Pallet europeo: 1,20 x 0,80 m. Mida el alto desde el piso hasta lo más alto de la carga "
                "(incluye los 14,4 cm del pallet de madera). La tara es el peso del pallet vacío (EPAL ≈ 25 kg).",
                12, UI["texto_2"]),
+            _t("Los SKU con ficha logística (alto y peso de display y pallet) se calculan solos con su ficha; "
+               "estas medidas se usan para los SKU que no la tienen.", 12, UI["acento"]),
             _t("Se aplican a todos los pallets del despacho. Si un pallet se midió o se pesó en balanza, use el ícono "
                "de regla en su fila.", 12, UI["texto_2"]),
             ft.Row([t_largo, t_ancho, t_alto], spacing=10, wrap=True),
