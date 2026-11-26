@@ -730,6 +730,8 @@ class RecepcionModulo:
                 }).execute().data or {}
 
             datos_a = _rep(cont_g)
+            if datos_a.get("solo_contenedor") and cont_g and cont_g != "SIN CONTENEDOR":
+                datos_a["contenedor"] = cont_g      # tal como está escrito (ej. con guion), no la forma normalizada
             for cont_x in [c for c in (excluir or []) if c and c != cont_g]:
                 datos_x = _rep(cont_x)
                 menos = {}
@@ -2091,12 +2093,14 @@ class RecepcionModulo:
                 notificar("No hay recepciones seleccionadas para descargar en PDF.", "#D97706")
                 return
             # LPN con OC: acta parcial por contenedor con los datos reales de la OC (script 57)
-            grupos = []
+            grupos, vistos = [], set()
             for r in regs_sel:
                 if r.get("asn_id"):
-                    g = (r.get("asn_id"), _contenedor_lpn(r) or "SIN CONTENEDOR")
-                    if g not in grupos:
-                        grupos.append(g)
+                    c_r = _contenedor_lpn(r) or "SIN CONTENEDOR"
+                    k_r = (r.get("asn_id"), re.sub(r"[\s\-]+", "", c_r))     # mismo contenedor con o sin guion
+                    if k_r not in vistos:
+                        vistos.add(k_r)
+                        grupos.append((r.get("asn_id"), c_r))
             if len(grupos) > 6:
                 notificar(f"Hay {len(grupos)} combinaciones OC/contenedor marcadas; filtre por OC o marque menos LPN.", "#D97706")
                 return
@@ -2193,11 +2197,13 @@ class RecepcionModulo:
             if not regs:
                 notificar("Marque los LPN del contenedor que quiere reportar.", "#D97706")
                 return
-            grupos = {}
+            grupos, formas = {}, {}
             for r in regs:
                 aid = r.get("asn_id")
                 cont = _contenedor_lpn(r) or "SIN CONTENEDOR"
                 clave = f"ASN:{aid}" if aid else f"CONT:{str(r.get('contenedor') or 'SIN-CONTENEDOR').strip().upper()}"
+                k_n = (clave, re.sub(r"[\s\-]+", "", cont))                   # mismo contenedor con o sin guion
+                cont = formas.setdefault(k_n, cont)
                 grupos.setdefault((clave, cont), 0)
                 grupos[(clave, cont)] += 1
             if len(grupos) > 6:
@@ -2213,6 +2219,8 @@ class RecepcionModulo:
                         "p_bodega": obtener_bodega_activa(page), "p_numero_oc": None,
                         "p_clave": clave, "p_contenedor": cont,
                     }).execute().data or {}
+                    if cont != "SIN CONTENEDOR":
+                        datos_r["contenedor"] = cont        # tal como está escrito en los LPN
                     oc_txt = datos_r.get("numero_oc") or "LIBRE"
                     ruta = reporte_recepcion(datos_r, os.path.join(carpeta_r, nombre_reporte_desde_datos(datos_r)))
                     descargar_archivo_web(ruta, f"Resumen recepción OC {oc_txt} · contenedor {cont}")
