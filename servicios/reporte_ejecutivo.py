@@ -176,6 +176,18 @@ def _fila(ws, fila, valores, formatos=None, col_ini=1, total=False):
                                 vertical="center")
 
 
+def _ajustar_texto(ws, fila, columnas, ancho_col):
+    """Muestra listas largas completas: ajusta el texto en la celda y agranda la fila."""
+    lineas = 1
+    for col in columnas:
+        c = ws.cell(row=fila, column=col)
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        largo = len(str(c.value or ""))
+        lineas = max(lineas, -(-largo // max(1, int(ancho_col.get(col, 20) * 1.1))))
+    if lineas > 1:
+        ws.row_dimensions[fila].height = 14 * lineas + 2
+
+
 def _anchos(ws, anchos):
     for i, w in enumerate(anchos, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -600,11 +612,12 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     p0 = fila
     for l in sorted(lpns, key=lambda x: str(x.get("escaneado_en") or "")) or [{}]:
         cont = l.get("contenido") or []
-        _fila(ws, fila, [l.get("lpn") or "—", l.get("ubicacion") or "", ", ".join(sorted({str(c.get("sku")) for c in cont}))[:40],
-                         ", ".join(sorted({str(c.get("lote")) for c in cont}))[:30],
+        _fila(ws, fila, [l.get("lpn") or "—", l.get("ubicacion") or "", ", ".join(sorted({str(c.get("sku")) for c in cont})),
+                         ", ".join(sorted({str(c.get("lote")) for c in cont})),
                          f"=SUMIF({rng('E')},A{fila},{rng(col_emp)})", f"=SUMIF({rng('E')},A{fila},{rng('O')})",
                          f"=SUMIF({rng('E')},A{fila},{rng('R')})", f"=SUMIF({rng('E')},A{fila},{rng('S')})"],
              {4: FMT_MILES, 5: FMT_MILES, 6: "#,##0.0", 7: "0.000"})
+        _ajustar_texto(ws, fila, (3, 4), {3: 30, 4: 30})
         fila += 1
     _fila(ws, fila, ["TOTAL", "", "", "", f"=SUM(E{p0}:E{fila - 1})", f"=SUM(F{p0}:F{fila - 1})", f"=SUM(G{p0}:G{fila - 1})",
                      f"=SUM(H{p0}:H{fila - 1})"], {4: FMT_MILES, 5: FMT_MILES, 6: "#,##0.0", 7: "0.00"}, total=True)
@@ -613,7 +626,7 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     fila += 2
     _seccion(ws, fila, "H", "3. RESUMEN POR FECHA DE VENCIMIENTO")
     fila += 1
-    _cabecera_tabla(ws, fila, ["Fecha Vencimiento", "SKUs", "Lotes Incluidos", "Pallets", "Líneas", "Cajas", "Unidades",
+    _cabecera_tabla(ws, fila, ["Fecha Vencimiento", "SKUs", "Lotes Incluidos", "Pallets", "Líneas", tit_emp, "Unidades",
                                "% Unidades"])
     fila += 1
     v0 = fila
@@ -628,11 +641,12 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     vencs = sorted(filas_v, key=lambda x: (not isinstance(x, date), str(x)))
     for v in vencs or [None]:
         d = filas_v.get(v, {"skus": set(), "lotes": set(), "lpns": set()})
-        _fila(ws, fila, [v if v else "—", ", ".join(sorted(d["skus"]))[:40], ", ".join(sorted(d["lotes"]))[:60], len(d["lpns"]),
-                         f"=COUNTIF({rng('J')},A{fila})", f"=SUMIF({rng('J')},A{fila},{rng('L')})",
+        _fila(ws, fila, [v if v else "—", ", ".join(sorted(d["skus"])), ", ".join(sorted(d["lotes"])), len(d["lpns"]),
+                         f"=COUNTIF({rng('J')},A{fila})", f"=SUMIF({rng('J')},A{fila},{rng(col_emp)})",
                          f"=SUMIF({rng('J')},A{fila},{rng('O')})",
                          f"=IF($G${v0 + max(len(vencs), 1)}>0,G{fila}/$G${v0 + max(len(vencs), 1)},0)"],
              {0: FMT_FECHA, 3: FMT_MILES, 4: FMT_MILES, 5: FMT_MILES, 6: FMT_MILES, 7: FMT_PCT})
+        _ajustar_texto(ws, fila, (2, 3), {2: 26, 3: 30})
         fila += 1
     _fila(ws, fila, ["TOTAL", "", "", f"=SUM(D{v0}:D{fila - 1})", f"=SUM(E{v0}:E{fila - 1})", f"=SUM(F{v0}:F{fila - 1})",
                      f"=SUM(G{v0}:G{fila - 1})", f"=SUM(H{v0}:H{fila - 1})"],
