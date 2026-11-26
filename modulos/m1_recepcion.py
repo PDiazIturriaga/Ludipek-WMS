@@ -720,15 +720,36 @@ class RecepcionModulo:
             pdf.output(ruta)
             return ruta
 
-        def actas_parciales_por_contenedor(grupos: list) -> int:
+        def datos_acta_parcial(asn_id_g, cont_g: str, excluir: list = None) -> dict:
+            """Datos del acta parcial de un contenedor. 'excluir': otros contenedores de la OC que todavía no se
+            informan; se restan del acumulado (recibido / pendiente / avance / pallets) como si no hubieran llegado."""
+            def _rep(c):
+                return supabase.rpc("wms_reporte_recepcion", {
+                    "p_bodega": obtener_bodega_activa(page), "p_numero_oc": None,
+                    "p_clave": f"ASN:{asn_id_g}", "p_contenedor": c or "SIN CONTENEDOR",
+                }).execute().data or {}
+
+            datos_a = _rep(cont_g)
+            for cont_x in [c for c in (excluir or []) if c and c != cont_g]:
+                datos_x = _rep(cont_x)
+                menos = {}
+                for l_x in (datos_x.get("lineas") or []):
+                    k_x = str(l_x.get("sku") or "").upper()
+                    menos[k_x] = menos.get(k_x, 0) + int(l_x.get("unidades") or 0)
+                for o in (datos_a.get("oc") or []):
+                    k_o = str(o.get("sku") or "").upper()
+                    if k_o in menos:
+                        o["unidades_rec_oc"] = max(int(o.get("unidades_rec_oc") or 0) - menos[k_o], 0)
+                datos_a["unidades_rec_oc"] = max(int(datos_a.get("unidades_rec_oc") or 0) - sum(menos.values()), 0)
+                datos_a["pallets_oc"] = max(int(datos_a.get("pallets_oc") or 0) - int(datos_x.get("pallets") or 0), 0)
+            return datos_a
+
+        def actas_parciales_por_contenedor(grupos: list, excluir: list = None) -> int:
             """grupos: [(asn_id, contenedor)]. Genera y descarga un acta parcial por cada uno. Devuelve cuántas salieron."""
             hechas = 0
             for asn_id_g, cont_g in grupos:
                 try:
-                    datos_a = supabase.rpc("wms_reporte_recepcion", {
-                        "p_bodega": obtener_bodega_activa(page), "p_numero_oc": None,
-                        "p_clave": f"ASN:{asn_id_g}", "p_contenedor": cont_g or "SIN CONTENEDOR",
-                    }).execute().data or {}
+                    datos_a = datos_acta_parcial(asn_id_g, cont_g, excluir)
                     if not datos_a.get("lineas"):
                         notificar(f"No hay recepciones del contenedor {cont_g} en esta OC.", "#D97706")
                         continue
@@ -2560,12 +2581,9 @@ class RecepcionModulo:
                 )
                 return asunto_c, cuerpo_c
 
-            def _preparar_parcial(cont_c: str):
+            def _preparar_parcial(cont_c: str, excluir: list = None):
                 """Genera el acta parcial del contenedor y deja listo asunto/cuerpo. Devuelve (ruta, nombre, asunto, cuerpo)."""
-                datos_c = supabase.rpc("wms_reporte_recepcion", {
-                    "p_bodega": obtener_bodega_activa(page), "p_numero_oc": None,
-                    "p_clave": f"ASN:{asn_actual_id}", "p_contenedor": cont_c,
-                }).execute().data or {}
+                datos_c = datos_acta_parcial(asn_actual_id, cont_c, excluir)
                 if not datos_c.get("lineas"):
                     raise ValueError(f"el contenedor {cont_c} no tiene recepciones")
                 ruta_c = generar_acta_parcial_pdf(datos_c)
@@ -2767,10 +2785,15 @@ class RecepcionModulo:
                 campo_mail.on_change = _actualizar_url_outlook
             _actualizar_url_outlook()
 
+            checks_no_sumar = {}
+
             def cambiar_contenedor_mail(ev=None):
                 nonlocal ruta, nombre_pdf
+                for k_n, chk_n in checks_no_sumar.items():     # el contenedor que se informa siempre suma
+                    chk_n.visible = k_n != dd_cont_mail.value
+                excluir = [k for k, chk in checks_no_sumar.items() if chk.value and k != dd_cont_mail.value]
                 try:
-                    ruta, nombre_pdf, asunto_n, cuerpo_n = _preparar_parcial(dd_cont_mail.value)
+                    ruta, nombre_pdf, asunto_n, cuerpo_n = _preparar_parcial(dd_cont_mail.value, excluir)
                 except Exception as ex_cc:
                     lbl_estado.value, lbl_estado.color = f"No se pudo armar el acta de ese contenedor: {ex_cc}", "#F87171"
                     page.update()
@@ -2787,6 +2810,14 @@ class RecepcionModulo:
                                            text=f"{c.get('contenedor')}  ·  {int(c.get('unidades') or 0):,} UN".replace(",", "."))
                          for c in conts_oc])
             dd_cont_mail.visible = estado_mail["parcial"] and len(conts_oc) > 1
+            for c_n in conts_oc:
+                k_n = str(c_n.get("contenedor") or "SIN CONTENEDOR")
+                checks_no_sumar[k_n] = ft.Checkbox(
+                    label=f"No sumar {k_n} al avance (se informa después)", value=False,
+                    visible=k_n != estado_mail["contenedor"], on_change=cambiar_contenedor_mail,
+                    label_style=ft.TextStyle(size=12, color=TEXT_WHITE))
+            fila_no_sumar = ft.Column(list(checks_no_sumar.values()), spacing=0, tight=True,
+                                      visible=estado_mail["parcial"] and len(conts_oc) > 1)
             dd_cont_mail.on_change = cambiar_contenedor_mail
             if hasattr(dd_cont_mail, "on_select"):
                 dd_cont_mail.on_select = cambiar_contenedor_mail
@@ -2807,7 +2838,7 @@ class RecepcionModulo:
                 ], spacing=8),
                 content=ft.Container(
                     width=560,
-                    content=ft.Column([lbl_modo_mail, dd_cont_mail, txt_para, txt_cc, txt_asunto, txt_mensaje,
+                    content=ft.Column([lbl_modo_mail, dd_cont_mail, fila_no_sumar, txt_para, txt_cc, txt_asunto, txt_mensaje,
                                        barra_progreso, lbl_estado],
                                       spacing=10, tight=True, scroll=ft.ScrollMode.AUTO),
                 ),
@@ -4339,9 +4370,12 @@ class RecepcionModulo:
                 notificar("Esta OC todavía no tiene recepciones (o no tiene N° de OC).", "#D97706")
                 return
 
+            checks_excluir = {}
+
             def generar(ev, c):
+                excluir = [k for k, chk in checks_excluir.items() if chk.value and k != c]
                 page.pop_dialog()
-                actas_parciales_por_contenedor([(asn_actual_id, c)])
+                actas_parciales_por_contenedor([(asn_actual_id, c)], excluir)
 
             filas = []
             for c in conts:
@@ -4368,6 +4402,14 @@ class RecepcionModulo:
                     ft.Text("Elija el contenedor o guía. El acta muestra lo pedido en la OC, lo recibido en ese contenedor, "
                             "el acumulado de toda la OC y lo pendiente.", size=11.5, color=UI["texto_2"]),
                     *filas,
+                    *([ft.Divider(height=10, color=UI["borde"]),
+                       ft.Text("¿Algún contenedor todavía no se informa? Márquelo y no se suma al acumulado "
+                               "(útil si llegaron dos el mismo día y se informan por separado).",
+                               size=11.5, color=UI["texto_2"]),
+                       *[checks_excluir.setdefault(str(c.get("contenedor") or "SIN CONTENEDOR"), ft.Checkbox(
+                             label=f"No sumar {c.get('contenedor') or 'SIN CONTENEDOR'}", value=False,
+                             label_style=ft.TextStyle(size=12, color=TEXT_WHITE)))
+                         for c in conts]] if len(conts) > 1 else []),
                 ], spacing=8, tight=True, scroll=ft.ScrollMode.AUTO)),
                 actions=[ui_boton("Cerrar", None, lambda ev: page.pop_dialog(), "texto")],
                 actions_alignment=ft.MainAxisAlignment.END,
