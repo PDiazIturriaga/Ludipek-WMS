@@ -440,6 +440,9 @@ def reporte_recepcion(datos: dict, ruta: str, emitido: datetime = None) -> str:
 
 
 # ----------------------------------------------------------------------------- despacho
+FMT_PALLETS = "General"   # 32 -> "32" y 2,5 -> "2,5" (con #,##0.## Excel muestra "32,")
+
+
 def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     emitido = emitido or datetime.now()
     cab = detalle.get("despacho") or {}
@@ -534,7 +537,7 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
                       f"=IF(ISNUMBER(K{r}),J{r}-K{r},\"-\")", f"=IF(AND(ISNUMBER(K{r}),K{r}>0),J{r}/K{r},\"-\")",
                       f"=SUMIF({rng('G')},A{r},{rng('Q')})",
                       float(s.get("peso_bruto_kg") or 0), float(s.get("m3")) if s.get("m3") is not None else "-", est],
-             {4: FMT_MILES, 5: "#,##0.##", 6: FMT_MILES, 7: FMT_MILES, 8: FMT_MILES, 9: FMT_MILES, 10: FMT_MILES,
+             {4: FMT_MILES, 5: FMT_PALLETS, 6: FMT_MILES, 7: FMT_MILES, 8: FMT_MILES, 9: FMT_MILES, 10: FMT_MILES,
               11: '+#,##0;-#,##0;0', 12: FMT_PCT, 13: "#,##0.0", 14: "#,##0.0", 15: "0.00"})
     cfin = c0 + max(len(skus), 1) - 1
     ct = cfin + 1
@@ -542,22 +545,32 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
                    f"=SUM(G{c0}:G{cfin})", f"=SUM(H{c0}:H{cfin})", f"=SUM(I{c0}:I{cfin})", f"=SUM(J{c0}:J{cfin})",
                    f"=SUM(K{c0}:K{cfin})", f"=J{ct}-K{ct}", f"=IF(K{ct}>0,J{ct}/K{ct},0)", f"=SUM(N{c0}:N{cfin})",
                    f"=SUM(O{c0}:O{cfin})", f"=SUM(P{c0}:P{cfin})", ""],
-         {4: FMT_MILES, 5: "#,##0.##", 6: FMT_MILES, 7: FMT_MILES, 8: FMT_MILES, 9: FMT_MILES, 10: FMT_MILES,
+         {4: FMT_MILES, 5: FMT_PALLETS, 6: FMT_MILES, 7: FMT_MILES, 8: FMT_MILES, 9: FMT_MILES, 10: FMT_MILES,
           11: '+#,##0;-#,##0;0', 12: FMT_PCT, 13: "#,##0.0", 14: "#,##0.0", 15: "0.00"}, total=True)
     _anchos(wc, [15, 34, 18, 16, 9, 10, 10, 10, 11, 13, 12, 12, 10, 12, 12, 9, 26])
     wc.freeze_panes = "A5"
 
     # ---------------- Resumen ----------------
-    _titulo(ws, "H", f"RESUMEN EJECUTIVO DE DESPACHO — {cab.get('numero')}",
+    # Empaque: si no hay cajas (productos en display) se muestran displays; si hay ambos, los dos
+    tot_cajas, tot_dsp = _n(tot.get("cajas")), _n(tot.get("displays"))
+    if tot_dsp and not tot_cajas:
+        kpi_empaque = ("TOTAL DISPLAYS", f"='Detalle por LPN'!M{rt}", FMT_MILES)
+    elif tot_dsp and tot_cajas:
+        kpi_empaque = ("CAJAS · DISPLAYS",
+                       f"=TEXT('Detalle por LPN'!L{rt},\"#,##0\")&\" cj · \"&TEXT('Detalle por LPN'!M{rt},\"#,##0\")&\" dsp\"", "@")
+    else:
+        kpi_empaque = ("TOTAL CAJAS", f"='Detalle por LPN'!L{rt}", FMT_MILES)
+    col_emp, tit_emp = ("M", "Displays") if (tot_dsp and not tot_cajas) else ("L", "Cajas")
+    _titulo(ws, "H", f"RESUMEN DE DESPACHO — {cab.get('numero')}",
             f"LUDIPEK WMS | Destino: {destino} | Contenedor: {contenedor} | Fecha de Emisión: {emitido:%d/%m/%Y}")
     _kpis(ws, 4, [("TOTAL UNIDADES DESPACHADAS", f"='Detalle por LPN'!O{rt}", FMT_MILES),
-                  ("TOTAL CAJAS", f"='Detalle por LPN'!L{rt}", FMT_MILES),
+                  kpi_empaque,
                   ("PALLETS (LPN)", len(lpns), FMT_MILES),
                   ("AVANCE SOBRE PEDIDO", f"='Consolidado por SKU'!M{ct}", FMT_PCT)])
     _kpis(ws, 6, [("PESO NETO (KG)", f"='Detalle por LPN'!Q{rt}", "#,##0"),
                   ("PESO BRUTO (KG)", f"='Detalle por LPN'!R{rt}", "#,##0"),
                   ("VOLUMEN (M³)", f"='Detalle por LPN'!S{rt}", "#,##0.00"),
-                  ("PALLETS PEDIDOS", float(tot.get("pedido_pallets")) if tot.get("pedido_pallets") is not None else "—", "#,##0.##")])
+                  ("PALLETS PEDIDOS", float(tot.get("pedido_pallets")) if tot.get("pedido_pallets") is not None else "—", FMT_PALLETS)])
     medidas = (f"{float(tot['pallet_largo_m']):g} x {float(tot['pallet_ancho_m']):g} x {float(tot['pallet_alto_m']):g} m".replace(".", ",")
                if tot.get("pallet_alto_m") and tot.get("pallet_largo_m") and tot.get("pallet_ancho_m") else "Sin alto informado")
     if _n(tot.get("pallets_con_ficha")):
@@ -568,7 +581,7 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
         ("Despacho:", cab.get("numero")), ("Destino:", destino),
         ("Referencia / pedido:", cab.get("referencia")), ("Contenedor:", contenedor),
         ("Estado:", cab.get("estado")), ("Stock descontado:", "Sí" if cab.get("stock_descontado") else "No"),
-        ("Pedido (unidades):", _n(tot.get("pedido_unidades"))), ("Pallets pedidos:", tot.get("pedido_pallets") or "—"),
+        ("Pedido (unidades):", _n(tot.get("pedido_unidades"))), ("Pallets pedidos:", (f"{float(tot.get('pedido_pallets')):g}".replace(".", ",")) if tot.get("pedido_pallets") is not None else "—"),
         ("Displays:", _n(tot.get("displays"))), ("Medidas pallet (L x A x H):", medidas),
         ("Peso neto (kg):", f"{float(tot.get('peso_kg') or 0):,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")),
         ("Peso bruto (kg):", f"{float(tot.get('peso_bruto_kg') or 0):,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -582,14 +595,14 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     fila += 1
     _seccion(ws, fila, "H", "2. RESUMEN POR PALLET (LPN)")
     fila += 1
-    _cabecera_tabla(ws, fila, ["LPN", "Ubicación origen", "SKU(s)", "Lote(s)", "Cajas", "Unidades", "Peso bruto kg", "m³"])
+    _cabecera_tabla(ws, fila, ["LPN", "Ubicación origen", "SKU(s)", "Lote(s)", tit_emp, "Unidades", "Peso bruto kg", "m³"])
     fila += 1
     p0 = fila
     for l in sorted(lpns, key=lambda x: str(x.get("escaneado_en") or "")) or [{}]:
         cont = l.get("contenido") or []
         _fila(ws, fila, [l.get("lpn") or "—", l.get("ubicacion") or "", ", ".join(sorted({str(c.get("sku")) for c in cont}))[:40],
                          ", ".join(sorted({str(c.get("lote")) for c in cont}))[:30],
-                         f"=SUMIF({rng('E')},A{fila},{rng('L')})", f"=SUMIF({rng('E')},A{fila},{rng('O')})",
+                         f"=SUMIF({rng('E')},A{fila},{rng(col_emp)})", f"=SUMIF({rng('E')},A{fila},{rng('O')})",
                          f"=SUMIF({rng('E')},A{fila},{rng('R')})", f"=SUMIF({rng('E')},A{fila},{rng('S')})"],
              {4: FMT_MILES, 5: FMT_MILES, 6: "#,##0.0", 7: "0.000"})
         fila += 1
