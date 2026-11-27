@@ -163,7 +163,7 @@ class PutawayModulo:
             ubi = str(codigo_ubicacion or "").strip().upper()
             if not ubi or ubi in ("ANDEN", "RECEPCION", "PENDIENTE", "SIN UBICACION", "NONE", "NULL"):
                 return ("RECEPCION", "ANDÉN RECEPCIÓN", 0)
-            # Zonas de arena (posiciones de piso, 2 pallets apilados): MK/BE = arena, ME = mermas de arena
+            # Zonas de arena: MK/BE = columnas de piso (arena), ME = posiciones de 2 pallets (mermas de arena)
             if ubi == "FARMACIA":
                 return ("FARMACIA", "PICKING FARMACIA", 1)
             if ubi == "ESTANTE-GIWI":          # estante provisorio de picking Giwi (script 41)

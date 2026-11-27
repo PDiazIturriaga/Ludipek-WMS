@@ -110,6 +110,18 @@ def _fecha(v):
     return s
 
 
+SIN_FECHA = "S/F"
+
+
+def _venc(v):
+    """Vencimiento para cruzar Detalle y Resumen: fecha o "S/F" (nunca vacío, para que SUMIF lo encuentre)."""
+    f = _fecha(v)
+    if isinstance(f, date):
+        return f
+    t = str(f or "").strip().upper()
+    return SIN_FECHA if t in ("", "S/F", "SF", "-", "—", "NONE", "NULL", "SIN FECHA") else t
+
+
 def _n(v):
     try:
         return int(float(v))
@@ -331,7 +343,7 @@ def reporte_recepcion(datos: dict, ruta: str, emitido: datetime = None) -> str:
         ya_oc.add(s)
         fecha = _fecha(l.get("fecha"))
         _fila(wd, r, [i + 1, numero_oc or "SIN OC", proveedor, l.get("contenedor") or contenedor, s,
-                      str(l.get("descripcion") or "")[:40], l.get("lote"), _fecha(l.get("vencimiento")), fecha,
+                      str(l.get("descripcion") or "")[:40], l.get("lote"), _venc(l.get("vencimiento")), fecha,
                       _n(l.get("pallets")), _n(l.get("cajas")), _n(l.get("unidades")), f"=IF(K{r}>0,L{r}/K{r},0)",
                       (_n(o.get("unidades_oc")) if o.get("unidades_oc") is not None else "-") if primera else "",
                       (_n(o.get("unidades_pl")) if o.get("unidades_pl") is not None else "-") if primera else "",
@@ -441,10 +453,10 @@ def reporte_recepcion(datos: dict, ruta: str, emitido: datetime = None) -> str:
                                "Unidades Rec.", "% Unidades"])
     fila += 1
     v0 = fila
-    vencs = sorted({_fecha(l.get("vencimiento")) for l in lineas if l.get("vencimiento")},
+    vencs = sorted({_venc(l.get("vencimiento")) for l in lineas},
                    key=lambda x: (not isinstance(x, date), str(x)))
     for v in vencs or [None]:
-        ls = [l for l in lineas if _fecha(l.get("vencimiento")) == v]
+        ls = [l for l in lineas if _venc(l.get("vencimiento")) == v]
         descs = sorted({str(l.get("descripcion") or l.get("sku"))[:22] for l in ls})
         _fila(ws, fila, [v if v else "—", ", ".join(descs[:3]) + (f" +{len(descs) - 3}" if len(descs) > 3 else ""),
                          ", ".join(sorted({str(l.get("lote")) for l in ls}))[:60], len({l.get("sku") for l in ls}),
@@ -512,7 +524,7 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
             except ValueError:
                 esc = None
             _fila(wd, r, [i + 1, cab.get("numero"), destino, contenedor, l.get("lpn"), l.get("ubicacion"), s,
-                          str(info.get(s, {}).get("descripcion") or "")[:40], c.get("lote"), _fecha(c.get("vencimiento")),
+                          str(info.get(s, {}).get("descripcion") or "")[:40], c.get("lote"), _venc(c.get("vencimiento")),
                           esc, _n(emp.get("cajas")), _n(emp.get("displays")), _n(emp.get("sueltas")), _n(c.get("unidades")),
                           _n(info.get(s, {}).get("multiplo_caja")) or "-", peso_linea, bruto, m3,
                           l.get("escaneado_por")],
@@ -649,7 +661,7 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
     filas_v = {}
     for l in lpns:
         for c in l.get("contenido") or []:
-            v = _fecha(c.get("vencimiento"))
+            v = _venc(c.get("vencimiento"))
             d = filas_v.setdefault(v, {"skus": set(), "lotes": set(), "lpns": set()})
             d["skus"].add(str(c.get("sku")))
             d["lotes"].add(str(c.get("lote")))

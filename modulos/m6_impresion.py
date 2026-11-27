@@ -623,7 +623,7 @@ class ImpresionModulo(PanelesLpnCencosud):
         es_arena = zona.startswith("ARENA_")
         self.dd_nivel_stgo.visible = es_rack
         self.dd_desde_stgo.visible = self.dd_hasta_stgo.visible = zona.startswith("RACK_") or es_arena
-        etiqueta = "sector" if zona == "ARENA_MK" else ("fila" if es_arena else "columna")
+        etiqueta = "sector" if zona in ("ARENA_MK", "ARENA_BE") else ("fila" if es_arena else "columna")
         self.dd_desde_stgo.label = f"Desde {etiqueta}"
         self.dd_hasta_stgo.label = f"Hasta {etiqueta}"
         if self.dd_desde_stgo.visible:

@@ -137,9 +137,10 @@ def describir_ubicacion_stgo(codigo: str) -> dict:
     m = _PAT_ARENA.match(cod)
     if m:
         zona, fila, posn = m.group(1), int(m.group(2)), int(m.group(3))
-        if zona == "MK":
-            # Marketing por columnas: MK-01-01..05 = sector 1, MK-02-06..11 = sector 2 (16 pallets c/u)
-            return {"codigo": cod, "grupo": "ARENA_MK", "zona": NOMBRE_ARENA[zona], "tipo": "ARENA",
+        if zona in ("MK", "BE"):
+            # Por columnas de piso: MK-01-01..05 / MK-02-06..11 (16 pallets c/u)
+            #                       BE-01-01..10 / BE-02-11..20 (20 pallets c/u)
+            return {"codigo": cod, "grupo": f"ARENA_{zona}", "zona": NOMBRE_ARENA[zona], "tipo": "ARENA",
                     "letra": zona, "columna": fila, "nivel": posn,
                     "pie": f"{NOMBRE_ARENA[zona]} · SECTOR {fila} · COLUMNA {posn:02d}"}
         return {"codigo": cod, "grupo": f"ARENA_{zona}", "zona": NOMBRE_ARENA[zona], "tipo": "MERMA" if zona == "ME" else "ARENA",
@@ -175,7 +176,7 @@ def generar_pdfs_ubicaciones_stgo(codigos, carpeta_salida: str) -> list[str]:
                 tam -= 2
                 pdf.set_font("Helvetica", "B", tam)
             pdf.set_xy(5, 40); pdf.cell(108, 20, d["codigo"], align="C")
-            if d["letra"] == "MK":
+            if d["letra"] in ("MK", "BE"):
                 pdf.set_font("Helvetica", "B", 15)
                 pdf.set_xy(5, 64); pdf.cell(108, 8, f"SECTOR {d['columna']} - COLUMNA {d['nivel']:02d}", align="C")
             if d["tipo"] in ("PICKING", "RESERVA"):

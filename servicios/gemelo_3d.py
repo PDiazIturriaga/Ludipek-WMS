@@ -166,10 +166,13 @@ const arenas = new Map();   // "MK-03-05" -> {cod, arena, fila, posn, items, x, 
 function posArena(cod) {
   const m = /^(MK|ME|BE)-(\d{2})-(\d{2})$/.exec(cod);
   if (!m) return null;
-  // MK = columnas de piso (MK-01-01..05 sector 1, MK-02-06..11 sector 2): 8 pallets de fondo x 2 de alto
-  const esCol = m[1] === 'MK';
+  // Columnas de piso: MK-01-01..05 / MK-02-06..11 = 8 pallets de fondo x 2 de alto
+  //                   BE-01-01..10 / BE-02-11..20 = 10 pallets de fondo x 2 de alto
+  const esCol = m[1] === 'MK' || m[1] === 'BE';
+  const fondo = m[1] === 'MK' ? 8 : (m[1] === 'BE' ? 10 : 1);
   if (!arenas.has(cod)) arenas.set(cod, { cod, arena: m[1], fila: +m[2], posn: +m[3], items: [], esArena: true,
-                                          esCol, cap: esCol ? 16 : 2, fondo: esCol ? 8 : 1 });
+                                          esCol, cap: fondo * 2, fondo,
+                                          corte: m[1] === 'MK' ? 6 : 11 });
   return arenas.get(cod);
 }
 D.ubicaciones.forEach(u => { if (!posArena(u)) pos(u); });
@@ -200,8 +203,8 @@ const BLOQUES = {
 Object.values(BLOQUES).forEach(b => { b.pos = 0; b.ocup = 0; b.pallets = 0; b.x1 = b.x0; b.z1 = b.z0; });
 arenas.forEach(a => {
   const b = BLOQUES[a.arena];
-  if (a.esCol) {   // columna: una calle de 8 pallets de fondo; 1,5 m de pasillo entre el sector 1 y el 2
-    a.x = b.x0 + (a.posn - 1) * CEL + (a.posn >= 6 ? 1.5 : 0); a.z = b.z0;
+  if (a.esCol) {   // columna: una calle de pallets de fondo; 1,5 m de pasillo entre el sector 1 y el 2
+    a.x = b.x0 + (a.posn - 1) * CEL + (a.posn >= a.corte ? 1.5 : 0); a.z = b.z0;
   } else {
     a.x = b.x0 + (a.posn - 1) * CEL; a.z = b.z0 + (a.fila - 1) * CEL;
   }
