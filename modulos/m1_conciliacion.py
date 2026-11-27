@@ -260,7 +260,7 @@ class PanelConciliacionSinOc:
             s = str(r.get("sku") or "").strip().upper()
             self.recibido_oc[s] = self.recibido_oc.get(s, 0) + int(r.get("unidades_totales") or 0)
 
-        lpns_vigentes = {str(f.get("lpn")) for f in self.filas}
+        lpns_vigentes = {self._clave(f) for f in self.filas}
         self.seleccion &= lpns_vigentes
 
         cab = self.cabecera
@@ -289,6 +289,16 @@ class PanelConciliacionSinOc:
             out.append(f)
         return out
 
+    @staticmethod
+    def _clave(f) -> str:
+        """Clave de marcado: el LPN real; las recepciones sin LPN (S/LPN) se marcan una por una.
+        Antes todas las S/LPN compartían la clave "S/LPN": marcar una marcaba todas, aunque
+        estuvieran ocultas por el filtro, y se asignaban juntas a la OC."""
+        lpn = str(f.get("lpn") or "").strip()
+        if lpn and lpn.upper() not in ("S/LPN", "SIN LPN", "NONE", "NULL", "-", "—"):
+            return lpn
+        return f"S/LPN#{f.get('id')}"
+
     def _toggle_lpn(self, lpn, valor):
         if valor:
             self.seleccion.add(lpn)
@@ -309,7 +319,7 @@ class PanelConciliacionSinOc:
 
     def _toggle_dia(self, clave):
         """Marca o desmarca todos los pallets visibles del grupo (contenedor o día)."""
-        lpns = {str(f["lpn"]) for f in self._visibles() if self._clave_grupo(f) == clave}
+        lpns = {self._clave(f) for f in self._visibles() if self._clave_grupo(f) == clave}
         if lpns and lpns <= self.seleccion:
             self.seleccion -= lpns
         else:
@@ -317,7 +327,7 @@ class PanelConciliacionSinOc:
         self._pintar()
 
     def _marcar_visibles(self, valor):
-        lpns = {str(f["lpn"]) for f in self._visibles()}
+        lpns = {self._clave(f) for f in self._visibles()}
         if valor:
             self.seleccion |= lpns
         else:
@@ -332,7 +342,7 @@ class PanelConciliacionSinOc:
         pendiente = {s: max(v["unidades"] - self.recibido_oc.get(s, 0), 0) for s, v in self.lineas_oc.items()}
         por_lpn = {}
         for f in self.filas:
-            por_lpn.setdefault(str(f["lpn"]), []).append(f)
+            por_lpn.setdefault(self._clave(f), []).append(f)
         self.seleccion.clear()
         cont_oc = str(self.cabecera.get("contenedor_referencia") or "").strip().upper()
         orden = sorted(por_lpn.items(), key=lambda kv: (
@@ -352,7 +362,7 @@ class PanelConciliacionSinOc:
         self._pintar()
 
     def _seleccionados(self):
-        return [f for f in self.filas if str(f.get("lpn")) in self.seleccion]
+        return [f for f in self.filas if self._clave(f) in self.seleccion]
 
     @staticmethod
     def _dia_txt(dia) -> str:
@@ -374,7 +384,7 @@ class PanelConciliacionSinOc:
         # Grupos: por contenedor (con sus días) o por día
         grupos = {}
         for f in visibles:
-            lpn = str(f["lpn"])
+            lpn = self._clave(f)
             d = grupos.setdefault(self._clave_grupo(f), {"lpns": set(), "un": 0, "sel": set(), "dias": set(), "conts": set()})
             d["lpns"].add(lpn)
             d["un"] += int(f.get("unidades") or 0)
@@ -428,10 +438,11 @@ class PanelConciliacionSinOc:
         filas = []
         for f in visibles[:1500]:
             lpn = str(f.get("lpn"))
+            clave = self._clave(f)
             sku = str(f.get("sku") or "").upper()
             en_oc = sku in self.lineas_oc
             filas.append(ft.DataRow(cells=[
-                ft.DataCell(ft.Checkbox(value=lpn in self.seleccion, on_change=lambda e, x=lpn: self._toggle_lpn(x, e.control.value))),
+                ft.DataCell(ft.Checkbox(value=clave in self.seleccion, on_change=lambda e, x=clave: self._toggle_lpn(x, e.control.value))),
                 ft.DataCell(_t(f.get("fecha_hora"), size=11.5)),
                 ft.DataCell(_t(lpn, ft.FontWeight.W_600, UI["acento"])),
                 ft.DataCell(_t(sku, ft.FontWeight.W_600)),
@@ -491,7 +502,7 @@ class PanelConciliacionSinOc:
         self.lbl_aviso.value = "  ·  ".join(avisos)
 
         # KPIs
-        lpns_rango = {str(f["lpn"]) for f in self.filas}
+        lpns_rango = {self._clave(f) for f in self.filas}
         self.k_pend.value = _miles(len(lpns_rango))
         self.k_pend_det.value = f"{_miles(sum(int(f.get('unidades') or 0) for f in self.filas))} UN sin OC"
         un_sel = sum(sel_sku.values())
