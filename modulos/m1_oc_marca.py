@@ -152,7 +152,7 @@ class PanelOcPorProveedor:
                 ui_kpi(self.k_pend, "No han llegado", ft.Icons.SCHEDULE_ROUNDED, UI["alerta"], self.k_pend_det),
                 ui_kpi(self.k_ns, "Falta en NetSuite", ft.Icons.CLOUD_OFF_OUTLINED, UI["peligro"], self.k_ns_det),
             ], spacing=12, run_spacing=12),
-            ui_tarjeta(ft.Column([ui_tabla(self.tabla, 520), self.txt_vacio], spacing=8, tight=True),
+            ui_tarjeta(ft.Column([ui_tabla(self.tabla, 520, encabezado_fijo=True), self.txt_vacio], spacing=8, tight=True),
                        titulo="OC del proveedor",
                        subtitulo="Clic en una OC: recepción física, contenedores, reporte y líneas de NetSuite",
                        icono=ft.Icons.LIST_ALT_ROUNDED),

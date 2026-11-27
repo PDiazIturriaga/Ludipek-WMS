@@ -1808,21 +1808,194 @@ def ui_kpi(valor: ft.Text, etiqueta: str, icono, color: str, detalle: ft.Text = 
     )
 
 
-def ui_tabla(tabla: ft.DataTable, altura: int = 360):
-    """Tabla con encabezado fijo de estilo, scroll vertical y horizontal (nunca se corta)."""
+# ---------------------------------------------------------------------------------------------
+# Encabezado fijo en tablas: el encabezado queda arriba al bajar por el listado.
+# Flet no lo trae: se arma una tabla de encabezado aparte y una tabla cuerpo sin encabezado, con
+# el mismo ancho por columna (estimado del contenido) y ambas en el mismo scroll horizontal.
+# ENCABEZADO_FIJO_EN_TODAS = True lo activa en todas las tablas de ui_tabla(); mientras tanto se
+# activa por tabla con ui_tabla(..., encabezado_fijo=True).
+# ---------------------------------------------------------------------------------------------
+ENCABEZADO_FIJO_EN_TODAS = False
+_MARCA_CELDA_FIJA = "__celda_enc_fijo__"
+_ANCHO_MIN_COL, _ANCHO_MAX_COL = 44, 460
+
+
+def _ancho_padding(p) -> float:
+    if p is None:
+        return 0
+    if isinstance(p, (int, float)):
+        return 2 * p
+    return float(getattr(p, "left", 0) or 0) + float(getattr(p, "right", 0) or 0)
+
+
+def _ancho_estimado(c, prof: int = 0) -> float:
+    """Ancho aproximado (px) de un control dentro de una celda de tabla."""
+    if c is None or prof > 8:
+        return 0
+    if isinstance(c, str):
+        return len(c) * 7.2
+    if getattr(c, "visible", True) is False:
+        return 0
+    nombre = type(c).__name__
+    w = getattr(c, "width", None)
+    if isinstance(w, (int, float)) and w > 0 and nombre != "Text":
+        return float(w)
+    if nombre == "Text":
+        txt = str(getattr(c, "value", "") or "")
+        if not txt:
+            spans = getattr(c, "spans", None) or []
+            txt = "".join(str(getattr(sp, "text", "") or "") for sp in spans)
+        tam = float(getattr(c, "size", None) or 14)
+        peso = str(getattr(c, "weight", "") or "")
+        factor = 0.62 if any(x in peso for x in ("6", "7", "8", "9", "BOLD")) else 0.57
+        linea = max((len(x) for x in txt.split("\n")), default=0)
+        return linea * tam * factor + 4
+    if nombre == "Icon":
+        return float(getattr(c, "size", None) or 24)
+    if nombre in ("Checkbox", "Radio", "Switch"):
+        return 44 + _ancho_estimado(str(getattr(c, "label", "") or ""), prof + 1)
+    if nombre == "IconButton":
+        return 44
+    if nombre == "ProgressBar":
+        return 120
+    if nombre in ("Row", "ResponsiveRow"):
+        hijos = [x for x in (getattr(c, "controls", None) or []) if getattr(x, "visible", True) is not False]
+        esp = float(getattr(c, "spacing", None) if getattr(c, "spacing", None) is not None else 10)
+        return sum(_ancho_estimado(x, prof + 1) for x in hijos) + esp * max(len(hijos) - 1, 0)
+    if nombre in ("Column", "ListView", "Stack"):
+        return max((_ancho_estimado(x, prof + 1) for x in (getattr(c, "controls", None) or [])), default=0)
+    if "Button" in nombre:
+        base = _ancho_estimado(getattr(c, "content", None), prof + 1) or _ancho_estimado(str(getattr(c, "text", "") or ""), prof + 1)
+        return base + (24 if getattr(c, "icon", None) else 0) + 34
+    contenido = getattr(c, "content", None)
+    if contenido is not None:
+        return _ancho_estimado(contenido, prof + 1) + _ancho_padding(getattr(c, "padding", None)) + 2
+    return 60
+
+
+def _sincronizar_encabezado_fijo(cuerpo) -> None:
+    """Iguala el ancho de cada columna entre la tabla de encabezado y la del cuerpo."""
+    cab = getattr(cuerpo, "_ludipek_cabecera", None)
+    if cab is None:
+        return
+    cols = list(cuerpo.columns or [])
+    # Columnas nuevas (el módulo reasignó tabla.columns): se toman sus títulos
+    if not cols or any(getattr(getattr(cl, "label", None), "data", None) != _MARCA_CELDA_FIJA for cl in cols):
+        cuerpo._ludipek_cols = [(cl.label, bool(getattr(cl, "numeric", False)), getattr(cl, "on_sort", None),
+                                 getattr(cl, "tooltip", None)) for cl in cols]
+    originales = getattr(cuerpo, "_ludipek_cols", []) or []
+    n = len(originales)
+    if n == 0:
+        return
+    anchos = []
+    for i, (lab, *_r) in enumerate(originales):
+        anchos.append(_ancho_estimado(lab))
+    for fila in list(cuerpo.rows or [])[:400]:
+        for i, celda in enumerate(list(getattr(fila, "cells", None) or [])[:n]):
+            cont = getattr(celda, "content", None)
+            if getattr(cont, "data", None) == _MARCA_CELDA_FIJA:
+                cont = cont.content
+            anchos[i] = max(anchos[i], _ancho_estimado(cont))
+    anchos = [min(max(a + 6, _ANCHO_MIN_COL), _ANCHO_MAX_COL) for a in anchos]
+
+    def caja(ctrl, ancho, numerica):
+        return ft.Container(content=ctrl, width=ancho, data=_MARCA_CELDA_FIJA,
+                            alignment=getattr(ft.Alignment, "CENTER_RIGHT", ft.Alignment.CENTER_LEFT) if numerica else ft.Alignment.CENTER_LEFT)
+
+    cab.columns = [ft.DataColumn(caja(lab, anchos[i], num), numeric=num, on_sort=srt, tooltip=tip)
+                   for i, (lab, num, srt, tip) in enumerate(originales)]
+    cab.rows = []
+    cuerpo.columns = [ft.DataColumn(ft.Container(width=anchos[i], height=0, data=_MARCA_CELDA_FIJA), numeric=num)
+                      for i, (_lab, num, _s, _t) in enumerate(originales)]
+    for fila in list(cuerpo.rows or []):
+        for i, celda in enumerate(list(getattr(fila, "cells", None) or [])[:n]):
+            cont = getattr(celda, "content", None)
+            if getattr(cont, "data", None) == _MARCA_CELDA_FIJA:
+                cont.width = anchos[i]
+            else:
+                celda.content = caja(cont, anchos[i], originales[i][1])
+    for prop in ("column_spacing", "horizontal_margin", "divider_thickness"):
+        setattr(cab, prop, getattr(cuerpo, prop, None))
+    firma = tuple(round(a) for a in anchos)
+    if firma != getattr(cuerpo, "_ludipek_firma", None):
+        cuerpo._ludipek_firma = firma
+        cuerpo._ludipek_cab_pendiente = True
+
+
+def _instalar_parche_tabla_encabezado_fijo() -> None:
+    if getattr(ft.DataTable, "_ludipek_enc_fijo", False):
+        return
+    original = getattr(ft.DataTable, "before_update", None)
+
+    def before_update(self):
+        if getattr(self, "_ludipek_cabecera", None) is not None:
+            try:
+                _sincronizar_encabezado_fijo(self)
+                if getattr(self, "_ludipek_cab_pendiente", False) and getattr(self._ludipek_cabecera, "page", None):
+                    self._ludipek_cab_pendiente = False
+                    try:
+                        self._ludipek_cabecera.update()
+                    except Exception:
+                        self._ludipek_cab_pendiente = True
+            except Exception as ex:          # nunca romper la pantalla por el encabezado
+                print(f"[WARN] Encabezado fijo: {ex}")
+        if callable(original):
+            return original(self)
+
+    ft.DataTable.before_update = before_update
+    ft.DataTable._ludipek_enc_fijo = True
+
+
+def ui_tabla(tabla: ft.DataTable, altura: int = 360, encabezado_fijo: bool = None):
+    """Tabla con encabezado de estilo, scroll vertical y horizontal (nunca se corta).
+    Con encabezado_fijo (o ENCABEZADO_FIJO_EN_TODAS) el encabezado queda visible al bajar."""
     tabla.heading_row_color = UI["card_alt"]
     tabla.column_spacing = 18
     tabla.horizontal_margin = 12
     tabla.divider_thickness = 0.5
+    fijo = ENCABEZADO_FIJO_EN_TODAS if encabezado_fijo is None else encabezado_fijo
+    if not fijo:
+        cont = ft.Container(
+            height=altura,
+            border=ft.Border.all(1, UI["borde"]),
+            border_radius=8,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            content=ft.Column(
+                [ft.Row([tabla], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.START)],
+                scroll=ft.ScrollMode.AUTO,
+                expand=True,
+            ),
+        )
+        TABLAS_SCROLL_ADAPTABLES.append((cont, altura))
+        return cont
+
+    _instalar_parche_tabla_encabezado_fijo()
+    cabecera = ft.DataTable(
+        columns=[ft.DataColumn(ft.Text(""))],
+        rows=[], heading_row_color=UI["card_alt"],
+        heading_row_height=getattr(tabla, "heading_row_height", None) or 40,
+        column_spacing=tabla.column_spacing, horizontal_margin=tabla.horizontal_margin,
+        divider_thickness=tabla.divider_thickness,
+    )
+    tabla._ludipek_cabecera = cabecera
+    tabla.heading_row_height = 0
+    tabla.heading_row_color = None
+    try:
+        _sincronizar_encabezado_fijo(tabla)
+    except Exception as ex:
+        print(f"[WARN] Encabezado fijo: {ex}")
     cont = ft.Container(
         height=altura,
         border=ft.Border.all(1, UI["borde"]),
         border_radius=8,
         clip_behavior=ft.ClipBehavior.HARD_EDGE,
-        content=ft.Column(
-            [ft.Row([tabla], scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.START)],
+        content=ft.Row(
+            [ft.Column([
+                cabecera,
+                ft.Container(expand=True, content=ft.Column([tabla], scroll=ft.ScrollMode.AUTO, expand=True)),
+            ], spacing=0)],
             scroll=ft.ScrollMode.AUTO,
-            expand=True,
+            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
         ),
     )
     TABLAS_SCROLL_ADAPTABLES.append((cont, altura))
