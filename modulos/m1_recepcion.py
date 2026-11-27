@@ -2632,7 +2632,7 @@ class RecepcionModulo:
             smtp_user = os.getenv("SMTP_USER", "").strip()
             smtp_pass = os.getenv("SMTP_PASS", "").strip()
             smtp_listo = bool(smtp_user and smtp_pass)
-            destinatarios_default = os.getenv("CORREOS_ACTA_RECEPCION", "javier.dominguez@ludipek.com, bernardita.lagos@ludipek.com, vanesa.galaz@ludipek.com, mauricio.amenabar@ludipek.com, daniela.medone@ludipek.com, sebastian.oyaneder@ludipek.com, joaquin.bernal@ludipek.com, mery.vargas@ludipek.com, ivan.oyarce@ludipek.com, equipoqa@ludipek.com, marco.falchetti@ludipek.com")
+            destinatarios_default = os.getenv("CORREOS_ACTA_RECEPCION", "javier.dominguez@ludipek.com, bernardita.lagos@ludipek.com, vanesa.galaz@ludipek.com, mauricio.amenabar@ludipek.com, daniela.medone@ludipek.com, sebastian.oyaneder@ludipek.com, joaquin.bernal@ludipek.com, mery.vargas@ludipek.com, ivan.oyarce@ludipek.com, equipoqa@ludipek.com, marco.falchetti@ludipek.com", "patricio.diaz@ludipek.com")
             from servicios.reporte_ejecutivo import nombre_reporte_recepcion
             nombre_pdf = nombre_reporte_recepcion(cabecera_asn_actual.get("numero_oc"), cabecera_asn_actual.get("codigo_asn"),
                                                   prov_str, None if cabecera_asn_actual.get("numero_oc") else cont_ref,

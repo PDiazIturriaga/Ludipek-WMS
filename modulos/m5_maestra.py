@@ -71,6 +71,31 @@ class MaestraModulo:
         except Exception as _ex_cat:
             print(f"[WARN] Catálogo de módulos (ejecute 31_catalogo_modulos.sql): {_ex_cat}")
 
+        # Perfiles de usuario (script 69): rol + módulos precargados al crear un usuario
+        PERFILES_RESPALDO = [
+            {"codigo": "ADMINISTRADOR", "nombre": "Administrador", "rol": "ADMIN",
+             "modulos_pc": [c for c, _ in MODULOS_PC_LISTA if c != "PC_DESARROLLADOR"], "modulos_rf": [c for c, _ in MODULOS_RF_LISTA]},
+            {"codigo": "SUPERVISOR", "nombre": "Supervisor de bodega", "rol": "SUPERVISOR",
+             "modulos_pc": [c for c, _ in MODULOS_PC_LISTA if c not in ("PC_DESARROLLADOR", "PC_ADMIN_MAESTRA")],
+             "modulos_rf": [c for c, _ in MODULOS_RF_LISTA]},
+            {"codigo": "OPERADOR_RF", "nombre": "Operador celular (todo el celular)", "rol": "OPERADOR RF",
+             "modulos_pc": [], "modulos_rf": [c for c, _ in MODULOS_RF_LISTA]},
+        ]
+        perfiles_db = []
+
+        def cargar_perfiles():
+            nonlocal perfiles_db
+            try:
+                perfiles_db = (supabase.table("wms_perfiles_usuario").select("*").eq("activo", True)
+                               .order("orden").execute().data or [])
+            except Exception as ex_pf:
+                print(f"[WARN] Perfiles de usuario (ejecute 69_perfiles_usuario.sql): {ex_pf}")
+                perfiles_db = []
+            if not perfiles_db:
+                perfiles_db = list(PERFILES_RESPALDO)
+
+        cargar_perfiles()
+
         # --- 3. VARIABLES DE ESTADO ---
         lock_datos = threading.Lock()
         usuarios_db = []
@@ -163,12 +188,24 @@ class MaestraModulo:
             label="Rol Principal", width=185, value="OPERADOR RF",
             options=[
                 opt_w("ADMIN", "ADMIN (Acceso Total)"),
+                opt_w("ADMIN OPERACIONES", "JEFE DE OPERACIONES (Admin.)"),
                 opt_w("SUPERVISOR", "SUPERVISOR BODEGA"),
                 opt_w("OPERADOR RF", "OPERADOR RF (Piso)"),
                 opt_w("AUDITOR", "AUDITOR INVENTARIO"),
                 opt_w("CONSULTA", "SOLO CONSULTA"),
             ],
         )
+        dd_usr_perfil = dropdown_dark(
+            label="Perfil (precarga rol y módulos)", width=300, value=None,
+            options=[opt_w(str(pf.get("codigo")), str(pf.get("nombre") or pf.get("codigo"))) for pf in perfiles_db],
+        )
+        dd_usr_perfil_extra = dropdown_dark(
+            label="Sumar otro perfil", width=250, value=None,
+            options=[opt_w(str(pf.get("codigo")), str(pf.get("nombre") or pf.get("codigo"))) for pf in perfiles_db],
+        )
+        perfiles_elegidos = []          # códigos de perfil del usuario en el formulario (1 o más)
+        lbl_perfil_desc = ft.Text("Elija un perfil: se marcan solos el rol y los módulos (puede ajustarlos antes de guardar).",
+                                  size=11, color=TEXT_MUTED, italic=True)
         dd_usr_bodega = dropdown_dark(
             label="Bodega Asignada", width=185, value="Bodega Santiago",
             options=[
@@ -226,6 +263,107 @@ class MaestraModulo:
                 dd_usr_rol.value = "SUPERVISOR"
             page.update()
 
+        def _perfil(codigo: str) -> dict:
+            return next((pf for pf in perfiles_db if str(pf.get("codigo")) == str(codigo or "")), {})
+
+        def _nivel_rol(rol: str) -> int:
+            r = str(rol or "").upper()
+            if r == "ADMIN":
+                return 6
+            if "ADMIN" in r:
+                return 5
+            if "SUPERV" in r:
+                return 4
+            if "AUDITOR" in r:
+                return 3
+            if "OPERADOR" in r:
+                return 2
+            return 1
+
+        def _fijar_rol(rol_pf: str):
+            rol_pf = str(rol_pf or "OPERADOR RF").strip().upper()
+            if rol_pf not in [o.key for o in dd_usr_rol.options]:
+                dd_usr_rol.options.append(opt_w(rol_pf, rol_pf))
+            dd_usr_rol.value = rol_pf
+
+        def _describir_perfiles():
+            nombres = [str(_perfil(c).get("nombre") or c) for c in perfiles_elegidos]
+            n_pc = sum(1 for chk in checks_pc.values() if chk.value)
+            n_rf = sum(1 for chk in checks_rf.values() if chk.value)
+            lbl_perfil_desc.value = (" + ".join(nombres) + f" · rol {dd_usr_rol.value} · {n_pc} módulos PC · "
+                                     f"{n_rf} módulos celular. Puede ajustarlos antes de guardar.") if nombres else \
+                "Elija un perfil: se marcan solos el rol y los módulos (puede ajustarlos antes de guardar)."
+
+        def aplicar_perfil(e=None, actualizar: bool = True):
+            """Perfil principal: reemplaza rol y módulos por los del perfil."""
+            pf = _perfil(dd_usr_perfil.value)
+            if not pf:
+                return
+            perfiles_elegidos[:] = [str(pf.get("codigo"))]
+            pc_pf = {str(x).upper() for x in (pf.get("modulos_pc") or [])}
+            rf_pf = {str(x).upper() for x in (pf.get("modulos_rf") or [])}
+            for k, chk in checks_pc.items():
+                chk.value = k in pc_pf
+            for k, chk in checks_rf.items():
+                chk.value = k in rf_pf
+            _fijar_rol(pf.get("rol"))
+            _describir_perfiles()
+            if actualizar:
+                page.update()
+
+        def sumar_perfil(e=None):
+            """Suma los módulos de otro perfil sin desmarcar los que ya tiene; queda el rol más alto."""
+            pf = _perfil(dd_usr_perfil_extra.value)
+            dd_usr_perfil_extra.value = None
+            if not pf:
+                page.update()
+                return
+            if not perfiles_elegidos:
+                dd_usr_perfil.value = pf.get("codigo")
+                aplicar_perfil()
+                return
+            if str(pf.get("codigo")) not in perfiles_elegidos:
+                perfiles_elegidos.append(str(pf.get("codigo")))
+            for k in pf.get("modulos_pc") or []:
+                if str(k).upper() in checks_pc:
+                    checks_pc[str(k).upper()].value = True
+            for k in pf.get("modulos_rf") or []:
+                if str(k).upper() in checks_rf:
+                    checks_rf[str(k).upper()].value = True
+            if _nivel_rol(pf.get("rol")) > _nivel_rol(dd_usr_rol.value):
+                _fijar_rol(pf.get("rol"))
+            _describir_perfiles()
+            page.update()
+
+        for _dd, _fn in ((dd_usr_perfil, aplicar_perfil), (dd_usr_perfil_extra, sumar_perfil)):
+            _dd.on_change = _fn
+            try:
+                _dd.on_select = _fn      # Flet nuevo: el Dropdown avisa con on_select
+            except Exception:
+                pass
+
+        def guardar_modulos_en_perfil(e=None):
+            pf = _perfil(dd_usr_perfil.value)
+            if not pf:
+                notificar("Elija primero el perfil que quiere actualizar.", "#D97706")
+                return
+            if len(perfiles_elegidos) > 1:
+                notificar("Hay perfiles sumados: deje un solo perfil para guardar sus módulos.", "#D97706")
+                return
+            pc_sel = [k for k, chk in checks_pc.items() if chk.value and k != "PC_DESARROLLADOR"]
+            rf_sel = [k for k, chk in checks_rf.items() if chk.value]
+            datos_pf = {"modulos_pc": pc_sel, "modulos_rf": rf_sel, "rol": (dd_usr_rol.value or pf.get("rol")),
+                        "actualizado_en": datetime.now().isoformat(),
+                        "actualizado_por": str(getattr(page, "usuario_actual", "") or "")}
+            try:
+                supabase.table("wms_perfiles_usuario").update(datos_pf).eq("codigo", pf["codigo"]).execute()
+            except Exception as ex_pf:
+                notificar(f"No se pudo guardar el perfil (¿ejecutó el script 69?): {ex_pf}", "#B91C1C")
+                return
+            cargar_perfiles()
+            notificar(f"Perfil «{pf.get('nombre')}» actualizado: {len(pc_sel)} módulos PC y {len(rf_sel)} de celular. "
+                      "Los usuarios ya creados no cambian.", "#047857")
+
         def permisos_rf_vigentes(rf_lista: list) -> list:
             """Si el usuario todavía tiene permisos antiguos (RF_PICKING, RF_INVENTARIO...), se muestran como
             los módulos nuevos equivalentes. Al guardar quedan solo los nuevos."""
@@ -273,8 +411,12 @@ class MaestraModulo:
             dd_usr_rol.value = "OPERADOR RF"
             dd_usr_bodega.value = "Bodega Santiago"
             sw_usr_activo.value = True
-            for c in checks_pc.values(): c.value = True
-            for c in checks_rf.values(): c.value = True
+            dd_usr_perfil.value = None
+            dd_usr_perfil_extra.value = None
+            perfiles_elegidos.clear()
+            lbl_perfil_desc.value = "Elija un perfil: se marcan solos el rol y los módulos (puede ajustarlos antes de guardar)."
+            for c in checks_pc.values(): c.value = False
+            for c in checks_rf.values(): c.value = False
             page.update()
 
         def cargar_usuario_en_formulario(row_u: dict):
@@ -301,6 +443,13 @@ class MaestraModulo:
             dd_usr_bodega.value = bodega_actual
 
             sw_usr_activo.value = bool(row_u.get("activo", True))
+            codigos_u = [c.strip() for c in str(row_u.get("perfil") or "").split("+") if _perfil(c.strip())]
+            perfiles_elegidos[:] = codigos_u
+            dd_usr_perfil.value = codigos_u[0] if codigos_u else None
+            dd_usr_perfil_extra.value = None
+            lbl_perfil_desc.value = ("Perfil: " + " + ".join(str(_perfil(c).get("nombre")) for c in codigos_u)
+                                     + ". Los módulos son los guardados del usuario.") if codigos_u else \
+                "Usuario sin perfil asignado: puede elegir uno para precargar módulos."
 
             pc_list, rf_list = obtener_permisos_usuario(row_u)
             for k, chk in checks_pc.items():
@@ -427,6 +576,9 @@ class MaestraModulo:
 
             pc_sel = [k for k, chk in checks_pc.items() if chk.value]
             rf_sel = [k for k, chk in checks_rf.items() if chk.value]
+            if not pc_sel and not rf_sel and "ADMIN" not in u_rol.upper():
+                notificar("Elija un perfil o marque al menos un módulo.", "#D97706")
+                return
             # Compatibilidad: los celulares con la app anterior solo entienden los permisos antiguos
             # (RF_...). Se guardan junto a los nuevos; la app nueva usa solo los APP_ e ignora estos.
             LEGADO_RF = {
@@ -466,6 +618,8 @@ class MaestraModulo:
             # Columnas text[] en Supabase: se envían como lista (antes el texto "A,B" fallaba en silencio)
             payload_ext["modulos_pc"] = pc_sel
             payload_ext["modulos_rf"] = rf_sel
+            if perfiles_elegidos and (not columnas_reales_usuarios or "perfil" in columnas_reales_usuarios):
+                payload_ext["perfil"] = "+".join(perfiles_elegidos)
 
             guardado_ok = False
             try:
@@ -1079,6 +1233,8 @@ class MaestraModulo:
                                             txt_usr_login,
                                             txt_usr_nombre,
                                             txt_usr_pass,
+                                            dd_usr_perfil,
+                                            dd_usr_perfil_extra,
                                             dd_usr_rol,
                                             dd_usr_bodega,
                                             sw_usr_activo,
@@ -1137,9 +1293,8 @@ class MaestraModulo:
                                         [
                                             boton_primario("GUARDAR USUARIO Y PERMISOS", ft.Icons.SAVE_ROUNDED, guardar_usuario_wms, "#047857", height_val=34),
                                             boton_primario("NUEVO / LIMPIAR", ft.Icons.PERSON_ADD_ALT_1_ROUNDED, limpiar_formulario_usuario, "#475569", height_val=34),
-                                            boton_primario("PERFIL ADMIN TOTAL", ft.Icons.SECURITY_ROUNDED, lambda e: aplicar_preset_permisos("ADMIN"), ACCENT_PURPLE, height_val=30),
-                                            boton_primario("PERFIL SOLO CELULAR RF", ft.Icons.SMARTPHONE_ROUNDED, lambda e: aplicar_preset_permisos("OPERADOR_RF"), ACCENT_BLUE, height_val=30),
-                                            boton_primario("PERFIL SUPERVISOR", ft.Icons.SUPERVISOR_ACCOUNT_ROUNDED, lambda e: aplicar_preset_permisos("SUPERVISOR"), ACCENT_TEAL, height_val=30),
+                                            boton_primario("GUARDAR MÓDULOS EN EL PERFIL", ft.Icons.BOOKMARK_ADD_OUTLINED, guardar_modulos_en_perfil, ACCENT_PURPLE, height_val=30),
+                                            lbl_perfil_desc,
                                         ],
                                         spacing=8,
                                         wrap=True,

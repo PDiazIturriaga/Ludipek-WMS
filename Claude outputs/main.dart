@@ -186,7 +186,7 @@ const bool kDescontarStockAlPickear = true;
 
 /// Versión de esta app (AAAA.MM.DD). Debe ser >= wms_config.version_minima_rf (script 12);
 /// si no, la app pide recargar para que nadie trabaje con una versión antigua.
-const String kVersionApp = '2026.11.26.1';
+const String kVersionApp = '2026.11.27.2';
 
 /// Devuelve la versión mínima exigida por el servidor, o null si no se pudo consultar.
 Future<String?> versionMinimaServidor() async {
@@ -2662,6 +2662,45 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     final ocupadasRojo = registros.where((r) => (r as Map)['resultado_auditoria'].toString().startsWith('OCUPADA')).length;
     final sinRevisar = registros.where((r) => (r as Map)['resultado_auditoria'] == 'SIN_REVISAR').length;
 
+    // Resumen tipo tabla dinámica: resultado de la auditoría x tipo de ubicación
+    String tipoUbic(String u) {
+      final c = u.toUpperCase().trim();
+      if (RegExp(r'^(MK|ME|BE)-\d{2}-\d{2}$').hasMatch(c) || c.startsWith('ZONA-')) return 'ARENA';
+      if (RegExp(r'^[A-Z]-\d{2}-01$').hasMatch(c)) return 'PICKING';
+      return 'RESERVA';
+    }
+    String grupoRes(String r) =>
+        r == 'CONFIRMADA_VACIA' ? 'OK' : (r.startsWith('OCUPADA') ? 'DESCUADRE' : 'SIN_REVISAR');
+    const tiposUbic = ['PICKING', 'RESERVA', 'ARENA'];
+    const gruposRes = ['OK', 'DESCUADRE', 'SIN_REVISAR'];
+    final cuenta = <String, int>{};
+    for (final raw in registros) {
+      final r = raw as Map;
+      final k = '${grupoRes(r['resultado_auditoria'].toString())}|${tipoUbic(r['codigo_ubicacion'].toString())}';
+      cuenta[k] = (cuenta[k] ?? 0) + 1;
+    }
+    int nRes(String g, String t) => cuenta['$g|$t'] ?? 0;
+    int totRes(String g) => tiposUbic.fold(0, (a, t) => a + nRes(g, t));
+    int totTipo(String t) => gruposRes.fold(0, (a, g) => a + nRes(g, t));
+    final revisadas = totRes('OK') + totRes('DESCUADRE');
+    String pctDe(int a, int b) => b == 0 ? '-' : '${(a * 100 / b).round()}%';
+    List<String> filaRes(String nombre, String g, {bool conPct = true}) => [
+          nombre,
+          for (final t in tiposUbic) '${nRes(g, t)}',
+          '${totRes(g)}',
+          conPct ? pctDe(totRes(g), revisadas) : '-',
+        ];
+    final filasResumen = <List<String>>[
+      filaRes('Ubi OK (vacía confirmada)', 'OK'),
+      filaRes('Ubi con descuadre (ocupada sin registro)', 'DESCUADRE'),
+      filaRes('Sin revisar', 'SIN_REVISAR', conPct: false),
+      ['Ubi totales', for (final t in tiposUbic) '${totTipo(t)}', '${registros.length}', ''],
+    ];
+    final revReserva = nRes('OK', 'RESERVA') + nRes('DESCUADRE', 'RESERVA');
+    final notaResumen = 'Revisadas: $revisadas de ${registros.length}. '
+        'Descuadre en reserva: ${nRes('DESCUADRE', 'RESERVA')} de $revReserva revisadas (${pctDe(nRes('DESCUADRE', 'RESERVA'), revReserva)}). '
+        'Picking con producto sin registro: ${nRes('DESCUADRE', 'PICKING')} (revisar bajadas a picking no escaneadas).';
+
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -2697,6 +2736,34 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
               ),
             ),
             pw.SizedBox(height: 14),
+            pw.Text('RESUMEN DE LA AUDITORÍA', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11, color: PdfColor.fromHex('#0F172A'))),
+            pw.SizedBox(height: 6),
+            pw.TableHelper.fromTextArray(
+              headers: ['Resultado', 'Picking (nivel 01)', 'Reserva', 'Arena / zonas', 'Total', '% s/ revisadas'],
+              data: filasResumen,
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 9),
+              headerDecoration: pw.BoxDecoration(color: PdfColor.fromHex('#0F172A')),
+              cellStyle: const pw.TextStyle(fontSize: 9.5),
+              cellAlignments: {
+                1: pw.Alignment.centerRight, 2: pw.Alignment.centerRight, 3: pw.Alignment.centerRight,
+                4: pw.Alignment.centerRight, 5: pw.Alignment.centerRight,
+              },
+              columnWidths: {
+                0: const pw.FlexColumnWidth(2.8), 1: const pw.FlexColumnWidth(1.2), 2: const pw.FlexColumnWidth(1),
+                3: const pw.FlexColumnWidth(1.1), 4: const pw.FlexColumnWidth(0.8), 5: const pw.FlexColumnWidth(1.1),
+              },
+              cellDecoration: (index, data, rowNum) {
+                if (rowNum == 2) return pw.BoxDecoration(color: PdfColor.fromHex('#FEE2E2'));
+                if (rowNum == 1) return pw.BoxDecoration(color: PdfColor.fromHex('#DCFCE7'));
+                if (rowNum == 4) return pw.BoxDecoration(color: PdfColor.fromHex('#E2E8F0'));
+                return const pw.BoxDecoration();
+              },
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text(notaResumen, style: const pw.TextStyle(fontSize: 8.5, color: PdfColors.grey800)),
+            pw.SizedBox(height: 14),
+            pw.Text('DETALLE POR UBICACIÓN', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11, color: PdfColor.fromHex('#0F172A'))),
+            pw.SizedBox(height: 6),
             pw.TableHelper.fromTextArray(
               headers: ['Pasillo', 'Ubicación', 'Estado Sistema', 'Resultado Auditoría / Detalle', 'Auditor'],
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 9),
@@ -3119,15 +3186,28 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         _txtSkuCiclicoDirigido.text = skuBuscar;
       }
 
-      final res = await supabase
-          .from('bodega_inventario_ubicacion')
-          .select()
-          .eq('sku', skuBuscar)
-          .order('codigo_ubicacion', ascending: true);
-
-      final nuevasFilas = List< Map<String, dynamic> >.from(res)
-          .where((fila) => _perteneceABodegaActiva(fila))
-          .toList();
+      // Transversal: ubicaciones + andén de recepción (script 65). Lo que espera carga de camión no se cuenta.
+      List< Map<String, dynamic> > nuevasFilas;
+      try {
+        final dynamic resT = await supabase.rpc('wms_ciclico_sku_ubicaciones', params: {
+          'p_bodega': bodegaActiva,
+          'p_sku': skuBuscar,
+        });
+        nuevasFilas = List<dynamic>.from((resT as List?) ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } on PostgrestException catch (e) {
+        if (!(e.code == 'PGRST202' || e.message.contains('wms_ciclico_sku_ubicaciones'))) rethrow;
+        // Sin el script 65: solo ubicaciones, como antes
+        final res = await supabase
+            .from('bodega_inventario_ubicacion')
+            .select()
+            .eq('sku', skuBuscar)
+            .order('codigo_ubicacion', ascending: true);
+        nuevasFilas = List< Map<String, dynamic> >.from(res)
+            .where((fila) => _perteneceABodegaActiva(fila))
+            .toList();
+      }
 
       for (final fila in nuevasFilas) {
         final int idReg = (fila['id'] as num).toInt();
@@ -3146,7 +3226,7 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       });
 
       if (nuevasFilas.isEmpty) {
-        _notificar('El SKU $skuBuscar no registra ubicaciones con stock en $bodegaActiva.', color: Colors.orange);
+        _notificar('El SKU $skuBuscar no registra stock en ubicaciones ni en el andén de recepción en $bodegaActiva.', color: Colors.orange);
       }
     } catch (e) {
       _notificar('Error buscando ubicaciones del SKU: ${_mensajeError(e)}', color: Colors.red);
@@ -3193,6 +3273,9 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                 children: [
                   pw.Text('Auditor: $auditorStr', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
                   pw.Text('Total Ubicaciones: ${payload.length}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+                  for (final o in ['UBICACION', 'ANDEN'])
+                    pw.Text('${_etiquetaOrigenCiclico(o)}: ${payload.where((r) => (r['origen'] ?? 'UBICACION') == o).fold<int>(0, (a, r) => a + ((r['unidades_sistema'] as num?)?.toInt() ?? 0))} UN',
+                        style: const pw.TextStyle(fontSize: 10)),
                   pw.Text('Conformes (OK): $cantOk', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10, color: PdfColor.fromHex('#047857'))),
                   pw.Text('Incidencias: $cantInc', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10, color: PdfColor.fromHex('#DC2626'))),
                 ],
@@ -3200,12 +3283,14 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
             ),
             pw.SizedBox(height: 14),
             pw.TableHelper.fromTextArray(
-              headers: ['Ubicación', 'SKU', 'LPN', 'Lote', 'Vencimiento', 'Cajas Sist.', 'Unid. Sist.', 'Resultado Auditoría'],
+              headers: ['Origen', 'Ubicación', 'Referencia', 'SKU', 'LPN', 'Lote', 'Vencimiento', 'Cajas Sist.', 'Unid. Sist.', 'Resultado Auditoría'],
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 9),
               headerDecoration: pw.BoxDecoration(color: PdfColor.fromHex('#5B21B6')),
               cellStyle: const pw.TextStyle(fontSize: 9),
               data: payload.map((r) => [
+                _etiquetaOrigenCiclico((r['origen'] ?? 'UBICACION').toString()),
                 r['codigo_ubicacion'].toString(),
+                (r['referencia'] ?? '-').toString(),
                 r['sku'].toString(),
                 (r['lpn'] ?? '-').toString(),
                 (r['lote'] ?? 'S/L').toString(),
@@ -3247,6 +3332,8 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
         'lote_auditoria': loteId,
         'sku': (item['sku'] ?? _skuDirigidoActivo).toString().toUpperCase(),
         'codigo_ubicacion': (item['codigo_ubicacion'] ?? '').toString().toUpperCase(),
+        'origen': (item['origen'] ?? 'UBICACION').toString(),
+        'referencia': item['referencia']?.toString(),
         'lpn': item['lpn']?.toString(),
         'lote': (item['lote'] ?? 'S/L').toString(),
         'fecha_vencimiento_cl': item['fecha_vencimiento_cl']?.toString(),
@@ -3262,12 +3349,22 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
       try {
         await supabase.from('auditoria_ciclico_sku').insert(payload);
       } catch (_) {
-        final fallbackSinBod = payload.map((e) {
+        // Sin el script 65 la tabla no tiene origen/referencia; versiones muy antiguas, tampoco bodega
+        final sinOrigen = payload.map((e) {
           final m = Map<String, dynamic>.from(e);
-          m.remove('bodega');
+          m.remove('origen');
+          m.remove('referencia');
           return m;
         }).toList();
-        await supabase.from('auditoria_ciclico_sku').insert(fallbackSinBod);
+        try {
+          await supabase.from('auditoria_ciclico_sku').insert(sinOrigen);
+        } catch (_) {
+          await supabase.from('auditoria_ciclico_sku').insert(sinOrigen.map((e) {
+            final m = Map<String, dynamic>.from(e);
+            m.remove('bodega');
+            return m;
+          }).toList());
+        }
       }
     } catch (e) {
       debugPrint('Aviso enviando auditoría de SKU: $e');
@@ -3313,10 +3410,12 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
               await _generarYDescargarExcelNativo(
                 nombreHoja: 'Ciclico SKU',
                 nombreArchivo: 'Acta_Ciclico_$loteId.xlsx',
-                cabeceras: ['LOTE_ACTA', 'UBICACION', 'SKU', 'LPN', 'LOTE', 'VENCIMIENTO', 'CAJAS_SISTEMA', 'UNIDADES_SISTEMA', 'ESTADO_AUDITORIA', 'AUDITOR', 'FECHA'],
+                cabeceras: ['LOTE_ACTA', 'ORIGEN', 'UBICACION', 'REFERENCIA', 'SKU', 'LPN', 'LOTE', 'VENCIMIENTO', 'CAJAS_SISTEMA', 'UNIDADES_SISTEMA', 'ESTADO_AUDITORIA', 'AUDITOR', 'FECHA'],
                 filas: payload.map((r) => [
                   loteId,
+                  _etiquetaOrigenCiclico((r['origen'] ?? 'UBICACION').toString()),
                   r['codigo_ubicacion'].toString(),
+                  (r['referencia'] ?? '-').toString(),
                   r['sku'].toString(),
                   (r['lpn'] ?? '-').toString(),
                   (r['lote'] ?? 'S/L').toString(),
@@ -3364,8 +3463,26 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
     );
   }
 
+  String _etiquetaOrigenCiclico(String origen) {
+    switch (origen) {
+      case 'ANDEN':
+        return 'Andén recepción';
+      case 'DESPACHO':
+        return 'Despacho';
+      default:
+        return 'Ubicación';
+    }
+  }
+
   Widget _construirVistaCiclicoPorSku() {
     final totalPosiciones = _ubicacionesSkuDirigido.length;
+    // Unidades del sistema por origen (vista transversal del SKU)
+    final Map<String, int> unPorOrigen = {'UBICACION': 0, 'ANDEN': 0};
+    for (final it in _ubicacionesSkuDirigido) {
+      final o = ((it as Map)['origen'] ?? 'UBICACION').toString();
+      unPorOrigen[o] = (unPorOrigen[o] ?? 0) + ((it['cantidad_unidades'] as num?)?.toInt() ?? 0);
+    }
+    final unTotal = unPorOrigen.values.fold<int>(0, (a, b) => a + b);
     final totalConformes = _estadoAuditoriaPorId.values.where((v) => v == 'CONFORME').length;
     final totalIncidencias = _estadoAuditoriaPorId.values.where((v) => v == 'INCIDENCIA').length;
 
@@ -3480,6 +3597,20 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                     ],
                   ),
                 ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                  decoration: BoxDecoration(color: const Color(0xFFF5F3FF), borderRadius: BorderRadius.circular(6)),
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 4,
+                    children: [
+                      Text('TOTAL SKU: $unTotal UN', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: Color(0xFF5B21B6))),
+                      Text('Ubicaciones: ${unPorOrigen['UBICACION']}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                      Text('Andén: ${unPorOrigen['ANDEN']}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFB45309))),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 10),
                 ..._ubicacionesSkuDirigido.map((item) {
                   final int idReg = (item['id'] as num).toInt();
@@ -3498,6 +3629,10 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                   }
 
                   final vencStr = normalizarFechaSql(item['fecha_vencimiento_cl']?.toString()) ?? 'S/F';
+                  final String origenItem = (item['origen'] ?? 'UBICACION').toString();
+                  final String prefijoItem = origenItem == 'DESPACHO' ? 'DESPACHO' : 'RACK';
+                  final String? referenciaItem =
+                      (item['referencia'] ?? '').toString().trim().isEmpty ? null : item['referencia'].toString();
 
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
@@ -3534,9 +3669,21 @@ class _TerminalRfScreenState extends State<TerminalRfScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'RACK: ${item['codigo_ubicacion']} | SKU: ${item['sku']}',
-                                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Color(0xFF0F172A)),
+                                    origenItem == 'ANDEN'
+                                        ? 'ANDÉN RECEPCIÓN | SKU: ${item['sku']}'
+                                        : '$prefijoItem: ${item['codigo_ubicacion']} | SKU: ${item['sku']}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 15,
+                                      color: origenItem == 'ANDEN'
+                                          ? const Color(0xFFB45309)
+                                          : (origenItem == 'DESPACHO' ? const Color(0xFF0369A1) : const Color(0xFF0F172A)),
+                                    ),
                                   ),
+                                  if (referenciaItem != null) ...[
+                                    const SizedBox(height: 2),
+                                    Text(referenciaItem, style: const TextStyle(fontSize: 11, color: Color(0xFF475569), fontStyle: FontStyle.italic)),
+                                  ],
                                   const SizedBox(height: 2),
                                   Text(
                                     'LPN: ${item['lpn'] ?? 'S/LPN'} | Lote: ${item['lote'] ?? 'S/L'} | Venc: $vencStr',

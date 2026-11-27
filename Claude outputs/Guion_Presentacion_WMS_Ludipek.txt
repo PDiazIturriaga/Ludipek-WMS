@@ -1,0 +1,531 @@
+GUION DE PRESENTACIÓN · AVANCE DEL WMS LUDIPEK
+Recepción, Almacenamiento y Reposición
+Noviembre 2026 · Duración estimada: 25 minutos + preguntas
+
+======================================================================
+IDEA CENTRAL (repetirla al inicio y al cierre)
+======================================================================
+"El dato se captura una sola vez, en el andén, y desde ahí sale todo
+lo demás: conciliación, actas, correos, ubicación y rotación FEFO."
+
+Cada diapositiva es una prueba de esa frase.
+
+Tiempos sugeridos:
+  Apertura ............................  2 min  (diapositivas 1-2)
+  Recepción ........................... 12 min  (diapositivas 3-12)
+  Almacenamiento y Reposición .........  5 min  (diapositivas 13-17)
+  Por qué el WMS ......................  3 min  (diapositivas 18-19)
+  Seguridad ...........................  1 min  (diapositiva 20)
+  Próximos pasos y cierre .............  2 min  (diapositivas 21-22)
+
+
+======================================================================
+1. PORTADA · Avance del WMS Ludipek
+======================================================================
+"Buenas tardes. Hoy les quiero mostrar cómo entra la mercadería a la
+bodega con el WMS: desde que NetSuite crea la orden de compra hasta que
+el pallet queda listo en el nivel de picking.
+
+Todo lo que van a ver son pantallas reales del sistema en uso. Para que
+no sea una explicación abstracta, lo voy a contar con un caso real: la
+OC 2141 de Kind Pet, que estamos recibiendo esta semana."
+
+
+======================================================================
+2. ALCANCE · Tres módulos del flujo de entrada
+======================================================================
+"El orden de la presentación sigue al pallet: entra por Recepción, se
+guarda en el rack en Almacenamiento y después se baja al picking en
+Reposición.
+
+Recepción es el foco de hoy, porque es el módulo más completo y el que
+más trabajo manual nos ahorra. Al final les muestro cómo está protegido
+el sistema, cómo vamos a medir lo que ganamos y los próximos pasos."
+
+
+======================================================================
+3. RECEPCIÓN · De la OC en NetSuite al pallet etiquetado en andén
+======================================================================
+"Recepción tiene cuatro momentos: planificar, recibir, controlar y
+cerrar. Antes del WMS, cada uno era un papel o un Excel distinto, y el
+mismo dato se escribía tres o cuatro veces. Hoy son un solo flujo con
+un solo dato.
+
+La OC 2141 trae 13.003 unidades en varios contenedores. Vamos a
+seguir uno de ellos de principio a fin.
+
+Un detalle importante: si llega mercadería sin OC o sin packing list,
+igual se puede recibir. Es lo que llamamos recepción ciega. La
+operación nunca se detiene por un problema administrativo; el WMS la
+deja lista para conciliar después."
+
+
+======================================================================
+4. LAS OC LLEGAN SOLAS DESDE NETSUITE
+======================================================================
+"Nadie digita la OC. El WMS la trae directamente desde NetSuite, con
+sus líneas, cantidades y unidades por caja.
+
+Además sabemos cuántos contenedores trae y qué dice el packing list de
+cada uno. En la OC 2141 se ven 7 contenedores, cuáles ya tienen PL
+cargado y cuáles están en recepción.
+
+Si un SKU no existe en nuestra maestra, el sistema lo trae solo desde
+NetSuite.
+
+Esto elimina el primer error clásico de bodega: recibir contra una OC
+mal copiada o desactualizada."
+
+
+======================================================================
+5. PANEL DE LLEGADAS
+======================================================================
+"Este panel junta lo físico con lo administrativo: qué llegó a la
+bodega y si ya está registrado en NetSuite.
+
+Cada 30 minutos revisa solo en NetSuite qué recepciones ya están
+cargadas. Así sabemos, sin preguntarle a nadie, qué falta registrar.
+
+Hoy marca 16 recepciones en el mes, 3 sin OC y 2 pendientes de cargar
+en NetSuite. Justamente esos son los casos que antes se perdían entre
+correos y planillas.
+
+Desde aquí también se agendan los contenedores que vienen y se define
+quién recibe el reporte automático de cada recepción."
+
+
+======================================================================
+6. EN EL CELULAR, PASO A PASO
+======================================================================
+"Así se ve para el operador en el andén.
+
+Primero elige la OC y el contenedor que está descargando. El número de
+contenedor o de guía es obligatorio: no hay recepciones anónimas. El
+sistema le muestra cuáles contenedores tienen PL y cuánto lleva
+recibido cada uno.
+
+Después escanea el producto. Puede escanear la unidad, el display o la
+caja master, y el WMS multiplica según lo que leyó. El operador no hace
+cálculos.
+
+Luego ingresa lote, vencimiento y el dictamen de calidad: aprobado,
+rechazado o en cuarentena.
+
+Un pallet puede llevar varios lotes y fechas, pero un solo SKU. Eso
+mantiene el orden en el rack y en el picking.
+
+Cuando termina el contenedor, un botón lo finaliza y dispara el
+reporte."
+
+
+======================================================================
+7. CADA PALLET NACE CON SU LPN
+======================================================================
+"El primer paso de cada pallet es pegarle un LPN preimpreso con su
+código. Cuando el pallet se cierra, el WMS imprime este cartel de 15 por
+10 con lo que trae: SKU, cajas, unidades, lote y vencimiento.
+
+Ejemplo real: el LPN-100777 tiene 30 cajas de 48 unidades, 1.440
+unidades, lote TE8H, vence el 7 de mayo de 2028.
+
+Desde este momento el pallet tiene identidad. Con ese código se
+almacena, se repone y se despacha. Si alguien pregunta dónde está un
+pallet o qué trae, la respuesta está en el código, no en la memoria de
+una persona.
+
+Cualquier cartel se puede reimprimir desde el PC."
+
+
+======================================================================
+8. CONCILIACIÓN EN VIVO  ← MOMENTO MÁS IMPORTANTE, IR MÁS LENTO
+======================================================================
+"Esto es lo que más valor tiene de todo el sistema.
+
+Mientras se descarga el contenedor, el WMS compara tres cosas por cada
+SKU: lo que pedimos en la OC, lo que el proveedor dice que mandó en el
+packing list y lo que realmente escaneamos en el andén. En logística se
+llama 3-way match.
+
+En la OC 2141 vamos en 81%: 10.590 de 13.003 unidades, en 120
+pallets. Los SKU en verde están validados; los demás dicen exactamente
+cuánto falta o cuánto sobra.
+
+¿Por qué importa? Antes, una diferencia se descubría días después,
+cuando ya no había cómo reclamar al proveedor. Ahora se ve en el andén,
+con el contenedor todavía abierto y el transportista presente."
+
+(Si hay conexión: mostrar esta pantalla en vivo en el sistema. Si no,
+basta con la diapositiva.)
+
+
+======================================================================
+9. HISTORIAL CON TRAZABILIDAD POR PALLET
+======================================================================
+"Todo lo recibido queda registrado pallet por pallet: fecha, hora,
+contenedor, lote, calidad y operador.
+
+Si alguien se equivoca, por ejemplo al escribir el número de
+contenedor, se marcan los pallets y se corrige aquí mismo. Esta semana
+nos pasó: un operador escribió el mismo contenedor con y sin guion, y
+lo unificamos desde esta pantalla.
+
+Lo importante: corregir no borra la historia. Queda registro de quién
+hizo el cambio, cuándo y qué valor tenía antes."
+
+
+======================================================================
+10. ACTAS Y RESUMEN EN UN CLIC
+======================================================================
+"Cuando una OC llega en varios contenedores, cada uno se informa con su
+acta parcial: lo que trajo ese contenedor, lo acumulado de la OC y lo
+que falta.
+
+En el ejemplo, el contenedor MSNU880758-1 trajo 1.560 unidades y la OC
+quedó en 81%, con 2.412 unidades pendientes.
+
+Al completar la OC sale el acta total, con las diferencias por SKU.
+Además está el resumen en Excel por fecha, vencimiento y SKU.
+
+Antes esto era armar un Excel a mano. Ahora es un clic, y el archivo
+lleva un nombre que cualquiera entiende: OC, PO y proveedor."
+
+
+======================================================================
+11. CORREO DE RECEPCIÓN, PARCIAL O TOTAL
+======================================================================
+"Al finalizar el contenedor en el celular, el correo sale solo a la
+lista de destinatarios. El asunto lleva la OC y la PO, para que
+cualquiera lo encuentre en su bandeja:
+
+  'Recepción parcial OC 2141 (PO1082) · contenedor MSNU880758-1
+   - Kind Pet Products Co.'
+
+El correo parcial muestra solo lo que entró en ese contenedor y el
+avance de la OC, para no saturar a nadie con información. El total va
+con el acta completa y las diferencias.
+
+Si llegan dos contenedores el mismo día, se informan por separado, sin
+mezclar el avance."
+
+
+======================================================================
+12. CIERRE: NETSUITE Y PASO A ALMACENAMIENTO
+======================================================================
+"La recepción termina en dos lugares.
+
+En NetSuite: hoy Marco ingresa las unidades con el reporte del WMS, y
+el panel marca cuándo la OC ya quedó cargada.
+
+En el andén: todos los pallets quedan en 'Andén recepción', esperando
+ser almacenados. Si un pallet lleva más de 24 horas ahí, el inicio del
+WMS lo avisa.
+
+Y ese aviso nos lleva al siguiente módulo."
+
+
+======================================================================
+13. ALMACENAMIENTO · Del andén al rack en dos lecturas
+======================================================================
+"Almacenar es simple a propósito: dos lecturas.
+
+Primero el operador escanea el pallet. El WMS lo valida y le muestra lo
+que trae y de dónde viene. Por ejemplo, el LPN-100862: 325 cajas, 1.950
+unidades, lote 07, que viene del andén.
+
+Después escanea la ubicación y confirma. Si la ubicación no existe o ya
+está ocupada, el sistema avisa. Si el pallet viene dañado, se envía a
+merma desde la misma pantalla.
+
+Cada movimiento queda en el kardex con usuario y hora."
+
+
+======================================================================
+14. MAPA DE RACKS
+======================================================================
+"Desde el PC vemos dónde está cada pallet.
+
+Arriba, los indicadores del día: hoy hay 419 pallets en racks, con 45%
+de ocupación, y 474 pallets recibidos esperando ser ubicados. Ese
+último número es nuestra tarea pendiente más clara, y el WMS nos la
+muestra sin tener que salir a contar.
+
+Se puede filtrar por zona o por rack, buscar un SKU, un lote o un LPN,
+exportar a Excel y reimprimir la etiqueta de cualquier pallet."
+
+
+======================================================================
+15. GEMELO DIGITAL 3D
+======================================================================
+"Esta es la bodega dibujada con los datos reales del WMS: cada rack,
+cada nivel y cada pallet, más las arenas y la zona de merma con su
+capacidad.
+
+Sirve para ver de un vistazo dónde hay espacio y para explicar la
+bodega a quien no la conoce, por ejemplo en una auditoría o a una
+persona nueva."
+
+
+======================================================================
+16. REPOSICIÓN · Qué bajar a picking antes de que falte
+======================================================================
+"La reposición cuida dos cosas: que el picking no se quede sin stock y
+que salga primero lo que vence antes.
+
+El WMS lista los SKU sin stock o con poco stock en el nivel 1,
+ordenados por urgencia. Para cada uno indica qué pallet de reserva
+bajar, siempre el que vence primero, desde qué ubicación y a qué
+posición de picking. Por ejemplo, de H-08-02 a H-08-01.
+
+Además, el inicio avisa cuando el nivel 1 no alcanza para los pedidos
+pendientes."
+
+
+======================================================================
+17. MOVIMIENTO A PICKING CON SUGERENCIA FEFO
+======================================================================
+"En el celular, el operador no tiene que decidir qué pallet bajar: el
+WMS se lo indica.
+
+Para el SKU USA601, por ejemplo, sugiere el LPN-100432 en la ubicación
+H-01-04, que vence el 27 de mayo de 2028, y lo baja a la posición
+H-01-01.
+
+Si ese pallet no está disponible, tiene el ranking de las siguientes
+opciones ordenadas por vencimiento.
+
+Así cumplimos FEFO sin depender de la memoria ni del criterio de cada
+operador."
+
+
+======================================================================
+18. POR QUÉ EL WMS · Papel o WMS: qué cambia en cada tarea
+======================================================================
+"Seguramente alguien se pregunta: ¿por qué no seguir con papel?
+
+Porque con papel cada cosa se hace dos veces: se anota y después se
+digita. Y los errores aparecen tarde, cuando el contenedor ya se fue.
+
+  · Contar lo recibido: antes se anotaba a mano y se volvía a digitar;
+    hoy se escanea y el WMS multiplica.
+  · Comparar con OC y PL: antes se cruzaban planillas al final del día;
+    hoy se ve en vivo, mientras se descarga.
+  · Acta y correo: antes se armaban a mano; hoy es un clic y el correo
+    sale solo.
+  · Encontrar un pallet: antes dependía de la memoria de alguien; hoy
+    se busca por LPN, SKU, lote o ubicación.
+  · Rotar por vencimiento: antes dependía de quién bajara el pallet; hoy
+    el WMS indica cuál vence primero.
+  · Saber quién hizo qué: antes había hojas que se perdían o no se
+    firmaban; hoy cada movimiento tiene usuario, hora y valor anterior."
+
+
+======================================================================
+19. CÓMO MEDIREMOS LO QUE GANAMOS
+======================================================================
+"No quiero que esto quede en una promesa. El WMS ya guarda la hora y el
+usuario de cada pallet recibido, almacenado y movido, así que podemos
+medir:
+
+  · Descarga: minutos por contenedor, del primer al último pallet
+    escaneado.
+  · Andén a rack: horas desde que se recibe el pallet hasta que queda
+    ubicado.
+  · Recepciones en línea: compras, comercial y finanzas ven al minuto
+    qué está llegando y su avance, sin esperar un correo al final del
+    día. Medimos cuánto antes se enteran.
+  · Llegada contra agenda: qué contenedores llegan en la fecha
+    agendada y cuánto se atrasan.
+  · Exactitud: diferencias contra el PL detectadas en el andén y no
+    después.
+  · Productividad: pallets recibidos y almacenados por operador y por
+    hora.
+
+Mi propuesta: medir durante dos semanas el proceso en papel como base de
+comparación, y en el próximo comité mostrar la diferencia con números
+reales."
+
+
+======================================================================
+20. SEGURIDAD · Seis controles activos hoy
+======================================================================
+"La seguridad está activa en tres capas.
+
+Acceso: cada persona entra con su usuario y una contraseña cifrada, y
+solo ve los módulos que tiene asignados, tanto en el PC como en el
+celular.
+
+Datos: sin una sesión verificada no se puede leer ni escribir nada. El
+stock solo cambia a través de funciones del WMS que validan cada
+operación; nadie lo puede editar directo en la base. Y ni siquiera el
+PC guarda la llave maestra de la base de datos.
+
+Trazabilidad: todo movimiento queda en un kardex que no se puede
+borrar, con el usuario real, más una auditoría con el antes y el
+después y un registro central de errores.
+
+Además, una versión antigua de la app no puede entrar, y los respaldos
+se descargan desde el PC.
+
+El siguiente nivel sería el doble factor para administradores: además
+de la contraseña, un código de 6 dígitos que aparece en su celular y
+cambia cada 30 segundos. Así, si alguien conoce la contraseña de un
+administrador, igual no puede entrar."
+
+
+======================================================================
+21. PRÓXIMOS PASOS
+======================================================================
+(No leer los seis. Mencionar los dos primeros y pedir una decisión.)
+
+"Estos son los próximos pasos:
+
+  1. Seguimiento de lo que viene: cada OC con sus packing lists y los
+     contenedores por entregar, en tránsito y recibidos.
+  2. Agendar subiendo el correo: el WMS lee los contenedores, fechas y
+     PL del correo del proveedor, sin digitarlos.
+  3. Tablero en línea: qué está llegando, para todas las áreas, con los
+     tiempos de descarga y de andén a rack.
+  4. Recepción automática en NetSuite, sin ingreso manual.
+  5. Almacenamiento dirigido: el WMS sugiere la ubicación al guardar
+     cada pallet.
+  6. Doble factor para administradores.
+
+Los que más impacto tienen son el seguimiento de PL y contenedores por
+llegar y el tablero en línea para todas las áreas. Me gustaría que hoy
+definamos cuál priorizamos."
+
+
+======================================================================
+22. GRACIAS
+======================================================================
+"Para cerrar: el dato se captura una sola vez, en el andén, y desde ahí
+sale todo lo demás. Eso es lo que hoy nos da el WMS.
+
+Muchas gracias. Quedo atento a sus preguntas y comentarios."
+
+
+######################################################################
+PREGUNTAS DIFÍCILES Y CÓMO RESPONDERLAS
+######################################################################
+
+----------------------------------------------------------------------
+¿Qué pasa si se cae internet?
+----------------------------------------------------------------------
+Respuesta corta:
+"El WMS trabaja en línea. Si se corta internet, el celular avisa 'Sin
+conexión' y no deja guardar a medias. Eso es a propósito: así nunca se
+duplica un movimiento ni se descuenta stock dos veces. Cuando vuelve la
+señal, el operador sigue desde donde estaba, y el pallet no pierde su
+identidad porque el LPN preimpreso ya está pegado."
+
+Si preguntan más:
+  · Si se cae solo internet de la bodega, los celulares pueden seguir
+    con datos móviles, porque se conectan directo a la base de datos.
+  · Si se cae solo el servidor del PC (Render), los celulares siguen
+    funcionando. Se pierde un rato la vista del PC, no la operación.
+  · Plan de contingencia propuesto: un router con chip 4G/5G de
+    respaldo para la bodega, y una planilla en papel de emergencia que
+    se ingresa al volver la conexión.
+
+No prometer: hoy la app no tiene modo sin conexión que guarde y
+sincronice después. Es una mejora posible, pero no existe todavía.
+
+----------------------------------------------------------------------
+¿Cuánto cuesta mantenerlo?
+----------------------------------------------------------------------
+Respuesta corta:
+"La infraestructura cuesta del orden de decenas de dólares al mes, no
+miles. El costo real es el tiempo de las personas que lo mantienen."
+
+Detalle:
+  · Supabase (base de datos): plan Pro desde USD 25 al mes por
+    organización, más el uso. Incluye respaldos diarios con 7 días de
+    retención.
+  · Render (servidor del PC): según la instancia, por ejemplo
+    USD 7 al mes (Starter) o USD 25 al mes (Standard).
+  · Hardware: celulares, impresoras de etiquetas y LPN preimpresos,
+    que se usarían igual con cualquier WMS.
+
+ANTES DE PRESENTAR: revisar la facturación real de Supabase y Render
+para dar la cifra exacta del plan contratado.
+
+Remate:
+"Un WMS comercial se cobra por licencia y por usuario, y las
+adaptaciones a nuestra operación (displays Feral, actas por
+contenedor, correo con OC y PO) se pagan aparte. Aquí esas mejoras se
+hacen en días."
+
+----------------------------------------------------------------------
+¿Quién lo soporta si tú no estás?
+----------------------------------------------------------------------
+Respuesta corta (honesta y con plan):
+"Hoy el conocimiento está concentrado en mí, y ese es un riesgo que hay
+que manejar. Pero el sistema no depende de mi memoria."
+
+Lo que ya existe:
+  · Todo el código está en un repositorio con historial de cada cambio.
+  · Cada cambio en la base de datos es un script numerado, documentado
+    y con su forma de revertirlo.
+  · Hay una guía de despliegue y una guía de respaldo y pruebas.
+  · El módulo Desarrollador muestra los errores agrupados, los tickets
+    de los usuarios y la salud del sistema.
+  · Los respaldos se descargan desde el PC.
+
+Lo que se propone:
+  1. Una segunda persona que sepa lo básico: publicar una versión,
+     revisar errores y restaurar un respaldo.
+  2. Que las cuentas de Supabase, Render, NetSuite y la tienda de la
+     app estén con correos de la empresa, no personales.
+  3. Un manual corto de "qué hacer si…".
+
+----------------------------------------------------------------------
+¿Cuándo se conecta solo con NetSuite?
+----------------------------------------------------------------------
+Respuesta corta:
+"Ya estamos conectados en una dirección: el WMS lee las OC directamente
+desde NetSuite y nadie las digita. Lo que falta es la vuelta: que la
+recepción se registre sola en NetSuite."
+
+Detalle:
+  · Hoy ya existe un paso intermedio: el WMS genera el archivo CSV de
+    Item Receipt listo para importar en NetSuite (Recepción > reportes,
+    y al cerrar la OC). Usarlo ya es un avance para Marco: importar en
+    vez de digitar.
+  · Para que sea automático, el administrador de NetSuite debe crear un
+    acceso con permiso para registrar recepciones. Eso no depende de
+    nosotros.
+
+Plan en tres etapas:
+  1. Usar el CSV desde ya.
+  2. Conexión automática con un botón "Enviar a NetSuite" que alguien
+     aprueba.
+  3. Envío automático al cerrar la OC.
+
+No dar fecha sin tener el permiso de NetSuite:
+"Con el acceso habilitado, propongo un piloto con una OC y luego
+extenderlo a todas."
+
+
+######################################################################
+CONSEJOS PARA EL DÍA
+######################################################################
+  · Demo en vivo, pero corta: solo la conciliación de la OC 2141. Si
+    falla internet, la diapositiva sirve de respaldo.
+  · Tres números memorizados: 81% de avance de la OC 2141, 120 pallets,
+    acta en un clic.
+  · En Recepción es fácil alargarse: ensayar una vez con cronómetro.
+  · Cerrar pidiendo una decisión (qué se prioriza), no solo con
+    "gracias".
+
+
+######################################################################
+CHECKLIST ANTES DE PRESENTAR
+######################################################################
+  [ ] Revisar la facturación real de Supabase y Render.
+  [ ] Confirmar que la OC 2141 sigue mostrando los mismos números
+      (si avanzó, actualizar el 81% y los 120 pallets).
+  [ ] Probar la conexión del PC de la sala y tener abierta la
+      conciliación de la OC 2141.
+  [ ] Subir el arreglo del Excel de recepción (vencimiento S/F) con
+      git add, commit y push.
+  [ ] Ensayar una vez completa con cronómetro.
