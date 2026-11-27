@@ -15,6 +15,13 @@ from datetime import date, datetime
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.axis import ChartLines
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.series import SeriesLabel
+from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.chart.text import RichText
+from openpyxl.drawing.line import LineProperties
+from openpyxl.drawing.text import CharacterProperties, Paragraph, ParagraphProperties
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -252,34 +259,66 @@ def _datos_generales(ws, fila, pares):
     return fila
 
 
-def _grafico_sku(ws_destino, ancla, ws_datos, col_cat, col_val, fila_ini, fila_fin, titulo, col_val2=None, titulo_2=None):
+def _grafico_sku(ws_destino, ancla, ws_datos, col_cat, col_val, fila_ini, fila_fin, titulo, col_val2=None, titulo_2=None,
+                 nombres=None):
+    """Barras horizontales por SKU: el SKU a la izquierda, el primero arriba y el valor al final de cada barra.
+    nombres = (serie 1, serie 2) para la leyenda (por defecto, los encabezados de la tabla)."""
     if fila_fin < fila_ini:
         return
+    n_skus = fila_fin - fila_ini + 1
     g = BarChart()
     g.type = "bar"
+    g.grouping = "clustered"
     g.style = 10
     g.title = titulo
-    g.y_axis.title = "Unidades"
+    # openpyxl 3.1 deja los ejes ocultos: sin esto el SKU solo se ve al pasar el cursor
+    g.x_axis.delete = False
+    g.y_axis.delete = False
+    g.x_axis.scaling.orientation = "maxMin"      # primer SKU de la tabla arriba
+    g.y_axis.crosses = "max"                     # eje de unidades abajo
+    g.x_axis.tickLblPos = "low"
+    g.x_axis.txPr = _texto_eje(900, negrita=True)
+    g.y_axis.txPr = _texto_eje(800)
     g.y_axis.numFmt = FMT_MILES
-    g.y_axis.majorGridlines = None
-    datos = Reference(ws_datos, min_col=col_val, min_row=fila_ini - 1, max_row=fila_fin)
-    g.add_data(datos, titles_from_data=True)
+    g.y_axis.majorGridlines = ChartLines()
+    g.y_axis.majorGridlines.spPr = GraphicalProperties(ln=LineProperties(solidFill="E3E8EE"))
+    g.y_axis.title = "Unidades"
+
+    g.add_data(Reference(ws_datos, min_col=col_val, min_row=fila_ini - 1, max_row=fila_fin), titles_from_data=True)
     if col_val2:
         g.add_data(Reference(ws_datos, min_col=col_val2, min_row=fila_ini - 1, max_row=fila_fin), titles_from_data=True)
     g.set_categories(Reference(ws_datos, min_col=col_cat, min_row=fila_ini, max_row=fila_fin))
-    g.series[0].graphicalProperties.solidFill = "2A78C2"
-    g.series[0].graphicalProperties.line.noFill = True
-    if col_val2 and len(g.series) > 1:
-        g.series[1].graphicalProperties.solidFill = "B8C7D6"
-        g.series[1].graphicalProperties.line.noFill = True
-    g.gapWidth = 60
-    g.height = max(7, 0.65 * (fila_fin - fila_ini + 1) + 3)
-    g.width = 24
+    colores = ["2A78C2", "B8C7D6"]
+    for i, s in enumerate(g.series):
+        s.graphicalProperties.solidFill = colores[i % 2]
+        s.graphicalProperties.line.noFill = True
+        if nombres and i < len(nombres) and nombres[i]:
+            s.tx = SeriesLabel(v=nombres[i])
+    # Valor al final de la barra principal (si no son demasiados SKU)
+    if n_skus <= 40:
+        s0 = g.series[0]
+        s0.dLbls = DataLabelList()
+        s0.dLbls.showVal = True
+        for campo in ("showSerName", "showCatName", "showLegendKey", "showPercent"):
+            setattr(s0.dLbls, campo, False)
+        s0.dLbls.position = "outEnd"
+        s0.dLbls.numFmt = FMT_MILES
+        s0.dLbls.txPr = _texto_eje(800, negrita=True)
+    g.gapWidth = 50
+    g.overlap = -5 if col_val2 else 0
+    g.height = max(7.5, (0.85 if col_val2 else 0.6) * n_skus + 3.5)
+    g.width = 26
     if col_val2:
-        g.legend.position = "b"
+        g.legend.position = "t"
     else:
         g.legend = None
     ws_destino.add_chart(g, ancla)
+
+
+def _texto_eje(tam=900, negrita=False):
+    """Texto de ejes y etiquetas del gráfico (tamaño en centésimas de punto)."""
+    cp = CharacterProperties(sz=tam, b=negrita, solidFill="334155")
+    return RichText(p=[Paragraph(pPr=ParagraphProperties(defRPr=cp), endParaRPr=cp)])
 
 
 # ----------------------------------------------------------------------------- recepción
@@ -682,7 +721,8 @@ def reporte_despacho(detalle: dict, ruta: str, emitido: datetime = None) -> str:
 
     fila += 2
     _seccion(ws, fila, "H", "4. UNIDADES DESPACHADAS POR SKU CONTRA EL PEDIDO")
-    _grafico_sku(ws, f"A{fila + 1}", wc, 1, 10, c0, cfin, "Despachado vs pedido por SKU", col_val2=11)
+    _grafico_sku(ws, f"A{fila + 1}", wc, 1, 10, c0, cfin, "Despachado vs pedido por SKU", col_val2=11,
+                 nombres=("Despachado", "Pedido"))
     _anchos(ws, [18, 26, 30, 30, 10, 13, 16, 13])
     wb.save(ruta)
     return ruta
