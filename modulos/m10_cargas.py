@@ -10,6 +10,8 @@ from dependencias import *
 # 1) OT por cargar: OT pickeadas (LISTA_PARA_CARGA) con sus pallets, cajas y fotos de la fecha.
 #    Ajustes antes de cargar: cambiar lote/fecha, mover cajas de pallet, reabrir a picking.
 #    Las fotos son un registro interno de Santiago (Concepción no las ve).
+#    Despachos de exportación (EXP-…) cerrados en Exportación caen aquí solos (script 67):
+#    se crea la carga con un clic o se agregan a una carga abierta.
 # 2) Cargas de camión: patente/contenedor, OT u OV ancladas y pallets/bultos 1/10, 2/10...
 #    Al cerrar la carga la OT sale de Santiago (EN_TRANSITO_CCP). Las OV solo quedan registradas.
 # =====================================================================
@@ -67,6 +69,7 @@ class CargasCamionModulo:
         self.kpis_adaptables = kpis_adaptables
         self.vista_actual = 0          # 0 = OT por cargar · 1 = cargas de camión
         self.ots = []                  # wms_ot_por_cargar
+        self.exps = []                 # wms_exp_por_cargar (despachos EXP cerrados esperando camión)
         self.ot = None                 # OT abierta en el detalle
         self.cajas = []                # wms_ot_cajas_detalle de la OT abierta
         self.sel_cajas = set()         # ids de cajas elegidas
@@ -81,7 +84,7 @@ class CargasCamionModulo:
         self.k_cerradas = ft.Text("0")
         self.k_cerradas_det = ft.Text("últimos 15 días", size=11, color=UI["texto_3"])
         fila_kpis = ft.ResponsiveRow([
-            ui_kpi(self.k_ots, "OT listas para carga", ft.Icons.INVENTORY_2_OUTLINED, UI["acento"], self.k_ots_det),
+            ui_kpi(self.k_ots, "Listas para carga (OT y EXP)", ft.Icons.INVENTORY_2_OUTLINED, UI["acento"], self.k_ots_det),
             ui_kpi(self.k_abiertas, "Cargas abiertas", ft.Icons.LOCAL_SHIPPING_OUTLINED, UI["primario"]),
             ui_kpi(self.k_por_subir, "Pallets / bultos por subir", ft.Icons.UPLOAD_ROUNDED, UI["alerta"]),
             ui_kpi(self.k_cerradas, "Cargas cerradas", ft.Icons.VERIFIED_ROUNDED, UI["exito"], self.k_cerradas_det),
@@ -96,7 +99,22 @@ class CargasCamionModulo:
             rows=[],
         )
         self.txt_vacio_ots = ft.Text("No hay OT pickeadas esperando camión.", size=12.5, color=UI["texto_2"], visible=False)
+        # ---------------- Despachos de exportación por cargar ----------------
+        self.tabla_exps = ft.DataTable(
+            heading_row_height=38, data_row_min_height=44, data_row_max_height=56,
+            columns=[ft.DataColumn(ft.Text(t, size=11.5, weight=ft.FontWeight.W_600, color=UI["texto_2"]), numeric=num)
+                     for t, num in [("Despacho", False), ("Destino", False), ("Referencia", False), ("Contenedor", False),
+                                    ("Pallets", True), ("Unidades", True), ("Peso bruto kg", True), ("m³", True),
+                                    ("Cerrado", False), ("En carga", False), ("", False)]],
+            rows=[],
+        )
+        self.txt_vacio_exps = ft.Text("No hay despachos de exportación cerrados esperando camión.", size=12.5,
+                                      color=UI["texto_2"], visible=False)
         self.sub_ots = ft.Column([
+            ui_tarjeta(ft.Column([ui_tabla(self.tabla_exps, 300), self.txt_vacio_exps], spacing=8, tight=True),
+                       titulo="Exportación cerrada, esperando camión",
+                       subtitulo="Cada despacho EXP-… que se cierra en Exportación aparece aquí. Cree la carga con un clic.",
+                       icono=getattr(ft.Icons, "FLIGHT_TAKEOFF_ROUNDED", ft.Icons.LOCAL_SHIPPING_OUTLINED)),
             ui_tarjeta(ft.Column([ui_tabla(self.tabla_ots, 420), self.txt_vacio_ots], spacing=8, tight=True),
                        titulo="OT pickeadas en Santiago, esperando camión",
                        subtitulo="Haga clic en una OT para ver sus cajas con foto y ajustarla antes de cargar",
@@ -200,7 +218,7 @@ class CargasCamionModulo:
             content=ft.Column([
                 ui_encabezado(
                     "Cargas de camión",
-                    "OT listas para carga, ajustes antes de cargar y camiones pallet por pallet",
+                    "OT y exportaciones listas para carga, ajustes antes de cargar y camiones pallet por pallet",
                     ft.Icons.LOCAL_SHIPPING_OUTLINED,
                     [ui_boton("Actualizar", ft.Icons.REFRESH_ROUNDED, lambda e: self.refrescar(), "secundario")],
                 ),
@@ -253,18 +271,26 @@ class CargasCamionModulo:
             self.ots = []
             self._notificar(f"No se pudieron leer las OT por cargar: {_error(ex)}", "#B91C1C")
         try:
+            self.exps = list(self._rpc("wms_exp_por_cargar", {"p_bodega": self._bodega()}) or [])
+        except Exception as ex:
+            self.exps = []
+            if "wms_exp_por_cargar" not in str(ex) and "PGRST202" not in str(ex):
+                self._notificar(f"No se pudieron leer las exportaciones por cargar: {_error(ex)}", "#B91C1C")
+        try:
             self.cargas = list(self._rpc("wms_cargas_lista", {"p_bodega": self._bodega(), "p_solo_abiertas": False,
                                                                "p_dias": 15}) or [])
         except Exception as ex:
             self.cargas = []
             self._notificar(f"No se pudieron leer las cargas: {_error(ex)}", "#B91C1C")
-        self.k_ots.value = str(len(self.ots))
-        self.k_ots_det.value = f"{sum(len(o.get('pallets') or []) for o in self.ots)} pallets en bodega"
+        self.k_ots.value = str(len(self.ots) + len(self.exps))
+        pallets_bodega = sum(len(o.get('pallets') or []) for o in self.ots) + sum(_n(x.get('pallets_por_cargar')) for x in self.exps)
+        self.k_ots_det.value = f"{len(self.ots)} OT · {len(self.exps)} EXP · {pallets_bodega} pallets en bodega"
         abiertas = [c for c in self.cargas if c.get("estado") == "ABIERTA"]
         self.k_abiertas.value = str(len(abiertas))
         self.k_por_subir.value = str(sum(_n(c.get("total")) - _n(c.get("cargados")) for c in abiertas))
         self.k_cerradas.value = str(sum(1 for c in self.cargas if c.get("estado") == "CERRADA"))
         self._pintar_ots()
+        self._pintar_exps()
         self._pintar_cargas()
 
     # ==================================================================
@@ -289,6 +315,103 @@ class CargasCamionModulo:
                 ]))
         self.tabla_ots.rows = filas
         self.txt_vacio_ots.visible = not filas
+
+    # ==================================================================
+    # Exportación por cargar
+    # ==================================================================
+    def _pintar_exps(self):
+        filas = []
+        for x in self.exps:
+            num = str(x.get("numero") or "")
+            pallets, por_cargar = _n(x.get("pallets")), _n(x.get("pallets_por_cargar"))
+            if x.get("carga_abierta_id"):
+                accion = ui_boton(f"Ver {x.get('carga_abierta')}", ft.Icons.LOCAL_SHIPPING_OUTLINED,
+                                  lambda e, cid=x.get("carga_abierta_id"): self._ir_a_carga(cid), "secundario")
+            else:
+                accion = ft.Row([
+                    ui_boton("Crear carga", ft.Icons.ADD_ROUNDED, lambda e, d=x: self._dialogo_carga_exp(d)),
+                    ui_boton("A carga abierta", getattr(ft.Icons, "PLAYLIST_ADD_ROUNDED", ft.Icons.ADD_ROUNDED), lambda e, d=x: self._dialogo_agregar_exp(d), "secundario"),
+                ], spacing=6, tight=True)
+            peso = x.get("peso_bruto_kg")
+            m3 = x.get("m3")
+            filas.append(ft.DataRow(cells=[
+                ft.DataCell(ft.Text(num, size=13, weight=ft.FontWeight.W_700, color=UI["acento"])),
+                ft.DataCell(ft.Text(str(x.get("destino") or "—"), size=12.5, weight=ft.FontWeight.W_600, color=UI["texto"])),
+                ft.DataCell(ft.Text(str(x.get("referencia") or "—")[:40], size=12, color=UI["texto_2"], tooltip=str(x.get("referencia") or ""))),
+                ft.DataCell(ft.Text(str(x.get("contenedor") or "—"), size=12, color=UI["texto_2"])),
+                ft.DataCell(ft.Text(f"{por_cargar}" + (f" de {pallets}" if por_cargar != pallets else ""), size=12.5, color=UI["texto"])),
+                ft.DataCell(ft.Text(_miles(x.get("unidades")), size=12.5, color=UI["texto"])),
+                ft.DataCell(ft.Text(_miles(round(float(peso))) if peso not in (None, "") else "—", size=12.5, color=UI["texto"])),
+                ft.DataCell(ft.Text(f"{float(m3):.2f}".replace(".", ",") if m3 not in (None, "") else "—", size=12.5, color=UI["texto"])),
+                ft.DataCell(ft.Text(f"{_fh(x.get('cerrado_en'))} · {x.get('cerrado_por') or ''}", size=11.5, color=UI["texto_2"])),
+                ft.DataCell(ft.Text(str(x.get("carga_abierta") or "—"), size=12,
+                                    color=UI["acento"] if x.get("carga_abierta") else UI["texto_3"])),
+                ft.DataCell(accion),
+            ]))
+        self.tabla_exps.rows = filas
+        self.txt_vacio_exps.visible = not filas
+
+    def _ir_a_carga(self, carga_id):
+        self.vista_actual = 1
+        self.abrir_carga(carga_id)
+
+    def _dialogo_carga_exp(self, x: dict):
+        num = str(x.get("numero") or "")
+        txt_patente = _campo("Patente del camión *", 220)
+        txt_chofer = _campo("Chofer (opcional)", 220)
+
+        def confirmar(e=None):
+            try:
+                r = self._rpc("wms_carga_crear_con_despacho", {
+                    "p_bodega": self._bodega(), "p_numero": num, "p_patente": (txt_patente.value or "").strip(),
+                    "p_chofer": (txt_chofer.value or "").strip(), "p_usuario": self._usuario(),
+                }) or {}
+            except Exception as ex:
+                self._notificar(f"No se pudo crear la carga: {_error(ex)}", "#B91C1C")
+                return
+            self._cerrar_dialogo()
+            self._notificar(f"Carga {r.get('numero')} creada con {num}: {_n(r.get('total'))} pallets por subir.", "#047857")
+            self.cargar_todo(forzar=True)
+            self._ir_a_carga(r.get("id"))
+
+        self._dialogo(f"Cargar {num}", ft.Column([
+            ft.Text(f"{x.get('destino') or ''} · {_n(x.get('pallets_por_cargar'))} pallets · {_miles(x.get('unidades'))} UN"
+                    + (f" · contenedor {x.get('contenedor')}" if x.get("contenedor") else ""), size=12.5, color=UI["texto"]),
+            ft.Text("La carga toma el contenedor y el destino del despacho.", size=12, color=UI["texto_2"]),
+            ft.Row([txt_patente, txt_chofer], spacing=10, wrap=True),
+        ], spacing=8, tight=True), [ui_boton("Cancelar", None, self._cerrar_dialogo, "texto"),
+                                    ui_boton("Crear carga", ft.Icons.LOCAL_SHIPPING_OUTLINED, confirmar)])
+
+    def _dialogo_agregar_exp(self, x: dict):
+        num = str(x.get("numero") or "")
+        abiertas = [c for c in self.cargas if c.get("estado") == "ABIERTA"]
+        if not abiertas:
+            self._notificar("No hay cargas abiertas: use «Crear carga».", "#D97706")
+            return
+        dd = ft.Dropdown(
+            label="Carga abierta", dense=True, width=420, value=str(abiertas[0].get("id")),
+            options=[ft.DropdownOption(key=str(c.get("id")),
+                                       text=f"{c.get('numero')} · {c.get('patente') or ''} · {c.get('destino') or ''}")
+                     for c in abiertas],
+            bgcolor=UI["input"], border_color=UI["borde"], focused_border_color=UI["acento"],
+            text_style=ft.TextStyle(size=12, color=UI["texto"]), border_radius=6,
+        )
+
+        def confirmar(e=None):
+            try:
+                r = self._rpc("wms_carga_agregar_orden", {"p_carga_id": int(dd.value), "p_numero": num,
+                                                          "p_usuario": self._usuario()}) or {}
+            except Exception as ex:
+                self._notificar(f"No se pudo agregar: {_error(ex)}", "#B91C1C")
+                return
+            self._cerrar_dialogo()
+            self._notificar(f"{num} agregado a la carga {r.get('numero')}.", "#047857")
+            self.cargar_todo(forzar=True)
+            self._ir_a_carga(int(dd.value))
+
+        self._dialogo(f"Agregar {num} a una carga", ft.Column([dd], spacing=8, tight=True),
+                      [ui_boton("Cancelar", None, self._cerrar_dialogo, "texto"),
+                       ui_boton("Agregar", getattr(ft.Icons, "PLAYLIST_ADD_ROUNDED", ft.Icons.ADD_ROUNDED), confirmar)])
 
     def abrir_ot(self, orden_id):
         if not orden_id:

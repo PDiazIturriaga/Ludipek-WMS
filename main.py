@@ -1304,7 +1304,7 @@ def main(page: ft.Page):
                 cargas.refrescar,
                 cargas.sel_sub_cargas,
                 [
-                    ("1. OT por cargar y ajustes", _ico("INVENTORY_2_OUTLINED", "VIEW_IN_AR_OUTLINED")),
+                    ("1. Por cargar y ajustes", _ico("INVENTORY_2_OUTLINED", "VIEW_IN_AR_OUTLINED")),
                     ("2. Cargas de camión", _ico("LOCAL_SHIPPING_OUTLINED", "LOCAL_SHIPPING_ROUNDED")),
                 ],
             )
