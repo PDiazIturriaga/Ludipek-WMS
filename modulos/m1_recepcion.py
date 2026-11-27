@@ -723,10 +723,22 @@ class RecepcionModulo:
         def datos_acta_parcial(asn_id_g, cont_g: str, excluir: list = None) -> dict:
             """Datos del acta parcial de un contenedor. 'excluir': otros contenedores de la OC que todavía no se
             informan; se restan del acumulado (recibido / pendiente / avance / pallets) como si no hubieran llegado."""
+            # El avance se calcula sobre TODA la OC (todas sus cabeceras/ASN en el WMS), no solo sobre
+            # la cabecera abierta: si un contenedor quedó en otra cabecera de la misma OC, igual suma.
+            num_oc_g = None
+            try:
+                fila_g = (supabase.table("asn_cabecera").select("numero_oc").eq("id", asn_id_g).limit(1)
+                          .execute().data or [{}])[0]
+                num_oc_g = str(fila_g.get("numero_oc") or "").strip() or None
+                if num_oc_g and num_oc_g.upper() in ("S/OC", "SIN OC", "NONE", "NULL"):
+                    num_oc_g = None
+            except Exception as ex_g:
+                print(f"[ACTA] sin número de OC para la cabecera {asn_id_g}: {ex_g}")
+
             def _rep(c):
                 return supabase.rpc("wms_reporte_recepcion", {
-                    "p_bodega": obtener_bodega_activa(page), "p_numero_oc": None,
-                    "p_clave": f"ASN:{asn_id_g}", "p_contenedor": c or "SIN CONTENEDOR",
+                    "p_bodega": obtener_bodega_activa(page), "p_numero_oc": num_oc_g,
+                    "p_clave": None if num_oc_g else f"ASN:{asn_id_g}", "p_contenedor": c or "SIN CONTENEDOR",
                 }).execute().data or {}
 
             datos_a = _rep(cont_g)
