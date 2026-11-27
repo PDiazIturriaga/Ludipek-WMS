@@ -175,215 +175,371 @@ class RecepcionModulo:
                 notificar(f"Error preparando descarga web: {ex_dl}", "#B91C1C")
 
         def generar_acta_pdf_completa(cabecera_po: dict, filas_conc: list, recepciones_lpn: list) -> str:
-            """Genera el Acta Oficial PDF A4 con Logo Ludipek alineado, sin tabla de LPNs y con alerta de Sobrantes / Fuera de OC."""
+            """Acta oficial de recepción de la OC (total), con el mismo diseño del acta parcial:
+            encabezado, datos de la OC, indicadores, detalle por SKU/lote con lo pedido, recibido y diferencia,
+            resumen, observaciones y firmas."""
             from fpdf import FPDF
+            from servicios.reporte_ejecutivo import nombre_reporte_recepcion, extraer_po
 
-            os.makedirs("reportes_recepcion", exist_ok=True)
+            def n_fmt(v):
+                return "-" if v is None else f"{int(v):,}".replace(",", ".")
+
+            def fecha_cl(v):
+                try:
+                    return datetime.fromisoformat(str(v).replace("Z", "+00:00")).strftime("%d-%m-%Y")
+                except Exception:
+                    return str(v or "")[:10]
+
             codigo_po = str(cabecera_po.get("codigo_asn") or "S/OC").strip()
-            proveedor = str(cabecera_po.get("proveedor") or "RECEPCION DIRECTA").strip()
+            proveedor = str(cabecera_po.get("proveedor") or "RECEPCIÓN DIRECTA").strip()
             oc_raw = str(cabecera_po.get("numero_oc") or "").strip()
             oc_num = codigo_po if oc_raw.upper() in ("", "S/OC", "S/N", "NONE") else oc_raw
-            estado_po = str(cabecera_po.get("estado") or "EN_RECEPCION").strip()
-            contenedor_guia = str(cabecera_po.get("contenedor_referencia") or "N/A").strip()
-            ahora_str = datetime.now().strftime("%d-%m-%Y %H:%M")
+            nota = codigo_po.split("|", 1)[1].strip() if "|" in codigo_po else codigo_po
+            po = extraer_po(codigo_po, cabecera_po.get("nota"))
+            estado_oc = str(cabecera_po.get("estado") or "EN_RECEPCION").replace("_", " ")
+            emitida = datetime.now().strftime("%d-%m-%Y %H:%M")
 
-            pdf = FPDF(orientation="P", unit="mm", format="A4")
-            pdf.set_auto_page_break(auto=True, margin=15)
-            pdf.add_page()
-
-            # --- ENCABEZADO CORPORATIVO CON LOGO LUDIPEK PERFECTAMENTE ENCUADRADO ---
-            pdf.set_fill_color(15, 23, 42)
-            pdf.rect(0, 0, 210, 30, style="F")
-
-            ruta_logo = _buscar_ruta_logo_ludipek()
-            x_texto = 10
-            if ruta_logo:
-                try:
-                    pdf.set_fill_color(255, 255, 255)
-                    pdf.rect(10, 3, 24, 24, style="F")
-                    pdf.image(ruta_logo, x=11, y=4, w=22, h=22)
-                    x_texto = 39
-                except Exception:
-                    x_texto = 10
-
-            pdf.set_text_color(255, 255, 255)
-            pdf.set_font("Helvetica", "B", 13)
-            pdf.set_xy(x_texto, 6)
-            pdf.cell(200 - x_texto, 6, txt=_txt_latin(f"LUDIPEK WMS - ACTA OFICIAL DE RECEPCION (OC: {oc_num})"), ln=True)
-            pdf.set_font("Helvetica", "", 9)
-            pdf.set_x(x_texto)
-            pdf.cell(200 - x_texto, 5.5, txt=_txt_latin(f"Proveedor: {proveedor[:48]}   |   Fecha Emision: {ahora_str}"), ln=True)
-            pdf.set_x(x_texto)
-            pdf.cell(200 - x_texto, 5.5, txt=_txt_latin(f"Referencia / Nota: {codigo_po[:38]}   |   Contenedor: {contenedor_guia}   |   Estado: {estado_po}"), ln=True)
-            pdf.set_text_color(0, 0, 0)
-
-            # --- BLOQUE RESUMEN DE CABECERA ---
-            pdf.set_xy(10, 35)
-            pdf.set_fill_color(241, 245, 249)
-            pdf.set_draw_color(203, 213, 225)
-            pdf.rect(10, 35, 190, 16, style="DF")
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_xy(14, 37.5)
-            pdf.cell(92, 5, txt=_txt_latin(f"ORDEN DE COMPRA: {oc_num}"[:44]))
-            pdf.cell(92, 5, txt=_txt_latin(f"PROVEEDOR: {proveedor}"[:44]), ln=True)
-            pdf.set_x(14)
-            pdf.cell(92, 5, txt=_txt_latin(f"NOTA / PO: {codigo_po}"[:44]))
-            pdf.cell(92, 5, txt=_txt_latin(f"CONTENEDOR / GUIA: {contenedor_guia}"[:44]), ln=True)
-
-            # --- TABLA ÚNICA: DETALLE POR SKU, LOTE, VENCIMIENTO Y ESTATUS DE CONCILIACIÓN ---
-            pdf.set_xy(10, 55)
-            pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(190, 6, txt="DETALLE DE RECEPCION POR SKU, LOTE, VENCIMIENTO Y CONCILIACION OC", ln=True)
-
-            mapa_conc_sku = {}
-            for f in filas_conc:
-                s_k = str(f.get("sku") or "").strip().upper()
-                if s_k:
-                    mapa_conc_sku[s_k] = f
-
-            lotes_agrupados = {}
-            for r in recepciones_lpn:
+            # ---------------- datos ----------------
+            lotes = {}
+            fechas, conts, lpns = [], set(), set()
+            for r in recepciones_lpn or []:
                 s_r = str(r.get("sku") or "").strip().upper()
                 if not s_r:
                     continue
-                lote_limpio, _ = extraer_estado_qa(r.get("lote", "S/L"))
-                venc_r = str(r.get("fecha_vencimiento_cl") or "S/F").strip()
-                cajas_r = int(r.get("cajas") or 0)
-                unid_r = int(r.get("unidades_totales") or 0)
-                clave = (s_r, lote_limpio, venc_r)
-                if clave not in lotes_agrupados:
-                    lotes_agrupados[clave] = {"cajas": 0, "unidades": 0}
-                lotes_agrupados[clave]["cajas"] += cajas_r
-                lotes_agrupados[clave]["unidades"] += unid_r
+                lote_l, _ = extraer_estado_qa(r.get("lote", "S/L"))
+                venc_r = str(r.get("fecha_vencimiento_cl") or "S/F").strip() or "S/F"
+                a = lotes.setdefault((s_r, lote_l or "S/L", venc_r), {"cajas": 0, "unidades": 0})
+                a["cajas"] += int(r.get("cajas") or 0)
+                a["unidades"] += int(r.get("unidades_totales") or 0)
+                f_r = r.get("fecha_recepcion") or r.get("created_at")
+                if f_r:
+                    fechas.append(str(f_r))
+                c_r = str(r.get("contenedor") or "").strip()
+                if c_r and not c_r.upper().startswith("PO-") and c_r.upper() != "SIN-CONTENEDOR":
+                    conts.add(c_r)
+                if r.get("lpn"):
+                    lpns.add(str(r.get("lpn")))
+            if not conts and str(cabecera_po.get("contenedor_referencia") or "").strip() not in ("", "N/A"):
+                conts.add(str(cabecera_po.get("contenedor_referencia")).strip())
+            fechas.sort()
+            d1, d2 = (fecha_cl(fechas[0]), fecha_cl(fechas[-1])) if fechas else ("-", "-")
+            fechas_txt = d1 if d1 == d2 else f"{d1} al {d2}"
+            conts_txt = ", ".join(sorted(conts)) if conts else "-"
 
-            pdf.set_fill_color(30, 58, 138)
-            pdf.set_text_color(255, 255, 255)
-            pdf.set_font("Helvetica", "B", 8)
-            # anchos: SKU, descripción, lote, vencimiento, uni OC, uni PL, cajas, uni recibidas, estatus (= 190 mm)
-            W = (21, 45, 22, 19, 15, 15, 12, 16, 25)
-            for ancho, titulo in zip(W, ("SKU", "DESCRIPCION", "LOTE", "VENCIMIENTO", "UNI EN OC", "UNI EN PL",
-                                          "CAJAS", "UNI REC.", "ESTATUS OC")):
-                pdf.cell(ancho, 7, titulo, border=1, align="L" if titulo in ("SKU", "DESCRIPCION") else "C", fill=True)
-            pdf.ln(7)
+            conc = {}
+            for f in filas_conc or []:
+                s_k = str(f.get("sku") or "").strip().upper()
+                if s_k:
+                    conc[s_k] = f
 
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_font("Helvetica", "", 7.6)
-            tot_cajas_acta = 0
-            tot_unid_acta = 0
-            incidencias_acta = []
-            sku_con_oc_pl_impreso = set()
-            hay_oc = any(f.get("unidades_oc") is not None for f in filas_conc)
-            hay_pl = any(f.get("unidades_pl") is not None for f in filas_conc)
-            tot_oc = sum(int(f.get("unidades_oc") or 0) for f in filas_conc)
-            tot_pl = sum(int(f.get("unidades_pl") or 0) for f in filas_conc)
+            def pedido_de(f):
+                if not f or f.get("estado") == "SKU FUERA DE OC":
+                    return None
+                return int(f.get("unidades_oc") if f.get("unidades_oc") is not None else (f.get("unidades_esperadas") or 0))
 
-            def fila_pdf(valores, relleno):
-                for i_c, (ancho, val) in enumerate(zip(W, valores)):
-                    pdf.cell(ancho, 5.8, _txt_latin(str(val))[:(12 if i_c == 0 else 27 if i_c == 1 else 16 if i_c == 8 else 13)], border=1,
-                             align="L" if i_c in (0, 1) else "C", fill=relleno)
-                pdf.ln(5.8)
+            rec_sku = {}
+            for (s_k, _, _), a in lotes.items():
+                rec_sku[s_k] = rec_sku.get(s_k, 0) + a["unidades"]
 
-            def oc_pl_de(sku_k):
-                """Uni en OC / Uni en PL solo en la primera fila (lote) del SKU, para no repetirlas."""
-                if sku_k in sku_con_oc_pl_impreso:
-                    return "", ""
-                sku_con_oc_pl_impreso.add(sku_k)
-                info = mapa_conc_sku.get(sku_k, {})
-                return _txt_cant(info.get("unidades_oc")), _txt_cant(info.get("unidades_pl"))
+            def recibido_de(s_k):
+                f = conc.get(s_k)
+                if f and f.get("unidades_recibidas") is not None:
+                    return int(f.get("unidades_recibidas") or 0)
+                return rec_sku.get(s_k, 0)
 
-            for (sku_k, lote_k, venc_k), inf_l in sorted(lotes_agrupados.items()):
-                info_c = mapa_conc_sku.get(sku_k, {})
-                desc_k = str(info_c.get("descripcion") or "Ingreso Recepcion")
-                est_sku = str(info_c.get("estado") or "VALIDADA")
-                dif_cajas_sku = int(info_c.get("dif_cajas") or 0)
+            def estatus(s_k):
+                f = conc.get(s_k, {})
+                est = str(f.get("estado") or ("VALIDADA" if s_k in rec_sku else "PENDIENTE")).upper()
+                ped, rec = pedido_de(f), recibido_de(s_k)
+                if est == "SKU FUERA DE OC" or (f and ped is None):
+                    return "FUERA DE OC", "rojo"
+                dif = rec - (ped or 0)
+                if est == "PENDIENTE" or rec == 0:
+                    return "NO LLEGÓ", "rojo"
+                if dif > 0:
+                    return f"SOBRANTE +{n_fmt(dif)}", "rojo"
+                if dif < 0:
+                    return f"FALTAN {n_fmt(-dif)}", "ambar"
+                return "OK", "verde"
 
-                if est_sku == "SKU FUERA DE OC":
-                    txt_est_pdf = "FUERA DE OC"
-                elif est_sku == "SOBRANTE":
-                    txt_est_pdf = f"SOBRANTE {dif_cajas_sku:+d} Cj"
-                elif est_sku == "PARCIAL":
-                    txt_est_pdf = f"PARCIAL {dif_cajas_sku:+d} Cj"
-                else:
-                    txt_est_pdf = "OK (VALIDADA)"
+            skus = sorted(set(conc) | set(rec_sku))
+            tot_oc = sum(pedido_de(conc.get(s)) or 0 for s in skus)
+            tot_pl = sum(int(conc[s].get("unidades_pl") or 0) for s in skus if s in conc)
+            hay_pl = any(conc.get(s, {}).get("unidades_pl") is not None for s in skus)
+            tot_rec = sum(recibido_de(s) for s in skus)
+            tot_rec_oc = sum(min(recibido_de(s), pedido_de(conc.get(s)) or 0) for s in skus if pedido_de(conc.get(s)))
+            tot_cajas = sum(a["cajas"] for a in lotes.values())
+            dif_total = tot_rec - tot_oc
+            n_dif = sum(1 for s in skus if estatus(s)[1] != "verde")
+            cumplimiento = (tot_rec_oc * 100 / tot_oc) if tot_oc else 0
+            sin_diferencias = n_dif == 0 and skus
 
-                tot_cajas_acta += inf_l["cajas"]
-                tot_unid_acta += inf_l["unidades"]
+            # ---------------- estilo (igual que el acta parcial) ----------------
+            M, ANCHO = 15, 180
+            NAVY, NAVY_2 = (15, 23, 42), (30, 41, 59)
+            NARANJA = (234, 88, 12)
+            GRIS_TXT, GRIS_BORDE, GRIS_FONDO = (100, 116, 139), (226, 232, 240), (248, 250, 252)
+            TONO = {"rojo": (185, 28, 28), "verde": (21, 128, 61), "ambar": (180, 83, 9), "gris": (148, 163, 184)}
+            pie_txt = _txt_latin(f"LUDIPEK WMS  ·  Acta oficial OC {oc_num}  ·  {proveedor}  ·  Emitida {emitida}")
 
-                es_alerta = est_sku in ("SKU FUERA DE OC", "SOBRANTE")
-                if es_alerta:
-                    pdf.set_fill_color(254, 226, 226)
-                else:
+            class _Acta(FPDF):
+                def footer(self):
+                    self.set_y(-13)
+                    self.set_draw_color(*GRIS_BORDE)
+                    self.set_line_width(0.2)
+                    self.line(M, self.get_y(), M + ANCHO, self.get_y())
+                    self.set_font("Helvetica", "", 7)
+                    self.set_text_color(*GRIS_TXT)
+                    self.set_xy(M, -11)
+                    self.cell(ANCHO - 30, 4, pie_txt)
+                    self.set_xy(M + ANCHO - 30, -11)
+                    self.cell(30, 4, _txt_latin(f"Página {self.page_no()} de {{nb}}"), align="R")
+
+            pdf = _Acta(orientation="P", unit="mm", format="A4")
+            pdf.set_margins(M, M, M)
+            pdf.set_auto_page_break(auto=False)
+            pdf.add_page()
+
+            def ajustar(t, ancho):
+                t = _txt_latin(t)
+                if pdf.get_string_width(t) <= ancho - 2:
+                    return t
+                while t and pdf.get_string_width(t + "...") > ancho - 2:
+                    t = t[:-1]
+                return t.rstrip() + "..."
+
+            def texto(x, y, w, h, t, tam=8, estilo="", color=(15, 23, 42), al="L"):
+                pdf.set_font("Helvetica", estilo, tam)
+                pdf.set_text_color(*color)
+                pdf.set_xy(x, y)
+                pdf.cell(w, h, ajustar(t, w), align=al)
+
+            # ---------------- encabezado ----------------
+            pdf.set_fill_color(*NAVY)
+            pdf.rect(0, 0, 210, 32, style="F")
+            pdf.set_fill_color(*NARANJA)
+            pdf.rect(0, 32, 210, 1.2, style="F")
+            x_t = M
+            ruta_logo = _buscar_ruta_logo_ludipek()
+            if ruta_logo:
+                try:
                     pdf.set_fill_color(255, 255, 255)
+                    pdf.rect(M, 5, 22, 22, style="F")
+                    pdf.image(ruta_logo, x=M + 1, y=6, w=20, h=20)
+                    x_t = M + 28
+                except Exception:
+                    x_t = M
+            texto(x_t, 7, 115, 7, "ACTA OFICIAL DE RECEPCIÓN", 15, "B", (255, 255, 255))
+            texto(x_t, 15, 115, 5, f"Total de la orden de compra  ·  OC {oc_num}" + (f"  ·  {po}" if po else ""), 9.5, "",
+                  (203, 213, 225))
+            texto(x_t, 21, 115, 5, proveedor, 9.5, "B", (226, 232, 240))
+            texto(M + ANCHO - 58, 8, 58, 4, "RESULTADO", 7, "B", (148, 163, 184), "R")
+            texto(M + ANCHO - 58, 13, 58, 7, "SIN DIFERENCIAS" if sin_diferencias else "CON DIFERENCIAS", 12, "B",
+                  (134, 239, 172) if sin_diferencias else (253, 186, 116), "R")
+            texto(M + ANCHO - 58, 21, 58, 5, f"Emitida {emitida}", 8, "", (148, 163, 184), "R")
 
-                u_oc, u_pl = oc_pl_de(sku_k)
-                fila_pdf((sku_k, desc_k, lote_k, venc_k, u_oc, u_pl, inf_l["cajas"], inf_l["unidades"], txt_est_pdf), es_alerta)
+            # ---------------- datos de la OC ----------------
+            y0 = 40
+            pdf.set_fill_color(*GRIS_FONDO)
+            pdf.set_draw_color(*GRIS_BORDE)
+            pdf.set_line_width(0.2)
+            pdf.rect(M, y0, ANCHO, 24, style="DF")
+            campos = [("ORDEN DE COMPRA", oc_num), ("PROVEEDOR", proveedor), ("NOTA / PO", nota or "-"),
+                      ("FECHA DE RECEPCIÓN", fechas_txt), ("CONTENEDORES / GUÍAS", conts_txt),
+                      ("PALLETS / ESTADO", f"{len(lpns)} pallets  ·  {estado_oc}")]
+            for i_c, (lab, val) in enumerate(campos):
+                col, fil = i_c % 3, i_c // 3
+                x = M + 4 + col * 59
+                y = y0 + 3 + fil * 10.5
+                texto(x, y, 56, 3.5, lab, 6.5, "B", GRIS_TXT)
+                texto(x, y + 3.8, 56, 5, val, 9, "B")
 
-            # SKU de la OC/PL que no llegaron (o acta sin pallets): igual muestran lo pedido
-            for f in filas_conc:
-                s_f = str(f.get("sku") or "").strip().upper()
-                if not s_f or s_f in sku_con_oc_pl_impreso:
-                    continue
-                c_rec = int(f.get("cajas_recibidas") or 0)
-                u_rec = int(f.get("unidades_recibidas") or 0)
-                tot_cajas_acta += c_rec
-                tot_unid_acta += u_rec
-                u_oc, u_pl = oc_pl_de(s_f)
-                lote_f = "SIN INGRESO" if not u_rec else str(f.get("lotes_reales") or "S/L")
-                fila_pdf((s_f, f.get("descripcion", ""), lote_f, "-", u_oc, u_pl, c_rec, u_rec,
-                          f.get("estado", "PENDIENTE")), False)
+            # ---------------- indicadores ----------------
+            y_k = y0 + 29
+            kpis = [
+                ("UNIDADES RECIBIDAS", f"{n_fmt(tot_rec)} UN", f"{n_fmt(tot_cajas)} cajas", (37, 99, 235)),
+                ("CUMPLIMIENTO DE LA OC", f"{cumplimiento:.0f}%", f"{n_fmt(tot_rec_oc)} de {n_fmt(tot_oc)} UN pedidas",
+                 (21, 128, 61)),
+                ("DIFERENCIA TOTAL", f"{dif_total:+,} UN".replace(",", ".") if dif_total else "0 UN",
+                 "sobre lo pedido" if dif_total > 0 else ("bajo lo pedido" if dif_total < 0 else "cuadra con la OC"), NARANJA),
+                ("SKU CON DIFERENCIA", f"{n_dif} de {len(skus)}", "revisar observaciones" if n_dif else "todos validados",
+                 (185, 28, 28) if n_dif else (100, 116, 139)),
+            ]
+            w_k = (ANCHO - 3 * 3) / 4
+            for i_k, (lab, val, sub, color) in enumerate(kpis):
+                x = M + i_k * (w_k + 3)
+                pdf.set_fill_color(255, 255, 255)
+                pdf.set_draw_color(*GRIS_BORDE)
+                pdf.rect(x, y_k, w_k, 19, style="DF")
+                pdf.set_fill_color(*color)
+                pdf.rect(x, y_k, 1.3, 19, style="F")
+                texto(x + 4, y_k + 2.5, w_k - 6, 3.5, lab, 6.3, "B", GRIS_TXT)
+                texto(x + 4, y_k + 6.8, w_k - 6, 6, val, 13, "B")
+                texto(x + 4, y_k + 13.3, w_k - 6, 3.5, sub, 7, "", GRIS_TXT)
 
-            pdf.set_font("Helvetica", "B", 8)
-            pdf.set_fill_color(226, 232, 240)
-            pdf.cell(sum(W[:4]), 6.5, "TOTAL", border=1, align="R", fill=True)
-            pdf.cell(W[4], 6.5, str(tot_oc) if hay_oc else "-", border=1, align="C", fill=True)
-            pdf.cell(W[5], 6.5, str(tot_pl) if hay_pl else "-", border=1, align="C", fill=True)
-            pdf.cell(W[6], 6.5, str(tot_cajas_acta), border=1, align="C", fill=True)
-            pdf.cell(W[7], 6.5, str(tot_unid_acta), border=1, align="C", fill=True)
-            pdf.cell(W[8], 6.5, "", border=1, align="C", fill=True, ln=True)
+            # ---------------- tabla ----------------
+            y_t = y_k + 26
+            pdf.set_fill_color(*NARANJA)
+            pdf.rect(M, y_t + 0.8, 1.2, 4.4, style="F")
+            texto(M + 3, y_t, 120, 6, "DETALLE POR SKU, LOTE Y VENCIMIENTO", 9.5, "B")
+            texto(M + 90, y_t + 0.5, 90, 5, "Pedido, recibido y diferencia por SKU (toda la OC)", 6.8, "", GRIS_TXT, "R")
+            y_t += 8
 
-            for f in filas_conc:
-                est_f = str(f.get("estado") or "")
-                if est_f in ("SKU FUERA DE OC", "SOBRANTE", "PARCIAL"):
-                    s_f = f.get("sku")
-                    c_esp = int(f.get("cajas_esperadas") or 0)
-                    c_rec = int(f.get("cajas_recibidas") or 0)
-                    u_esp = int(f.get("unidades_esperadas") or 0)
-                    u_rec = int(f.get("unidades_recibidas") or 0)
-                    dif_c = c_rec - c_esp
-                    dif_u = u_rec - u_esp
-                    txt_pl = f" / PL {f.get('unidades_pl')} UN" if f.get("unidades_pl") is not None else ""
-                    incidencias_acta.append(
-                        f"- {s_f} [{est_f}]: OC Esperado {c_esp} Cj ({u_esp} UN){txt_pl} vs Recibido {c_rec} Cj ({u_rec} UN) -> Dif: {dif_c:+d} Cj ({dif_u:+d} UN)"
-                    )
+            cols = [("sku", "SKU", 24, "L"), ("desc", "DESCRIPCIÓN", 23 if hay_pl else 35, "L"), ("lote", "LOTE", 14, "C"),
+                    ("venc", "VENC.", 16, "C"), ("cajas", "CAJAS", 12, "R"), ("uni", "UNIDADES", 16, "R"),
+                    ("ped", "PEDIDO", 15, "R")]
+            if hay_pl:
+                cols.append(("pl", "PL", 12, "R"))
+            cols += [("rec", "RECIBIDO", 15, "R"), ("dif", "DIF.", 13, "R"), ("est", "ESTATUS", 20, "C")]
+            H_FILA = 5.6
+            LIMITE = 297 - 22
 
-            if incidencias_acta:
-                pdf.ln(4)
-                pdf.set_font("Helvetica", "B", 8.5)
-                pdf.set_text_color(185, 28, 28)
-                pdf.cell(190, 5, txt="OBSERVACIONES DE CONCILIACION (SOBRANTES / FUERA DE OC / DIFERENCIAS):", ln=True)
-                pdf.set_font("Helvetica", "", 8)
-                for linea_inc in incidencias_acta[:8]:
-                    pdf.cell(190, 4.5, txt=_txt_latin(linea_inc), ln=True)
-                pdf.set_text_color(0, 0, 0)
+            def encabezado_tabla(y):
+                pdf.set_fill_color(*NAVY_2)
+                x = M
+                grupos = [("", sum(c[2] for c in cols[:4])), ("POR LOTE", sum(c[2] for c in cols[4:6])),
+                          ("POR SKU (TODA LA OC)", sum(c[2] for c in cols[6:-1])), ("", cols[-1][2])]
+                for t_g, w_g in grupos:
+                    pdf.rect(x, y, w_g, 4.6, style="F")
+                    if t_g:
+                        texto(x, y, w_g, 4.6, t_g, 6.3, "B", (203, 213, 225), "C")
+                        pdf.set_draw_color(71, 85, 105)
+                        pdf.line(x + 1.5, y + 4.4, x + w_g - 1.5, y + 4.4)
+                    x += w_g
+                y += 4.6
+                pdf.set_fill_color(*NAVY)
+                x = M
+                for _, t_c, w_c, al in cols:
+                    pdf.rect(x, y, w_c, 6.2, style="F")
+                    texto(x + (1 if al == "L" else 0), y, w_c - (1.2 if al == "R" else 1 if al == "L" else 0), 6.2, t_c, 6.5, "B",
+                          (255, 255, 255), al)
+                    x += w_c
+                return y + 6.2
 
-            # --- FIRMAS DE CONFORMIDAD ---
-            pdf.ln(12)
-            y_f = pdf.get_y()
-            if y_f > 250:
+            y = encabezado_tabla(y_t)
+
+            def fila(vals: dict, tono_est: str, gris: bool, zebra: bool):
+                nonlocal y
+                if y + H_FILA > LIMITE:
+                    pdf.add_page()
+                    y = encabezado_tabla(M)
+                if zebra:
+                    pdf.set_fill_color(*GRIS_FONDO)
+                    pdf.rect(M, y, ANCHO, H_FILA, style="F")
+                pdf.set_draw_color(*GRIS_BORDE)
+                pdf.line(M, y + H_FILA, M + ANCHO, y + H_FILA)
+                x = M
+                for clave, _, w_c, al in cols:
+                    v = vals.get(clave, "")
+                    if clave == "est":
+                        texto(x, y, w_c, H_FILA, v, 6.4, "B", TONO.get(tono_est, (15, 23, 42)), "C")
+                    elif clave == "dif" and v not in ("", "0", "-"):
+                        texto(x, y, w_c - 1.2, H_FILA, v, 7.3, "B", TONO["rojo"] if v.startswith("+") else TONO["ambar"], al)
+                    else:
+                        color = TONO["gris"] if gris else ((15, 23, 42) if clave in ("sku", "uni", "rec") else (51, 65, 85))
+                        texto(x + (1 if al == "L" else 0), y, w_c - (1.2 if al == "R" else 1 if al == "L" else 0), H_FILA, v,
+                              7.3, "B" if clave in ("sku", "uni", "rec") and not gris else "", color, al)
+                    x += w_c
+                y += H_FILA
+
+            obs, n_fila = [], 0
+            for s_k in skus:
+                f = conc.get(s_k, {})
+                est, tono = estatus(s_k)
+                ped, rec = pedido_de(f), recibido_de(s_k)
+                dif = rec - (ped or 0)
+                datos_sku = {"sku": s_k, "desc": f.get("descripcion") or "", "ped": n_fmt(ped) if ped is not None else "-",
+                             "pl": n_fmt(f.get("unidades_pl")) if f.get("unidades_pl") is not None else "-",
+                             "rec": n_fmt(rec), "dif": (f"{dif:+,}".replace(",", ".") if dif else "0"), "est": est}
+                lotes_sku = sorted((k, a) for k, a in lotes.items() if k[0] == s_k)
+                if not lotes_sku:
+                    fila(dict(datos_sku, lote="-", venc="-", cajas="-", uni="-"), tono, False, n_fila % 2 == 1)
+                    n_fila += 1
+                for i_l, ((_, lote_k, venc_k), a) in enumerate(lotes_sku):
+                    base = datos_sku if i_l == 0 else {}
+                    fila(dict(base, lote=lote_k, venc=venc_k, cajas=n_fmt(a["cajas"]), uni=n_fmt(a["unidades"])),
+                         tono, False, n_fila % 2 == 1)
+                n_fila += 1
+                if tono != "verde":
+                    txt_pl = f"; packing list {n_fmt(f.get('unidades_pl'))} UN" if f.get("unidades_pl") is not None else ""
+                    if est == "FUERA DE OC":
+                        obs.append(f"{s_k}: no viene en la OC; se recibieron {n_fmt(rec)} UN.")
+                    else:
+                        dif_txt = f"{dif:+,}".replace(",", ".")
+                        obs.append(f"{s_k}: {est}. Pedido {n_fmt(ped)} UN{txt_pl}; recibido {n_fmt(rec)} UN "
+                                   f"(diferencia {dif_txt} UN).")
+
+            if y + 7 > LIMITE:
                 pdf.add_page()
-                y_f = 40
-            pdf.set_draw_color(0, 0, 0)
-            pdf.line(20, y_f + 14, 85, y_f + 14)
-            pdf.line(125, y_f + 14, 190, y_f + 14)
-            pdf.set_xy(20, y_f + 16)
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.cell(65, 5, "RECEPCION BODEGA", align="C")
-            pdf.set_xy(125, y_f + 16)
-            pdf.cell(65, 5, "CONTROL DE CALIDAD / SUPERVISION", align="C")
+                y = M
+            pdf.set_fill_color(241, 245, 249)
+            pdf.rect(M, y, ANCHO, 6.5, style="F")
+            pdf.set_draw_color(*NAVY)
+            pdf.set_line_width(0.4)
+            pdf.line(M, y, M + ANCHO, y)
+            pdf.set_line_width(0.2)
+            totales = {"desc": "TOTAL", "cajas": n_fmt(tot_cajas), "uni": n_fmt(sum(a["unidades"] for a in lotes.values())),
+                       "ped": n_fmt(tot_oc), "pl": n_fmt(tot_pl) if hay_pl else "-", "rec": n_fmt(tot_rec),
+                       "dif": f"{dif_total:+,}".replace(",", ".") if dif_total else "0"}
+            x = M
+            for clave, _, w_c, al in cols:
+                if clave in totales:
+                    texto(x + (1 if al == "L" else 0), y, w_c - (1.2 if al == "R" else 1 if al == "L" else 0), 6.5,
+                          totales[clave], 7.6, "B", NAVY, al)
+                x += w_c
+            y += 11
 
-            from servicios.reporte_ejecutivo import nombre_reporte_recepcion
+            # ---------------- resumen y observaciones ----------------
+            resumen = [
+                f"Se recibieron {n_fmt(tot_rec)} UN ({n_fmt(tot_cajas)} cajas) en {len(lpns)} pallets"
+                + (f", en {len(conts)} contenedor(es) / guía(s): {conts_txt}." if conts else "."),
+                f"Pedido en la OC {oc_num}: {n_fmt(tot_oc)} UN. Cumplimiento: {cumplimiento:.0f}%"
+                + ("; diferencia total " + f"{dif_total:+,}".replace(",", ".") + " UN." if dif_total else "; sin diferencia total."),
+                ("Todos los SKU cuadran con la OC." if sin_diferencias
+                 else f"{n_dif} SKU con diferencia: el detalle está en las observaciones."),
+            ]
+
+            def bloque(titulo, lineas, fondo, borde, color_tit):
+                nonlocal y
+                pdf.set_font("Helvetica", "", 8)
+                alto = 8 + sum(4.3 * max(1, int(pdf.get_string_width(_txt_latin(l)) // (ANCHO - 10)) + 1) for l in lineas)
+                if y + alto > LIMITE - 30:
+                    pdf.add_page()
+                    y = M
+                pdf.set_fill_color(*fondo)
+                pdf.set_draw_color(*borde)
+                pdf.rect(M, y, ANCHO, alto, style="DF")
+                pdf.set_fill_color(*borde)
+                pdf.rect(M, y, 1.3, alto, style="F")
+                texto(M + 5, y + 2, ANCHO - 10, 4.5, titulo, 8.2, "B", color_tit)
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(30, 41, 59)
+                yy = y + 7.2
+                for l in lineas:
+                    pdf.set_xy(M + 5, yy)
+                    pdf.multi_cell(ANCHO - 10, 4.3, _txt_latin(l))
+                    yy = pdf.get_y()
+                y = y + alto + 4
+
+            bloque("RESUMEN", resumen, (239, 246, 255), (147, 197, 253), (30, 64, 175))
+            if obs:
+                bloque("OBSERVACIONES: DIFERENCIAS, SOBRANTES Y FUERA DE OC", obs[:12],
+                       (254, 242, 242), (252, 165, 165), (185, 28, 28))
+
+            # ---------------- firmas ----------------
+            if y + 30 > LIMITE:
+                pdf.add_page()
+                y = M
+            y_f = max(y + 14, 250) if y + 14 < 250 else y + 14
+            pdf.set_draw_color(71, 85, 105)
+            for x_f, titulo in ((M + 5, "RECEPCIÓN BODEGA"), (M + ANCHO - 75, "CONTROL DE CALIDAD / SUPERVISIÓN")):
+                pdf.line(x_f, y_f, x_f + 70, y_f)
+                texto(x_f, y_f + 1.5, 70, 4.5, titulo, 8, "B", NAVY, "C")
+                texto(x_f, y_f + 6, 70, 4, "Nombre, firma y fecha", 7, "", GRIS_TXT, "C")
+
+            os.makedirs("reportes_recepcion", exist_ok=True)
             ruta_out = os.path.join("reportes_recepcion", nombre_reporte_recepcion(
-                oc_raw, codigo_po, proveedor, None if oc_raw else contenedor_guia, extension="pdf"))
+                oc_raw, codigo_po, proveedor, None if oc_raw else conts_txt, extension="pdf"))
             pdf.output(ruta_out)
             return ruta_out
 
@@ -2632,7 +2788,7 @@ class RecepcionModulo:
             smtp_user = os.getenv("SMTP_USER", "").strip()
             smtp_pass = os.getenv("SMTP_PASS", "").strip()
             smtp_listo = bool(smtp_user and smtp_pass)
-            destinatarios_default = os.getenv("CORREOS_ACTA_RECEPCION", "javier.dominguez@ludipek.com, bernardita.lagos@ludipek.com, vanesa.galaz@ludipek.com, mauricio.amenabar@ludipek.com, daniela.medone@ludipek.com, sebastian.oyaneder@ludipek.com, joaquin.bernal@ludipek.com, mery.vargas@ludipek.com, ivan.oyarce@ludipek.com, equipoqa@ludipek.com, marco.falchetti@ludipek.com", "patricio.diaz@ludipek.com")
+            destinatarios_default = os.getenv("CORREOS_ACTA_RECEPCION", "javier.dominguez@ludipek.com, bernardita.lagos@ludipek.com, vanesa.galaz@ludipek.com, mauricio.amenabar@ludipek.com, daniela.medone@ludipek.com, sebastian.oyaneder@ludipek.com, joaquin.bernal@ludipek.com, mery.vargas@ludipek.com, ivan.oyarce@ludipek.com, equipoqa@ludipek.com, marco.falchetti@ludipek.com, patricio.diaz@ludipek.com")
             from servicios.reporte_ejecutivo import nombre_reporte_recepcion
             nombre_pdf = nombre_reporte_recepcion(cabecera_asn_actual.get("numero_oc"), cabecera_asn_actual.get("codigo_asn"),
                                                   prov_str, None if cabecera_asn_actual.get("numero_oc") else cont_ref,
